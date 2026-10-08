@@ -1,0 +1,17 @@
+# Groups the "Generate release notes" output by PR label.
+changelog:
+  categories:
+    - title: Safety
+      labels: [safety]
+    - title: Features
+      labels: [user-story]
+    - title: Bug fixes
+      labels: [bug]
+    - title: Hardware
+      labels: [hardware]
+    - title: CI and tooling
+      labels: [ci]
+    - title: Documentation
+      labels: [docs]
+    - title: Other changes
+      labels: ["*"]
