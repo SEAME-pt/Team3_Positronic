@@ -1,0 +1,24 @@
+name: mimesis
+
+services:
+  dev:
+    image: mimesis-dev:${ROS_DISTRO:-jazzy}
+    build:
+      context: ./docker
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    network_mode: host
+    ipc: host
+    working_dir: /ws
+    volumes:
+      - .:/ws
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      DISPLAY: ${DISPLAY:-}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ARM_IP: ${ARM_IP:-}
+      ARM_PORT: ${ARM_PORT:-22}
+    stdin_open: true
+    tty: true
