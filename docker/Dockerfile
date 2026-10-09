@@ -38,7 +38,8 @@ RUN if getent passwd ubuntu > /dev/null; then userdel ubuntu && rm -rf /home/ubu
 
 USER ${USERNAME}
 
-RUN rosdep update --rosdistro "${ROS_DISTRO}" \
+RUN cd "$HOME" \
+	&& rosdep update --rosdistro "${ROS_DISTRO}" \
     && colcon mixin add default \
          https://raw.githubusercontent.com/colcon/colcon-mixin-repository/master/index.yaml \
     && colcon mixin update default \
