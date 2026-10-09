@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Team plan
-    url: https://github.com/feazeved/Mimesis/blob/dev/docs/plan.md
+    url: https://github.com/feazeved/Positronic/blob/dev/docs/M1_plan.md
     about: Roadmap, requirements and roles. Check it before opening an epic.

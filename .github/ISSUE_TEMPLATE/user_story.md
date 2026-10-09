@@ -4,9 +4,8 @@ about: One piece of work that one person finishes in a sprint, ending in a PR
 title: ""
 labels: user-story
 ---
-## Story
-As a <who>, I want <what>, so that <why>.
-(For a task without a user, one sentence saying what and why.)
+## Summary
+What is done and why, one or two sentences.
 
 ## Acceptance criteria
 - [ ] Verifiable, with a number when there is one (Hz, ms, mm, %).

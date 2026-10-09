@@ -1,5 +1,17 @@
-# Mimesis
+# Positronic
 Repository for our work at @seame-pt: ROS 2 control of a myCobot 280 (Jetson Nano).
+
+## Docs
+
+- [M1 plan](docs/M1_plan.md): epics, user stories and split by pairs
+- [Sprints](docs/sprints/): one file per sprint, goals, review, notes
+- [Standups](docs/standups/): one file per day, copied from the template,
+  committed directly to `dev`
+- [Build and run](docs/build.md): `make` targets, VM and Jetson workflow
+- [Hardware specs](docs/hardware_specs/): Jetson Nano, pinouts
+- [SEA:ME 2.0](docs/seame-2.0/): the programme's modules and hardware classes
+- [Board](https://github.com/users/feazeved/projects/6): Backlog, Sprint backlog,
+  In progress, In review, Done
 
 ## Setup (Ubuntu)
 
