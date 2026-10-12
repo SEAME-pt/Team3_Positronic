@@ -115,11 +115,7 @@ Breaks: 21 Dec – 3 Jan, 8–12 Feb, 22–26 Mar.
 **Merged to `dev`:**
 - Docker/Make tooling, `.clang-format` and `.clang-tidy`, `.gitignore`.
 - Issue and PR templates, `release.yml`.
-<<<<<<< HEAD
 - Python CI (ruff + black on Python 3.8). #28 replaces it with `make format-check` + `make test` in the team image (black's double quotes conflict with ROS's flake8).
-=======
-- Python CI (ruff + black on Python 3.8). This will be replaced, see §7.
->>>>>>> dev
 - `docs/build.md` and the Jetson Makefile targets.
 
 **On branches, not merged:**
