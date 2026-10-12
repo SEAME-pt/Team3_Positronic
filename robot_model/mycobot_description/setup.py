@@ -1,7 +1,8 @@
-import os
-from setuptools import setup, __version__ as setuptools_version
-from packaging.version import Version
 from glob import glob
+
+from packaging.version import Version
+from setuptools import __version__ as setuptools_version
+from setuptools import setup
 
 package_name = 'mycobot_description'
 

@@ -10,15 +10,21 @@ Build a Gazebo/RViz-ready myCobot 280 Jetson Nano model from Elephant Robotics' 
  * builds convex-hull collision meshes; mass / COM / inertia per link from the hull (ASSUMED masses below)
  * writes plain URDFs: arm / +gripper / +camera / both
 """
-import os, sys, shutil, struct, numpy as np
+import os
+import shutil
+import struct
+import sys
+
+import numpy as np
 from lxml import etree
-from scipy.spatial import ConvexHull
 from PIL import Image
+from scipy.spatial import ConvexHull
+
 sys.path.insert(0, '/home/claude/tools')
 from dae import NS, mesh_props
-from dae2 import load_parts, fix_winding, apply_T, write_dae
+from dae2 import apply_T, fix_winding, load_parts, write_dae
 from fk import T
-from qem import weld, decimate
+from qem import decimate, weld
 
 SRC = '/home/claude/pkg/mycobot_description/urdf'
 J5_SOURCE = '/mnt/user-data/uploads/joint5.dae'
@@ -152,7 +158,7 @@ def split_part(p, mask_tri, new_mat):
     """Split one part into (rest, selected). mask_tri: bool per triangle."""
     def take(m):
         idx = np.flatnonzero(m); c = (idx[:,None]*3 + np.arange(3)).reshape(-1)
-        return dict(P=p['P'][c], N=p['N'][c], uv=None if p['uv'] is None else p['uv'][c], idx=p['idx'], area=0, lo=p['lo'], hi=p['hi'])
+        return {'P': p['P'][c], 'N': p['N'][c], 'uv': None if p['uv'] is None else p['uv'][c], 'idx': p['idx'], 'area': 0, 'lo': p['lo'], 'hi': p['hi']}
     out = []
     if (~mask_tri).any(): q = take(~mask_tri); q['mat'] = p.get('mat','white'); out.append(q)
     if mask_tri.any(): q = take(mask_tri); q['mat'] = new_mat; out.append(q)
@@ -180,7 +186,7 @@ def clip_plane(p, axis, sign, thresh):
                 inP.append(q); inN.append(nn); ouP.append(q); ouN.append(nn)
         emit(inP, inN, ins_P, ins_N); emit(ouP, ouN, out_P, out_N)
     def mk(Pl, Nl):
-        return None if not Pl else dict(P=np.array(Pl).reshape(-1,3), N=np.array(Nl).reshape(-1,3), uv=None, idx=p['idx'], area=0, lo=p['lo'], hi=p['hi'])
+        return None if not Pl else {'P': np.array(Pl).reshape(-1,3), 'N': np.array(Nl).reshape(-1,3), 'uv': None, 'idx': p['idx'], 'area': 0, 'lo': p['lo'], 'hi': p['hi']}
     return mk(out_P, out_N), mk(ins_P, ins_N)
 
 def tri_centroids(P): return (P[0::3]+P[1::3]+P[2::3])/3
@@ -239,7 +245,7 @@ def box_part(x0,x1,y0,y1,z0,z1,mat,name):
     for q,n in quads:
         for tri in ((q[0],q[1],q[2]),(q[0],q[2],q[3])):
             for k in tri: P.append(c[k]); N.append(n)
-    return dict(P=np.array(P,float),N=np.array(N,float),uv=None,idx=name,area=0,lo=c.min(0),hi=c.max(0),mat=mat)
+    return {'P': np.array(P,float),'N': np.array(N,float),'uv': None,'idx': name,'area': 0,'lo': c.min(0),'hi': c.max(0),'mat': mat}
 
 def cylinder_part(cy,cz,r,x0,x1,mat,name,n=28):
     """Cylinder along x (centre y,z), with end caps."""
@@ -251,7 +257,7 @@ def cylinder_part(cy,cz,r,x0,x1,mat,name,n=28):
         for (xx,sg) in ((x0,-1),(x1,1)):
             tri=[(xx,cy,cz),(xx,y0,z0),(xx,y1,z1)] if sg>0 else [(xx,cy,cz),(xx,y1,z1),(xx,y0,z0)]
             for p in tri: P.append(p); N.append((sg,0,0))
-    P=np.array(P,float); return dict(P=P,N=np.array(N,float),uv=None,idx=name,area=0,lo=P.min(0),hi=P.max(0),mat=mat)
+    P=np.array(P,float); return {'P': P,'N': np.array(N,float),'uv': None,'idx': name,'area': 0,'lo': P.min(0),'hi': P.max(0),'mat': mat}
 
 def panel_cutouts(p):
     """Find the cut-outs of the port panel (holes in its outer face) from the housing geometry."""
@@ -271,7 +277,7 @@ def panel_cutouts(p):
         if len(yy) < 200: continue
         ymin = y0 + xx.min()/S/1000; ymax = y0 + (xx.max()+1)/S/1000; zmax = z1 - yy.min()/S/1000; zmin = z1 - (yy.max()+1)/S/1000
         w,h = (ymax-ymin)*1000,(zmax-zmin)*1000; fill = len(yy)/((xx.max()-xx.min()+1)*(yy.max()-yy.min()+1))
-        out.append(dict(y0=ymin,y1=ymax,z0=zmin,z1=zmax,w=w,h=h,round=(fill<0.9 and abs(w-h)<1.0)))
+        out.append({'y0': ymin,'y1': ymax,'z0': zmin,'z1': zmax,'w': w,'h': h,'round': (fill<0.9 and abs(w-h)<1.0)})
     return out
 
 def apply_base_decals(out_parts, mats):
@@ -284,12 +290,12 @@ def apply_base_decals(out_parts, mats):
     atlas = Image.new('RGB',(AW,AH),(int(WHITE*255),)*3)
     tex = Image.open(M5_BASE_TEXTURE).convert('RGB')
     # --- region 1: +x wall, product label
-    y0,y1,z0,z1 = WALL_RECT
+    y0,_y1,_z0,z1 = WALL_RECT
     lab = tex.crop(LABEL_CROP).rotate(-90, expand=True)
     lw,lh = int(LABEL_SIZE[0]*1000*S), int(LABEL_SIZE[1]*1000*S); lab = lab.resize((lw,lh), Image.LANCZOS)
     cx = int((LABEL_CENTER[0]-y0)*1000*S); cy = int((z1-LABEL_CENTER[1])*1000*S); atlas.paste(lab,(cx-lw//2,cy-lh//2))
     # --- region 2: -x port panel, GPIO label row above the header slot (u runs along -y so it reads correctly from outside)
-    py0,py1,pz0,pz1 = PANEL_RECT
+    _py0,py1,_pz0,pz1 = PANEL_RECT
     row = tex.crop(GPIO_CROP); rw,rh = int(GPIO_ROW_SIZE[0]*1000*S), int(GPIO_ROW_SIZE[1]*1000*S); row = row.resize((rw,rh), Image.LANCZOS)
     rx = int((py1-GPIO_ROW_CENTER[0])*1000*S); ry = PANEL_ATLAS_Y + int((pz1-GPIO_ROW_CENTER[1])*1000*S); atlas.paste(row,(rx-rw//2,ry-rh//2))
     atlas.save(f'{OUT}/meshes/visual/base_atlas.png')
@@ -326,14 +332,14 @@ for name, path, xyz, rpy in ARM+GRIP+CAM+GBASE:
     parts = load_parts(path); png, mean = link_texture(path)
     if name == 'joint5':
         Vw, Fw = weld(parts[0]['pos']); V2, F2 = decimate(Vw, Fw, J5_TARGET_TRIS)
-        parts = [dict(pos=V2[F2].reshape(-1,3), nrm=None, uv=None, det=1.0)]; print(f'joint5 simplified: {len(Fw)} -> {len(F2)} triangles')
+        parts = [{'pos': V2[F2].reshape(-1,3), 'nrm': None, 'uv': None, 'det': 1.0}]; print(f'joint5 simplified: {len(Fw)} -> {len(F2)} triangles')
     out_parts = []; allpos = []
     for k,p in enumerate(parts):
         P, N = p['pos'], p['nrm']
         if N is not None:
             P, N, nfix, idx = fix_winding(P, N)
             if nfix and p['uv'] is not None: p['uv'] = p['uv'][idx]
-        out_parts.append(dict(P=P, N=N, uv=p['uv'], idx=k))
+        out_parts.append({'P': P, 'N': N, 'uv': p['uv'], 'idx': k})
     # area (for classifying the base parts) before moving to link frame
     for p in out_parts:
         a,b,c = p['P'][0::3],p['P'][1::3],p['P'][2::3]; p['area'] = np.linalg.norm(np.cross(b-a,c-a),axis=1).sum()/2
@@ -371,19 +377,19 @@ for name, path, xyz, rpy in ARM+GRIP+CAM+GBASE:
     if name == 'joint1': apply_base_decals(out_parts, mats)
     if name.startswith('gripper_') or name == 'camera_flange': out_parts = style_parts(name, out_parts)
     if name == 'camera_flange':
-        lens = [p for p in out_parts if p['mat'] == 'black'][0]['P']
+        lens = next(p for p in out_parts if p['mat'] == 'black')['P']
         CAM_THICK = float(np.ptp(np.vstack([p['P'] for p in out_parts])[:,1]))
         LENS = (float(lens[:,0].mean()), float(lens[:,1].max()), float(lens[:,2].mean())); print('camera lens (link frame, m):', np.round(LENS,4))
     usedm = {m: mats[m] for m in {p['mat'] for p in out_parts}}
     if VISUAL_FORMAT == 'dae':
         write_dae(f'{OUT}/meshes/visual/{name}.dae',
-                  [dict(name=f'{name}_{p["idx"]}', pos=p['P'], nrm=p['N'], uv=p['uv'], mat=p['mat']) for p in out_parts], usedm)
+                  [{'name': f'{name}_{p["idx"]}', 'pos': p['P'], 'nrm': p['N'], 'uv': p['uv'], 'mat': p['mat']} for p in out_parts], usedm)
     else:
         Vv = np.vstack([p['P'] for p in out_parts]); write_stl(f'{OUT}/meshes/visual/{name}.stl', Vv, np.arange(len(Vv)).reshape(-1,3))
     V = np.vstack(allpos); hv, hf = hull(V); write_stl(f'{OUT}/meshes/collision/{name}.stl', hv, hf)
     if name == 'g_base': G_TOP = float(V[:,2].max()); print(f'g_base: footprint {np.ptp(V[:,0])*1000:.0f} x {np.ptp(V[:,1])*1000:.0f} mm, height {G_TOP*1000:.1f} mm')
     Pp = mesh_props(hv, hf)
-    links[name] = dict(vol=Pp['volume'], com=Pp['com'], I=Pp['I_unit_density'])
+    links[name] = {'vol': Pp['volume'], 'com': Pp['com'], 'I': Pp['I_unit_density']}
     report.append(f"{name:15s} parts={len(out_parts):3d} tris={sum(len(p['P'])//3 for p in out_parts):6d} tex={'yes' if png else 'no '} "
                   f"size(mm)={np.round(np.ptp(V,axis=0)*1000,1)}")
 print('\n'.join(report))
@@ -489,4 +495,9 @@ VARIANTS = {'mycobot_280_jn':(False,False),'mycobot_280_jn_gripper':(True,False)
             'mycobot_280_jn_camera':(False,True),'mycobot_280_jn_gripper_camera':(True,True)}
 for stem,(g,c) in VARIANTS.items():
     for suffix,with_base in (('',True),('_no_base',False)):
-        open(f'{OUT}/{stem}{suffix}.urdf','w').write(build(g,c,with_base)); print('wrote',f'{stem}{suffix}.urdf')
+        filename = f'{OUT}/{stem}{suffix}.urdf'
+
+        with open(filename, 'w') as file:
+            file.write(build(g, c, with_base))
+
+        print('wrote', f'{stem}{suffix}.urdf')
