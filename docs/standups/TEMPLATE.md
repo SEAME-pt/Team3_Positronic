@@ -1,5 +1,5 @@
 <!-- Copy to docs/standups/YYYY-MM-DD.md, fill at the end of the daily,
-     commit directly to dev. 15 minutes of meeting, 5 of writing. -->
+     commit to the standups-sprint-NN branch (one PR per week, see CONTRIBUTING 2.9). 15 minutes of meeting, 5 of writing. -->
 
 # Standup YYYY-MM-DD
 
