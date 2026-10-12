@@ -81,7 +81,6 @@ Three pairs, one per block. One owner per story inside the pair.
 ### Sprint 1
 
 **A** (4)
-- #19 Jetson driver image (arm64) starts on boot
 - #21 Serial protocol library in C++
 - #22 Hardware interface plugin: init and read with a fake backend
 - #23 /joint_states at 50 Hz from the Jetson container
@@ -93,10 +92,10 @@ Three pairs, one per block. One owner per story inside the pair.
 - #27 E-stop button wired to the Jetson GPIO and read by a script
 
 **C** (4)
+- #19 Jetson driver image (arm64) starts on boot
 - #20 Measure the serial link: get_angles rate and jitter
 - #28 CI in the team Docker image on every PR
 - #29 Architecture document v1
-- #31 Sprint 01 file: goals, daily log, review
 
 ### Sprint 2
 
