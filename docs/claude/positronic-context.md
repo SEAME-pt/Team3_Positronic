@@ -136,11 +136,7 @@ Breaks: 21 Dec – 3 Jan, 8–12 Feb, 22–26 Mar.
 
 ## 6. Conventions
 
-<<<<<<< HEAD
 **The full rules are in `docs/CONTRIBUTING.md`** (also uploaded to the Project). It covers the Claude usage rules, the workflow, the PR and review process, and the C++ and Python standards. It's final. Summary:
-=======
-**The full rules are in `docs/CONTRIBUTING.md`** (also uploaded to the Project). It covers the Claude usage rules, the workflow, the PR and review process, and the C++ and Python standards. Items marked [DISCUSS] there are still open. Summary:
->>>>>>> dev
 
 - **Flow:** issue (template) → branch created from the issue (`<issue#>-<slug>`, base `dev`) → PR to `dev` → **2 approvals** (the pair partner plus one person from another pair) and green CI → **squash merge** by the author.
 - **Keeping a branch current:** merge `dev` into it; no rebase or force-push.
@@ -160,14 +156,9 @@ Breaks: 21 Dec – 3 Jan, 8–12 Feb, 22–26 Mar.
 
   A Scrum Master rotates each sprint.
 - **Code:**
-<<<<<<< HEAD
   - **Style = ROS 2 Jazzy lint (`ament_lint_common`)**, the full set in every package: uncrustify, cpplint, cppcheck, flake8, pep257, copyright (MIT header on every file), lint_cmake, xmllint.
   - C++17. `make format` = clang-format (our `.clang-format`) then `ament_uncrustify --reformat` (final word). `make format-check` = `scripts/lint.sh`. Plus clang-tidy (`make tidy`, no new warnings per PR) and GoogleTest.
   - Python 3.12 checked by ament_flake8 (99 cols, single quotes, Google import order) and ament_pep257; pytest. No black or ruff.
-=======
-  - C++17 in ROS 2 style (clang-format 18.1.8, clang-tidy), GoogleTest.
-  - Python 3.12 with ruff and pytest.
->>>>>>> dev
   - SI units on ROS interfaces (REP 103); unit conversion only in the driver.
   - Package names `positronic_<role>`.
   - Every node that can move the arm is a lifecycle node.
@@ -179,11 +170,7 @@ Breaks: 21 Dec – 3 Jan, 8–12 Feb, 22–26 Mar.
 | 1 | **ROS 2 Jazzy** everywhere (laptops, CI, Jetson container). Not Galactic (EOL 2022), not Humble, not Lyrical (yet). | Jazzy is LTS until May 2029, past our program's end. MoveIt 2, ros2_control, gz_ros2_control and almost every tutorial and answer target it. Lyrical (May 2026, LTS to 2031) has Ubuntu 26.04 as its main platform and a younger ecosystem, which is riskier for beginners. Every machine must run the same distro, because DDS compatibility across distros isn't guaranteed. | A package we need is Lyrical-only, or the facilitators require a change. Switching is just the `ROS_DISTRO` build arg. |
 | 2 | **Docker for everything**, including on the Jetson. Laptops run the full dev image; the Jetson gets a slim runtime image (planned). | The Jetson's OS (20.04, JetPack 4.6) can't run Jazzy natively. Containers make the host OS irrelevant and the environment identical for all 6 of us and CI. | — |
 | 3 | **Gazebo Harmonic** (Jazzy's official pairing) with `gz_ros2_control`, running on laptops or lab RTX workstations, never on the Jetson. | It's the officially supported ROS/Gazebo pair. The same URDF and controllers drive sim and real, which satisfies the "same interface" rule. Most MoveIt sim tutorials use it. Isaac Sim is possible later for M2 photorealism. | M2 needs photorealistic or contact-rich simulation |
-<<<<<<< HEAD
 | 4 | **ROS 2 lint is the style standard** (C++ and Python), and **CI runs inside the dev image** (`make build`, `make test`, `make format-check`, tidy, coverage), replacing the Python 3.8 / ubuntu-22.04 ruff+black job. | ROS tools enforce ROS style in `colcon test` anyway; CI must test the same environment the code runs in. | — |
-=======
-| 4 | **Python 3.12 + ruff**, and **CI runs inside the dev image** (build, test, format-check, tidy, coverage), replacing the Python 3.8 / ubuntu-22.04 job. | CI must test the same environment the code runs in. A Python 3.8 check against 3.12 code gives false results. | — |
->>>>>>> dev
 | 5 | Workflow and standards in `docs/CONTRIBUTING.md`. | See that file | Retro feedback, or a PR changing it |
 
 **Open technical questions** (add them to the plan):
