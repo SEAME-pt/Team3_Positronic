@@ -93,8 +93,8 @@ Three pairs, one per block. One owner per story inside the pair. Sprint files
 - #24 Real arm mirrored in RViz on a laptop
 
 **C** (4)
-- #20 Measure the serial link: read rate, write streaming, silence
 - #19 Jetson driver image (arm64) starts on boot
+- #20 Measure the serial link: get_angles rate and jitter
 - #28 CI in the team Docker image on every PR
 - #29 Architecture document v1
 
