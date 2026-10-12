@@ -10,6 +10,8 @@ BraceWrapping:
   AfterFunction: true
   AfterNamespace: true
   AfterStruct: true
+  AfterEnum: true
+  AfterControlStatement: MultiLine
 ColumnLimit: 100
 ConstructorInitializerIndentWidth: 0
 ContinuationIndentWidth: 2
@@ -18,6 +20,10 @@ PointerAlignment: Middle
 ReflowComments: false
 
 InsertBraces: true
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: Never
+SpaceAfterTemplateKeyword: false
+AllowShortLambdasOnASingleLine: None
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
