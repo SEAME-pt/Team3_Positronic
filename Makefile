@@ -9,7 +9,6 @@ ifeq ($(USER_UID),0)
 endif
 export USER_UID USER_GID
 
-CPP_FILES := find src -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0
 
 .DEFAULT_GOAL := help
 .PHONY: help image shell build test format format-check tidy doctor clean
@@ -30,11 +29,11 @@ build: ## colcon build
 test: ## colcon test and show results
 	$(RUN) bash -c 'colcon test && colcon test-result --verbose'
 
-format: ## Format C/C++ files in src/
-	$(RUN) bash -c "$(CPP_FILES) | xargs -0 -r clang-format -i"
+format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
+	$(RUN) bash scripts/lint.sh --fix
 
-format-check: ## Fail if a C/C++ file in src/ is not formatted
-	$(RUN) bash -c "$(CPP_FILES) | xargs -0 -r clang-format --dry-run -Werror"
+format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep257, copyright
+	$(RUN) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'for d in build/*/; do \
