@@ -37,4 +37,4 @@ make help      # all targets
 
 ## Workflow
 
-Issue → "Create a branch" from the issue (base `dev`) → PR to `dev` with 1 review → `dev` to `main` at the end of the sprint.
+Issue → "Create a branch" from the issue (base `dev`) → PR to `dev` with 2 approvals (pair partner + one from another pair), squash merge → `dev` to `main` at the end of the sprint. Full rules: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
