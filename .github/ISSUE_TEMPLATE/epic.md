@@ -7,8 +7,8 @@ labels: epic
 ## Goal
 One sentence, from the user's point of view.
 
-## Module and requirement
-M1 / M2, R-xx-yy (from docs/plan.md)
+## Module and deliverable
+M1 / M2. Deliverable: 
 
 ## User stories
 - [ ] #

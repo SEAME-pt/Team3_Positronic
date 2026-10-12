@@ -21,4 +21,4 @@ If yes, what is the safe state while it is being tested?
 
 ## Links
 Epic: #
-Requirement: R-xx-yy
+Deliverable: 
