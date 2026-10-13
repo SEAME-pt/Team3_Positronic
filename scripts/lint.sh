@@ -2,7 +2,6 @@
 # ROS 2 Jazzy style checks on src/ (the ament_lint_common tools that colcon test runs).
 #   bash scripts/lint.sh        check only (make format-check, CI)
 #   bash scripts/lint.sh --fix  clang-format, then uncrustify reformat (make format)
-
 set -u
 cd "$(dirname "$0")/.."
 
