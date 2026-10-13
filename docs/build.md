@@ -45,14 +45,14 @@ and RViz, all talking to the nodes on the Jetson.
 **`make image`**: builds `mimesis-dev:jazzy` from `docker/Dockerfile`. Run it once, and again whenever
 someone changes the Dockerfile. It doesn't compile our code.
 
-**`make shell`**: opens a terminal inside a fresh container. Your repo is at `/ws`, and ROS is already
-loaded. Use it for anything interactive: `ros2 topic list`, `ros2 topic echo /joint_states`, `rviz2`.
+**`make shell`**: opens a terminal inside a fresh container. Your repo is at the same path as on your
+machine, and ROS is already loaded. Use it for anything interactive: `ros2 topic list`, `ros2 topic echo /joint_states`, `rviz2`.
 For RViz, run it from a terminal on the VM's desktop, not over SSH, otherwise windows can't open.
-`exit` leaves; the container is deleted, but your files stay because `/ws` is your real repo folder.
+`exit` leaves; the container is deleted, but your files stay because the container uses your real repo folder.
 
 **`make build`**: runs `colcon build` on every package in `src/`. The output goes to `build/`,
-`install/` and `log/` (ignored by Git). It also writes `compile_commands.json`, which `make tidy`
-and Zed use to understand the code.
+`install/` and `log/` (ignored by Git). It also writes `build/compile_commands.json`, which `make tidy`
+and your editor's clangd use to understand the code (see the README, "Errors and warnings in your editor").
 To build only one package, use `make shell` and run `colcon build --packages-select <package>`.
 
 **`make test`**: runs every package's tests and prints a summary. Read the last lines: they say how
