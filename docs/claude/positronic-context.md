@@ -144,7 +144,7 @@ Breaks: 21 Dec – 3 Jan, 8–12 Feb, 22–26 Mar.
   - `docs/sprints/sprint_NN.md`.
   - `docs/standups/YYYY-MM-DD.md`.
   - The Claude setup files in `docs/claude/`.
-  - `CLAUDE.md` at the repo root for Claude Code.
+  - No `CLAUDE.md` in the repo. Claude Code sessions start by reading the files in `docs/claude/` and `CONTRIBUTING.md` (see its §1.4).
 - **M1 organisation (draft):** three pairs, one per block, with one owner per story inside each pair:
   - A, motion and safety (C++ driver, ros2_control, lifecycle, e-stop).
   - B, planning and simulation (URDF, MoveIt, Gazebo, mission node).
