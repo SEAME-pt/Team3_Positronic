@@ -35,33 +35,37 @@ make help      # all targets
 
 `ARM_IP=<jetson ip> make doctor` also checks that the Jetson is reachable.
 
-## Errors and warnings in your editor (VS Code)
+## Errors and warnings in your editor
 
-Your editor can show compiler errors and clang-tidy warnings as you type, with the same flags and
-headers as `make build`. It uses **clangd**, which reads `build/compile_commands.json` (written by
-`make build`) and our `.clang-tidy`.
+your editor can show compiler errors and clang-tidy warnings as you type, with the same flags
+as `make build`. They use **clangd**, which reads `build/compile_commands.json` (written by
+`make build`) and our `.clang-tidy`. clangd runs on your machine, so it needs the ROS 2 Jazzy
+headers there too. That only works on **Ubuntu 24.04**.
 
-Needs **Ubuntu 24.04**, because clangd runs on your machine and needs the ROS 2 Jazzy headers there.
-The build itself still happens only in Docker.
+**Once per machine**, with your editor closed:
 
-1. Install clangd, a compiler and the ROS headers we use. This needs the
-   [ROS 2 apt repository](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
-   set up first:
-   ```bash
-   sudo apt install -y clangd build-essential \
-     ros-jazzy-ros-base ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-moveit
-   ```
-2. In VS Code, install the **clangd** extension (`llvm-vs-code-extensions.vscode-clangd`). When it
-   asks to disable Microsoft's C/C++ IntelliSense, accept: the two conflict.
-3. Build once, so the commands file exists:
-   ```bash
-   make image && make build
-   ```
-4. Open any `.cpp` in a package. `#include "rclcpp/rclcpp.hpp"` should show no error, and Ctrl+click
-   opens the header. If not, run **clangd: Restart language server** from the command palette.
+```bash
+make setup-editor
+```
 
-Run `make build` again after adding a package or a source file, so clangd knows about it.
-Zed works the same way: do steps 1 and 3, since Zed already includes clangd.
+It asks for your sudo password, adds the ROS 2 apt repository, installs clangd and the ROS
+headers we use, adds `source /opt/ros/jazzy/setup.bash` to `~/.bashrc` (for the `ros2` command),
+installs the VS Code clangd extension if you have VS Code, then builds. It's safe to run again.
+
+Then open the repo in your editor. **VS Code:** when the clangd extension asks to disable
+Microsoft's C/C++ IntelliSense, accept: the two conflict.
+
+**Check:** open a `.cpp` in a package. `#include "rclcpp/rclcpp.hpp"` has no error and
+Ctrl+click opens the header.
+
+**Things that look broken but aren't:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Every ROS include is "file not found" | The file isn't in a package, or `make build` hasn't run since the package was created. clangd only knows files listed in `build/compile_commands.json` | Put the file in a package under `src/`, run `make build` |
+| Still red after `make build` | The editor was open before `compile_commands.json` existed | Restart the language server once (VS Code: **clangd: Restart language server**; Zed: **editor: restart language server**) |
+| `which ros2` prints nothing | That terminal was open before setup | Open a new terminal. clangd doesn't need this |
+| A `compile_commands.json` in the repo root | Leftover from an old setup. clangd uses it instead of `build/` | Delete it |
 
 ## Workflow
 

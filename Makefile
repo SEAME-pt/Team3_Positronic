@@ -14,7 +14,7 @@ export WS := $(CURDIR)
 
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy doctor clean
+.PHONY: help image shell build test format format-check tidy doctor clean setup-editor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -43,6 +43,10 @@ tidy: ## clang-tidy on src/ (needs make build first)
 
 doctor: ## Check the environment
 	$(RUN) bash scripts/doctor.sh
+
+setup-editor: ## One-time: clangd + ROS headers on your machine, then build (Ubuntu 24.04)
+	bash scripts/setup-editor.sh
+	$(MAKE) image build
 
 clean: ## Delete build/, install/ and log/
 	rm -rf build install log
