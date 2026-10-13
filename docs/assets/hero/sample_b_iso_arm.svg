@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="b_bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#08131a"/>
+      <stop offset="0.6" stop-color="#061019"/>
+      <stop offset="1" stop-color="#03080d"/>
+    </linearGradient>
+    <linearGradient id="b_metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e2e8f0"/>
+      <stop offset="0.5" stop-color="#94a3b8"/>
+      <stop offset="1" stop-color="#475569"/>
+    </linearGradient>
+    <linearGradient id="b_metal2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f1f5f9"/>
+      <stop offset="1" stop-color="#64748b"/>
+    </linearGradient>
+    <radialGradient id="b_floor" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f59e0b" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="b_amb" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f59e0b" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="b_glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="g"/>
+      <feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="b_soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="30"/></filter>
+    <linearGradient id="b_fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="b_gridmask"><rect x="0" y="300" width="1200" height="180" fill="url(#b_fade)"/></mask>
+  </defs>
+
+  <rect width="1200" height="480" fill="url(#b_bg)"/>
+  <ellipse cx="980" cy="120" rx="420" ry="260" fill="url(#b_amb)" opacity="0.7"/>
+  <ellipse cx="900" cy="420" rx="360" ry="140" fill="url(#b_floor)"/>
+
+  <g mask="url(#b_gridmask)" stroke="#22808c" stroke-width="1">
+    <line x1="540" y1="480" x2="600" y2="300"/><line x1="620" y1="480" x2="660" y2="300"/>
+    <line x1="700" y1="480" x2="720" y2="300"/><line x1="780" y1="480" x2="780" y2="300"/>
+    <line x1="860" y1="480" x2="840" y2="300"/><line x1="940" y1="480" x2="900" y2="300"/>
+    <line x1="1020" y1="480" x2="960" y2="300"/><line x1="1100" y1="480" x2="1020" y2="300"/>
+    <line x1="1180" y1="480" x2="1080" y2="300"/>
+    <line x1="460" y1="480" x2="540" y2="300"/><line x1="380" y1="480" x2="480" y2="300"/>
+    <line x1="300" y1="480" x2="420" y2="300"/>
+    <line x1="440" y1="320" x2="1180" y2="320"/><line x1="470" y1="345" x2="1150" y2="345"/>
+    <line x1="500" y1="375" x2="1120" y2="375"/><line x1="530" y1="410" x2="1090" y2="410"/>
+    <line x1="560" y1="450" x2="1060" y2="450"/><line x1="590" y1="490" x2="1030" y2="490"/>
+  </g>
+
+  <g>
+    <ellipse cx="820" cy="424" rx="96" ry="24" fill="#0b141c"/>
+    <ellipse cx="820" cy="420" rx="96" ry="24" fill="#1e293b" stroke="#334155"/>
+    <path d="M760 414 L740 470 L900 470 L880 414 Z" fill="#0f1a24" stroke="#334155"/>
+    <ellipse cx="820" cy="416" rx="70" ry="16" fill="#111c26" stroke="#38bdf8" stroke-width="1.5" opacity="0.8"/>
+  </g>
+
+  <g filter="url(#b_glow)" stroke-linecap="round" fill="none">
+    <path d="M820 412 L742 300" stroke="url(#b_metal)" stroke-width="30"/>
+    <path d="M742 300 L846 232" stroke="url(#b_metal2)" stroke-width="26"/>
+    <path d="M846 232 L958 276" stroke="url(#b_metal)" stroke-width="20"/>
+  </g>
+  <g filter="url(#b_glow)">
+    <circle cx="820" cy="412" r="20" fill="#0b1220" stroke="#f59e0b" stroke-width="3"/>
+    <circle cx="742" cy="300" r="16" fill="#0b1220" stroke="#38bdf8" stroke-width="3"/>
+    <circle cx="846" cy="232" r="13" fill="#0b1220" stroke="#f59e0b" stroke-width="3"/>
+    <circle cx="958" cy="276" r="10" fill="#0b1220" stroke="#38bdf8" stroke-width="3"/>
+  </g>
+  <g stroke="#e2e8f0" stroke-width="6" stroke-linecap="round" filter="url(#b_glow)">
+    <line x1="958" y1="276" x2="998" y2="252"/>
+    <line x1="958" y1="276" x2="1000" y2="294"/>
+  </g>
+  <g fill="#f59e0b">
+    <circle cx="1000" cy="250" r="4"/><circle cx="1004" cy="296" r="4"/>
+  </g>
+
+  <g font-size="14" fill="#cbd5e1">
+    <text x="64" y="140" font-size="13.5" letter-spacing="5" fill="#fbbf24">SIMULATION · REAL TIME CONTROL</text>
+    <text x="58" y="226" font-size="74" font-weight="800" fill="#f8fafc">POSITRONIC</text>
+    <text x="64" y="266" font-size="19" fill="#94a3b8">Kinematics, controllers and sim-to-real</text>
+  </g>
+  <g font-size="14" fill="#e2e8f0">
+    <g><rect x="64" y="308" width="118" height="34" rx="17" fill="#12202b" stroke="#2b4250"/><text x="123" y="330" text-anchor="middle">URDF / SRDF</text></g>
+    <g><rect x="194" y="308" width="132" height="34" rx="17" fill="#12202b" stroke="#2b4250"/><text x="260" y="330" text-anchor="middle">Hardware I/F</text></g>
+    <g><rect x="338" y="308" width="118" height="34" rx="17" fill="#12202b" stroke="#2b4250"/><text x="397" y="330" text-anchor="middle">Controllers</text></g>
+  </g>
+</svg>
