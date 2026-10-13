@@ -21,17 +21,17 @@ The team has a shared **Project** in our Claude Team organization. Every chat in
 |---|---|---|
 | Name | `Positronic` | — |
 | "What are you trying to achieve?" | One paragraph of the project's goal | §1.3 below |
-| **Instructions** | *How* Claude behaves: teach first, explain the why, reply in your language, safety rules, offer ADRs | [`docs/claude/project-instructions.md`](claude/project-instructions.md) |
-| **Knowledge files** | *What* Claude knows: program, hardware, team, decisions, status, our rules | [`docs/claude/positronic-context.md`](claude/positronic-context.md) and this file |
+| **Instructions** | *How* Claude behaves: teach first, explain the why, reply in your language, safety rules, offer ADRs | The Project's instructions |
+| **Knowledge files** | *What* Claude knows: program, hardware, team, decisions, status, our rules | `positronic-context.md` and this file, uploaded to the Project |
 | GitHub repo | Claude reads our real code and docs | the repo, connected to the Project |
 
-The files live **in the repo**, so changes to them go through a PR like any other change. *Why: one version everyone reviewed, instead of six slightly different copies.*
+The instructions and `positronic-context.md` live **only in the Project**, not in the repo. @feazeved maintains them; ask him for changes. This file is the exception: it lives in the repo and changes through PRs, and he re-uploads it after it changes on `dev`. *Why: one copy with one owner, so the Project never drifts from a second copy in the repo.*
 
 ### 1.2 Using the shared Project
 
 - **One topic per chat**, named after its issue, e.g. `#21 serial protocol`. *Why: a chat that mixes topics makes Claude lose track, and the issue number makes the chat easy to find again.*
-- **Only the Scrum Master edits the Project** (instructions and knowledge files), and only by re-uploading files that are merged in the repo. Everyone else just uses it. *Why: if anyone edits it directly, the Project and the repo drift apart.*
-- **At every sprint review**, the Scrum Master updates the "Current status" section of `positronic-context.md` in a PR, then re-uploads it.
+- **Only @feazeved edits the Project** (instructions and knowledge files). Everyone else just uses it. *Why: six people editing the same instructions end up with rules nobody agreed on.*
+- **At every sprint review**, he updates the "Current status" section of `positronic-context.md`, and re-uploads this file if it changed.
 - **Decisions don't stay in chats.** If a chat leads to a decision, ask Claude for an ADR (§2.10) and open a PR. A decision that's only in someone's chat history doesn't exist for the team.
 - **Never upload** personal files, secrets, keys or datasets.
 
@@ -42,14 +42,16 @@ You only need this for a personal copy. In Claude, go to **Projects → Create p
 1. **Name:** `Positronic`
 2. **What are you trying to achieve?**
    > Team Positronic (6 students, SEA:ME 2.0 at 42 Porto) is building the ROS 2 software for a myCobot 280 Jetson Nano arm. In M1 that means a ros2_control driver, MoveIt 2 motion in Gazebo and on the real arm, and an e-stop that always wins over our code. M2 adds vision, visual servoing, pick-and-place and learning from demonstration, and M3 adds multi-robot cooperation. We want to be the best team in the cohort and learn as much as possible, since we're new to robotics and embedded systems and are graded individually. We use Claude to learn concepts and why best practices exist, plan sprints and issues, review code, and keep every decision documented so we can defend it.
-3. **Instructions:** paste the content of [`docs/claude/project-instructions.md`](claude/project-instructions.md).
-4. **Knowledge:** upload [`docs/claude/positronic-context.md`](claude/positronic-context.md) and this `CONTRIBUTING.md`. Connect GitHub and add this repo.
+3. **Instructions:** copy them from the team Project.
+4. **Knowledge:** upload `positronic-context.md` (download it from the team Project) and this `CONTRIBUTING.md`. Connect GitHub and add this repo.
 
 ### 1.4 Claude Code (terminal / IDE)
 
-The repo has **no `CLAUDE.md`**. The whole setup lives in `docs/claude/` and in this file, so there's only one place to maintain. When you use Claude Code inside the repo, start the session with:
+The repo has **no `CLAUDE.md`**, so the team context lives in one place, the Project. When you use Claude Code inside the repo, start the session with:
 
-> *"Read `docs/claude/project-instructions.md`, `docs/claude/positronic-context.md` and `docs/CONTRIBUTING.md` and follow them."*
+> *"Read `docs/CONTRIBUTING.md` and `README.md` and follow them."*
+
+For questions that need the full context (program, hardware, decisions), use the Project chat.
 
 ### 1.5 Getting the most out of it
 
@@ -270,10 +272,11 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | `make build` | `colcon build` |
 | `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`) |
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
+| Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
 
 **Why two formatters.** In `make test`, ROS checks C++ formatting with **uncrustify**, not clang-format. Our `.clang-format` is ROS's own clang-format config (`ament_clang_format`) plus a few options that make it agree with uncrustify. In a few places clang-format physically can't produce what uncrustify demands: the body of a lambda, the continuation lines of a wrapped `while`/`for` condition, and `case` blocks with braces. So `make format` runs clang-format first and uncrustify last. Uncrustify has the final word, and the result passes `make test`.
 
-**In Zed** (or any editor using clangd), format-on-save applies `.clang-format`. That's nearly always correct. Run `make format` before committing anyway, so uncrustify can fix the exceptions above.
+**In the dev container** (Zed or VS Code with clangd), format-on-save applies `.clang-format`. That's nearly always correct. Run `make format` before committing anyway, so uncrustify can fix the exceptions above.
 
 ### 3.2 C++ formatting
 

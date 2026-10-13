@@ -1,5 +1,11 @@
 COMPOSE ?= docker compose
-RUN     := $(COMPOSE) run --rm dev
+# Inside a container (the dev container's terminal) run commands directly;
+# on the host, run them in a throwaway dev container.
+ifneq ($(wildcard /.dockerenv),)
+  RUN :=
+else
+  RUN := $(COMPOSE) run --rm dev
+endif
 
 USER_UID := $(shell id -u)
 USER_GID := $(shell id -g)
@@ -8,13 +14,10 @@ ifeq ($(USER_UID),0)
   USER_GID := 1000
 endif
 export USER_UID USER_GID
-# The repo is mounted at the same path inside the container as on your machine,
-# so build/compile_commands.json has paths your editor's clangd can open.
-export WS := $(CURDIR)
 
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy doctor clean setup-editor
+.PHONY: help image shell build test format format-check tidy doctor clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -39,14 +42,10 @@ format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep2
 	$(RUN) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^$(CURDIR)/src/"'
+	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
 
 doctor: ## Check the environment
 	$(RUN) bash scripts/doctor.sh
-
-setup-editor: ## One-time: clangd + ROS headers on your machine, then build (Ubuntu 24.04)
-	bash scripts/setup-editor.sh
-	$(MAKE) image build
 
 clean: ## Delete build/, install/ and log/
 	rm -rf build install log

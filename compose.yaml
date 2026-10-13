@@ -11,9 +11,9 @@ services:
         USER_GID: ${USER_GID:-1000}
     network_mode: host
     ipc: host
-    working_dir: ${WS:-/ws}
+    working_dir: /ws
     volumes:
-      - .:${WS:-/ws}
+      - .:/ws
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       DISPLAY: ${DISPLAY:-}
