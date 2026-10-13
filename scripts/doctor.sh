@@ -21,7 +21,7 @@ check "MoveIt 2"         ros2 pkg prefix moveit_ros_move_group
 check "clang-format"     clang-format --version
 check "clang-tidy"       bash -c 'clang-tidy --version | grep -i version'
 check "pymycobot"        python3 -c 'import importlib.metadata as m; print(m.version("pymycobot"))'
-check "repo writable"    bash -c 'f=/ws/.doctor_$$ && touch "$f" && rm "$f" && echo "uid $(id -u) can write /ws"'
+check "repo writable"    bash -c 'f=$PWD/.doctor_$$ && touch "$f" && rm "$f" && echo "uid $(id -u) can write $PWD"'
 
 check "DDS pub/sub" python3 - <<'EOF'
 import time

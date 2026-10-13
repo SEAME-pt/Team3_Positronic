@@ -8,6 +8,9 @@ ifeq ($(USER_UID),0)
   USER_GID := 1000
 endif
 export USER_UID USER_GID
+# The repo is mounted at the same path inside the container as on your machine,
+# so build/compile_commands.json has paths your editor's clangd can open.
+export WS := $(CURDIR)
 
 
 .DEFAULT_GOAL := help
@@ -36,9 +39,7 @@ format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep2
 	$(RUN) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'for d in build/*/; do \
-	  if [ -f "$$d/compile_commands.json" ]; then run-clang-tidy -quiet -p "$$d" "^/ws/src/"; fi; \
-	done'
+	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^$(CURDIR)/src/"'
 
 doctor: ## Check the environment
 	$(RUN) bash scripts/doctor.sh
