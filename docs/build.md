@@ -6,9 +6,9 @@ terminal on your machine or in your editor's dev container terminal (see the REA
 
 ## Where things run
 
-- **Your Machine**: you edit code in `src/`, and build, test and format it in the `mimesis-dev:jazzy` container.
-- **The Jetson** (`ssh nano`): only code that needs the arm runs there, in the `mimesis-dev:nano` container.
-  Each person has their own copy of the repo in `~/mimesis/<your machine username>`.
+- **Your Machine**: you edit code in `src/`, and build, test and format it in the `positronic-dev:jazzy` container.
+- **The Jetson** (`ssh nano`): only code that needs the arm runs there, in the `positronic-dev:nano` container.
+  Each person has their own copy of the repo in `~/positronic/<your machine username>`.
 - Both containers use ROS 2 Jazzy and `ROS_DOMAIN_ID=17`, so nodes on your machine and the Jetson see each other.
 
 Always edit on your machine. Every `nano-*` command first mirrors your machine's repo onto the Jetson, so anything
@@ -46,7 +46,7 @@ and RViz, all talking to the nodes on the Jetson.
 
 ## Dev commands
 
-**`make image`**: builds `mimesis-dev:jazzy` from `docker/Dockerfile`. Run it once, and again whenever
+**`make image`**: builds `positronic-dev:jazzy` from `docker/Dockerfile`. Run it once, and again whenever
 someone changes the Dockerfile. It doesn't compile our code.
 
 **`make shell`**: opens a terminal inside a fresh container. Your repo is at `/ws`, and ROS is already
@@ -78,7 +78,7 @@ then `make build` again.
 
 ## Jetson commands
 
-**`make nano-sync`**: copies your repo to `~/mimesis/<you>` on the Jetson. It mirrors: files you
+**`make nano-sync`**: copies your repo to `~/positronic/<you>` on the Jetson. It mirrors: files you
 deleted on your machine are deleted there too. `.git`, `build/`, `install/` and `log/` are not copied, since
 the Jetson builds its own. You rarely call it directly; the two commands below run it first.
 
@@ -87,7 +87,7 @@ the Jetson builds its own. You rarely call it directly; the two commands below r
 
 **`make nano-shell`**: syncs, then opens a shell in a Jetson container that can use the arm
 (`/dev/ttyTHS1`). Only one person at a time: if someone already has it open, you get
-`The container name "/mimesis-arm" is already in use`. Your built packages are loaded automatically,
+`The container name "/positronic-arm" is already in use`. Your built packages are loaded automatically,
 so `ros2 run` works straight away. If you rebuild inside the shell, run `source install/setup.bash`
 afterwards.
 
@@ -101,7 +101,7 @@ Add a variable before the command to override it for that run:
 | Variable | Default | Example |
 | --- | --- | --- |
 | `NANO` | `nano` (from `~/.ssh/config`) | `NANO=10.20.118.0 make nano-shell` if `nano.local` doesn't resolve |
-| `NANO_DIR` | `mimesis/<your username>` | `NANO_DIR=mimesis/test make nano-build` for a separate copy |
+| `NANO_DIR` | `positronic/<your username>` | `NANO_DIR=positronic/test make nano-build` for a separate copy |
 | `ROS_DOMAIN_ID` | `17` | Must be the same on both sides, and different from other teams |
 | `ARM_IP` | empty | `ARM_IP=10.20.118.0 make doctor` |
 
@@ -111,7 +111,7 @@ Add a variable before the command to override it for that run:
 | --- | --- |
 | Anything strange | `make doctor` first |
 | `ros2 topic echo` on your machine shows nothing from the Jetson | Same `ROS_DOMAIN_ID` on both sides? |
-| `mimesis-arm` is already in use | Someone has the arm. Ask before running `ssh nano docker rm -f mimesis-arm` |
+| `positronic-arm` is already in use | Someone has the arm. Ask before running `ssh nano docker rm -f positronic-arm` |
 | `Could not resolve hostname nano.local` | Use the IP: `NANO=<ip> make ...`, or put the IP in `~/.ssh/config` |
 | `Permission denied` on the Jetson's `/ws` | The Jetson image is out of date: `make nano-image` |
 | Build fails after pulling someone's Dockerfile change | `make image` (and `make nano-image` for the Jetson) |
