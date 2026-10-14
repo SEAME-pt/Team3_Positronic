@@ -1,5 +1,11 @@
 COMPOSE ?= docker compose
-RUN     := $(COMPOSE) run --rm dev
+# Inside a container (the dev container's terminal) run commands directly;
+# on the host, run them in a throwaway dev container.
+ifneq ($(wildcard /.dockerenv),)
+  RUN :=
+else
+  RUN := $(COMPOSE) run --rm dev
+endif
 
 USER_UID := $(shell id -u)
 USER_GID := $(shell id -g)
@@ -36,9 +42,7 @@ format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep2
 	$(RUN) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'for d in build/*/; do \
-	  if [ -f "$$d/compile_commands.json" ]; then run-clang-tidy -quiet -p "$$d" "^/ws/src/"; fi; \
-	done'
+	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
 
 doctor: ## Check the environment
 	$(RUN) bash scripts/doctor.sh
