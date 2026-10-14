@@ -10,8 +10,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONUNBUFFERED=1
 
+# ament_cppcheck skips cppcheck 2.13 (Ubuntu 24.04) by default because it can be slow.
+# We run it anyway, so make format-check and make test check the same things.
+ENV AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      sudo gdb ccache python3-pip clang-tidy x11-utils \
+      sudo gdb ccache python3-pip clang-tidy clangd x11-utils \
       ros-${ROS_DISTRO}-ros2-control \
       ros-${ROS_DISTRO}-ros2-controllers \
       ros-${ROS_DISTRO}-moveit \
