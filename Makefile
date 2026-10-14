@@ -15,6 +15,8 @@ ifeq ($(USER_UID),0)
 endif
 export USER_UID USER_GID
 
+# Let's the container's user open windows (like RViz) on your desktop.
+ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
 .DEFAULT_GOAL := help
 .PHONY: help image shell build test format format-check tidy doctor clean
@@ -26,7 +28,7 @@ image: ## Build the dev image
 	$(COMPOSE) build
 
 shell: ## Shell in the dev container (GUI apps like rviz2 work from here)
-	@if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
+	$(ALLOW_X)
 	$(RUN) bash
 
 build: ## colcon build
@@ -45,6 +47,7 @@ tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
 
 doctor: ## Check the environment
+	$(ALLOW_X)
 	$(RUN) bash scripts/doctor.sh
 
 clean: ## Delete build/, install/ and log/
@@ -52,8 +55,8 @@ clean: ## Delete build/, install/ and log/
 
 # ---------- Jetson (one shared machine, user er) ----------
 NANO          ?= nano
-NANO_DIR      ?= mimesis/$(USER)
-NANO_IMAGE    := mimesis-dev:nano
+NANO_DIR      ?= positronic/$(USER)
+NANO_IMAGE    := positronic-dev:nano
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
@@ -62,10 +65,10 @@ NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMA
 .PHONY: nano-image nano-sync nano-build nano-shell
 
 nano-image: ## Build the Jetson image ON the Jetson (once per Dockerfile change)
-	rsync -a --delete docker/ $(NANO):mimesis-docker/
-	ssh $(NANO) 'docker build -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) mimesis-docker'
+	rsync -a --delete docker/ $(NANO):positronic-docker/
+	ssh $(NANO) 'docker build -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
 
-nano-sync: ## Copy this repo to ~/mimesis/<you> on the Jetson
+nano-sync: ## Copy this repo to ~/positronic/<you> on the Jetson
 	ssh $(NANO) mkdir -p $(NANO_DIR)
 	rsync -a --delete --exclude .git --exclude build --exclude install --exclude log ./ $(NANO):$(NANO_DIR)/
 
@@ -73,4 +76,4 @@ nano-build: nano-sync ## Sync, then colcon build on the Jetson
 	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2'"
 
 nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
-	ssh -t $(NANO) "$(NANO_RUN) -it --name mimesis-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"
+	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"
