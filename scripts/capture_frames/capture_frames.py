@@ -20,19 +20,28 @@
 # THE SOFTWARE.
 """Record the raw serial bytes exchanged with the myCobot 280, one section per step.
 
-The output file (frames_<timestamp>.txt) is the "judge" for the C++ protocol
-tests of issue #21: the C++ encoder and decoder must reproduce these bytes.
+One run of this script produces one file, frames_<timestamp>.txt. That file is
+the "judge" for the C++ protocol tests of issue #21: the C++ encoder and decoder
+must reproduce its bytes. The file header records the SHA-256 of this script, so
+anyone can check which version produced it (sha256sum capture_frames.py).
 
-Run it on the Jetson host (system pymycobot 4.0.4b5, the same one that recorded
-the first capture), from a folder outside ~/mimesis/<you>, because nano-sync
-deletes files that only exist there:
+Run it on the Jetson host (system pymycobot 4.0.4b5), from a folder outside
+~/mimesis/<you>, because nano-sync deletes files that only exist there:
 
     scp scripts/capture_frames/capture_frames.py er@nano:~/captures/
     ssh nano
     cd ~/captures && python3 capture_frames.py --operator leandro --arm A1
 
-Add --motion-only to repeat just the motion part (power_on, J1 out and back,
-power_off) when the read-only part is already recorded.
+Sequence (each step is one or more sections in the file):
+  S1  power_on                     the servos lock where they are (hold the arm)
+  S2  firmware version and modes   read only
+  S3  idle line for 10 s           nothing sent: does the arm talk on its own?
+  S4  20 x get_angles              echo check, latency, start pose
+  S5  J1 out and back              30 deg towards the centre of its range, speed 20
+  S6  STOP during a slow motion    is the stop obeyed, and when is it acked?
+  S7  release_all_servos           arm limp but powered: does get_angles answer,
+                                   and does it follow the arm moved by hand?
+  S8  power_off                    arm limp and disconnected: does get_angles answer?
 
 Two capture modes:
   A. pymycobot call: the TX, RX and RESULT of one transaction.
@@ -43,12 +52,13 @@ Two capture modes:
 
 Safety (there is no e-stop in the cell yet):
   - one person keeps a hand on the power switch the whole time;
-  - only J1 moves: 30 deg towards the centre of its range and back, at speed 20;
-  - every motion waits for Enter, and Ctrl+C or any error sends STOP;
-  - POWER_OFF releases the servos and J2/J3 drop: hold the arm before that step.
+  - only J1 moves by command: 30 deg towards the centre of its range and back;
+  - every motion waits for Enter, and q, Ctrl+C or any error sends STOP;
+  - power_on, release_all_servos and power_off change the torque: hold the arm.
 """
 
 import argparse
+import hashlib
 import os
 import platform
 import statistics
@@ -233,118 +243,104 @@ def read_angles(log, mc, prefix, count):
     return results
 
 
-def run_motion(log, mc):
-    """S4-S8: power on, then move only J1 towards the centre of its range and back."""
-    # S4: power_on locks the servos where they are; a limp arm must be held first.
-    confirm(
-        "power_on: the servos lock where they are now. If the arm is limp, "
-        "hold it in a stable pose. Ready?"
-    )
-    step(log, "power_on", mc.power_on)
-    time.sleep(1.0)
-
-    # The start pose is read after power_on: get_angles doesn't answer in power_off.
-    start = [r for r in read_angles(log, mc, "get_angles_start", 3) if valid_angles(r)]
-    if not start:
-        print("\nget_angles never returned 6 angles: skipping every motion (S5-S8).")
-        return
-    base = start[-1]
+def move_j1_out_and_back(log, mc, base):
+    """S5 and S6: J1 towards the centre of its range, STOP test, J1 back."""
     start_j1 = base[0]
     # Towards the centre, so the target can never pass a joint limit.
     direction = -1.0 if start_j1 >= 0 else 1.0
     moved_j1 = start_j1 + direction * J1_OFFSET_DEG
     if abs(moved_j1) > J1_SAFE_LIMIT_DEG:
         print(
-            f"\nJ1 target {moved_j1:+.1f} deg is outside the safe range: skipping S5-S8."
+            f"\nJ1 target {moved_j1:+.1f} deg is outside the safe range: skipping S5-S6."
         )
         return
     print(f"\nStart pose (deg): {base}")
 
-    # S5 + S6
+    # S5: out.
     move_j1(log, mc, "send_angles_j1_out", base, moved_j1)
     confirm("Has the arm stopped moving?")
     read_angles(log, mc, "get_angles_j1_out", 3)
 
-    # Optional: STOP during a slow motion back towards the start.
-    if ask_yes(
-        f"Optional stop test: J1 starts back towards {start_j1:+.1f} deg at speed "
-        f"{STOP_TEST_SPEED}, STOP after {STOP_TEST_DELAY_S} s?"
-    ):
-        target = list(base)
-        target[0] = start_j1
-        confirm("Stop test: workspace clear and a hand on the power switch?")
-        window(
-            log,
-            "stop_during_motion",
-            mc,
-            STOP_TEST_WINDOW_S,
-            actions=[
-                (0.0, lambda: mc.send_angles(target, STOP_TEST_SPEED, _async=True)),
-                (STOP_TEST_DELAY_S, lambda: mc._serial_port.write(STOP_FRAME)),
-            ],
-        )
-        confirm("Has the arm stopped moving?")
-        read_angles(log, mc, "get_angles_after_stop", 1)
+    # S6: start back towards the start at low speed, STOP after a short delay.
+    target = list(base)
+    target[0] = start_j1
+    confirm(
+        f"S6 stop test: J1 starts back towards {start_j1:+.1f} deg at speed "
+        f"{STOP_TEST_SPEED}, STOP after {STOP_TEST_DELAY_S} s. "
+        "Workspace clear and a hand on the power switch?"
+    )
+    window(
+        log,
+        "stop_during_motion",
+        mc,
+        STOP_TEST_WINDOW_S,
+        actions=[
+            (0.0, lambda: mc.send_angles(target, STOP_TEST_SPEED, _async=True)),
+            (STOP_TEST_DELAY_S, lambda: mc._serial_port.write(STOP_FRAME)),
+        ],
+    )
+    confirm("Has the arm stopped moving?")
+    read_angles(log, mc, "get_angles_after_stop", 1)
 
-    # S7 (S8 in the first version of the plan): J1 back to where it started.
+    # S5 (cont.): back to where J1 started.
     move_j1(log, mc, "send_angles_j1_back", base, start_j1)
     confirm("Has the arm stopped moving?")
     read_angles(log, mc, "get_angles_j1_back", 1)
 
 
-def power_off(log, mc):
-    """S9: the arm goes limp. Optionally try release_all_servos first (Q7b)."""
-    if ask_yes(
-        "Optional Q7b: release_all_servos (arm goes limp, but stays powered) "
-        "and check whether get_angles still answers?"
-    ):
-        confirm(
-            "HOLD THE ARM: release_all_servos makes it limp and J2/J3 will drop. "
-            "Holding it?"
-        )
-        step(log, "release_all_servos", mc.release_all_servos)
-        read_angles(log, mc, "get_angles_released", 3)
-    confirm(
-        "HOLD THE ARM: power_off releases the servos and J2/J3 will drop. Holding it?"
-    )
-    step(log, "power_off", mc.power_off)
-
-
 def run(log, mc):
-    # S1: firmware and modes, read only.
+    """Run S1-S8 and return the get_angles latencies of S4 (ms)."""
+    # S1: power_on locks the servos where they are; a limp arm must be held first.
+    confirm(
+        "S1 power_on: the servos lock where they are now. If the arm is limp, "
+        "hold it in a stable pose that touches nothing. Ready?"
+    )
+    step(log, "power_on", mc.power_on)
+    time.sleep(1.0)
+
+    # S2: firmware and modes, read only.
     step(log, "get_system_version", mc.get_system_version)
     step(log, "get_modify_version", mc.get_modify_version)
     step(log, "get_fresh_mode", mc.get_fresh_mode)
     step(log, "check_async_or_sync", mc.check_async_or_sync)
 
-    # S2: idle line, nothing sent.
-    print(f"\nS2: listening to an idle line for {IDLE_WINDOW_S:.0f} s...")
+    # S3: idle line, nothing sent.
+    print(f"\nS3: listening to an idle line for {IDLE_WINDOW_S:.0f} s...")
     window(log, "idle_10s", mc, IDLE_WINDOW_S, result="None (no tx)")
 
-    # S3: 20 reads in a row (echo check and latency per transaction).
+    # S4: 20 reads in a row (echo check, latency per transaction, start pose).
     latencies = []
+    base = None
     for i in range(20):
         result, last_rx_ms = step(log, f"get_angles_{i:02d}", mc.get_angles)
-        if valid_angles(result) and last_rx_ms is not None:
-            latencies.append(last_rx_ms)
+        if valid_angles(result):
+            base = result
+            if last_rx_ms is not None:
+                latencies.append(last_rx_ms)
 
-    run_motion(log, mc)  # S4-S8
-    power_off(log, mc)  # S9
-
-    # S10
-    off = read_angles(log, mc, "get_angles_power_off", 3)
-
-    # S11
-    if any(valid_angles(result) for result in off):
-        confirm(
-            "Keep supporting the arm. By hand, turn ONLY J1 to about +90 deg "
-            "and J6 to about -120 deg. Done?"
-        )
-        read_angles(log, mc, "get_angles_by_hand", 3)
+    # S5 + S6
+    if base is None:
+        print("\nget_angles never returned 6 angles: skipping every motion (S5-S6).")
     else:
-        print(
-            "\nget_angles does not answer in power_off (that answers Q7): skipping S11."
-        )
+        move_j1_out_and_back(log, mc, base)
+
+    # S7: limp but powered. Read while still, then after moving J1 and J6 by hand.
+    confirm(
+        "S7 HOLD THE ARM: release_all_servos makes it limp and J2/J3 will drop. "
+        "Holding it?"
+    )
+    step(log, "release_all_servos", mc.release_all_servos)
+    read_angles(log, mc, "get_angles_released", 3)
+    confirm(
+        "Keep supporting the arm. By hand, turn ONLY J1 by about 45 deg "
+        "and J6 by about 90 deg. Done?"
+    )
+    read_angles(log, mc, "get_angles_released_moved", 3)
+
+    # S8: limp and disconnected (pymycobot retries each read for ~1.5 s).
+    confirm("S8 HOLD THE ARM: power_off. Holding it?")
+    step(log, "power_off", mc.power_off)
+    read_angles(log, mc, "get_angles_power_off", 1)
 
     return latencies
 
@@ -357,11 +353,6 @@ def main():
         "--out-dir", default=".", help="where to write the capture file"
     )
     parser.add_argument("--port", default=PORT)
-    parser.add_argument(
-        "--motion-only",
-        action="store_true",
-        help="only power_on, J1 out and back, power_off (S4-S9)",
-    )
     args = parser.parse_args()
 
     out_dir = os.path.abspath(args.out_dir)
@@ -378,6 +369,7 @@ def main():
     )
     print("  - one person keeps a hand on the power switch the whole time")
     print("  - about 30 cm clear around the arm, J1 will turn 30 deg and back")
+    print("  - someone ready to hold the arm when it goes limp (S7, S8)")
     confirm("Ready?")
 
     mc = MyCobot280(args.port, BAUD)
@@ -385,24 +377,20 @@ def main():
 
     with open(out, "w") as log:
         date = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        with open(os.path.abspath(__file__), "rb") as script:
+            script_sha = hashlib.sha256(script.read()).hexdigest()
         header = [
             f"# pymycobot {pymycobot.__version__}",
             f"# date: {date}  operator: {args.operator}  arm: {args.arm}",
             f"# port: {args.port}  baud: {BAUD}  python: {platform.python_version()}",
-            "# script: scripts/capture_frames/capture_frames.py",
+            f"# script: scripts/capture_frames/capture_frames.py  sha256: {script_sha}",
             f"# speed: {SPEED}  j1_offset_deg: {J1_OFFSET_DEG}",
-            f"# mode: {'motion-only' if args.motion_only else 'full'}",
             "# TXT/RXT: bursts of bytes, ms after the first TX of the section",
             "# (or after the section start when nothing was sent)",
         ]
         log.write("\n".join(header) + "\n\n")
         try:
-            if args.motion_only:
-                latencies = []
-                run_motion(log, mc)
-                power_off(log, mc)
-            else:
-                latencies = run(log, mc)
+            latencies = run(log, mc)
         except BaseException:
             emergency_stop(mc)
             raise
