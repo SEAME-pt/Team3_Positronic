@@ -56,7 +56,7 @@ and #23), #19 by Wednesday of week 1 so #23 can run on the Jetson in week 2,
 
 ## Definition of done
 
-- PR to dev, 1 review, CI green
+- PR to dev, 2 approvals (pair partner + one from another pair), CI green, `make format-check` clean
 - Tests added or updated, or the PR says why not
 - Docs updated if an interface or behaviour changed
 - Numbers in the PR evidence section when the story has one
