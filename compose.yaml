@@ -1,8 +1,8 @@
-name: mimesis
+name: positronic
 
 services:
   dev:
-    image: mimesis-dev:${ROS_DISTRO:-jazzy}
+    image: positronic-dev:${ROS_DISTRO:-jazzy}
     build:
       context: ./docker
       args:

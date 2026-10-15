@@ -48,7 +48,7 @@ RUN cd "$HOME" \
          https://raw.githubusercontent.com/colcon/colcon-mixin-repository/master/index.yaml \
     && colcon mixin update default \
     && echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc \
-    && echo "[ -f /ws/install/setup.bash ] && source /ws/install/setup.bash" >> ~/.bashrc
+    && echo "if [ -f /ws/install/setup.bash ]; then source /ws/install/setup.bash; fi" >> ~/.bashrc
 
 WORKDIR /ws
 CMD ["bash"]
