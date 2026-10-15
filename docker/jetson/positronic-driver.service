@@ -1,0 +1,39 @@
+# Positronic driver container on the Jetson, started at boot (#19).
+# Source of truth: this file in the repo. `make nano-service` installs it to
+# /etc/systemd/system/ on the Jetson. Never edit the installed copy.
+#
+# For now the container runs a placeholder that only keeps it alive, so ROS 2 is reachable
+# and the serial port is mapped. The driver's launch command replaces it when the driver
+# exists (#21-#23); the driver must then come up inactive (lifecycle) after boot.
+
+[Unit]
+Description=Positronic driver container (ROS 2 Jazzy)
+Documentation=https://github.com/feazeved/Positronic/blob/dev/docs/build.md
+# Docker must be running, and DDS picks its network interfaces at start-up,
+# so wait until the Wi-Fi is up or laptops won't discover the Jetson.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Give up after 5 failed starts in 2 minutes; `systemctl status` then shows why.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Remove a container left behind by a power cut ("-" = don't fail if there is none).
+ExecStartPre=-/usr/bin/docker rm -f positronic-driver
+# Runs in the foreground (no -d) so systemd supervises the real process.
+# --rm and no --restart: systemd is the only supervisor.
+# --init: forwards SIGTERM to the process, so `docker stop` ends it at once.
+# Its own name, not positronic-arm, so `make nano-shell` keeps working.
+ExecStart=/usr/bin/docker run --rm --init --name positronic-driver \
+  --network host --ipc host -e ROS_DOMAIN_ID=17 \
+  --device /dev/ttyTHS1 \
+  positronic-dev:nano \
+  bash -c 'source /opt/ros/jazzy/setup.bash && exec sleep infinity'
+ExecStop=/usr/bin/docker stop -t 10 positronic-driver
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
