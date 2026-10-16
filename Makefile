@@ -19,7 +19,7 @@ export USER_UID USER_GID
 ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy doctor clean
+.PHONY: help image shell build test format format-check tidy doctor clean fclean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -52,6 +52,13 @@ doctor: ## Check the environment
 
 clean: ## Delete build/, install/ and log/
 	rm -rf build install log
+
+fclean: clean ## Full clean: Delete build artifacts and wipe ALL host Docker data
+	-@docker stop $$(docker ps -qa) 2>/dev/null || true
+	-@docker rm $$(docker ps -qa) 2>/dev/null || true
+	-@docker rmi -f $$(docker images -qa) 2>/dev/null || true
+	-@docker volume rm $$(docker volume ls -q) 2>/dev/null || true
+	-@docker network rm $$(docker network ls -q) 2>/dev/null || true
 
 # ---------- Jetson (one shared machine, user er) ----------
 NANO          ?= nano
