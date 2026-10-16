@@ -21,7 +21,7 @@ is built and tested by CI.
 | G3 CI in the team image on every PR | Build, 1 GoogleTest, 1 pytest, format check, ruff, all green on a PR to dev | #28 |
 | G4 Simulation baseline | URDF in RViz with sliders, MoveIt demo planning and executing with mock hardware, Gazebo running a 3-point trajectory | #25 #26 |
 | G5 Architecture document v1 | Layers, node graph with topic names, message types, draft timing budget, reviewed by all three pairs | #29 |
-| G6 E-stop button read by a script | Wired to GPIO pins 30 and 31, read from the container, pressed reads 1, wire cut reads 1, released reads 0 | #27 |
+| G6 Planning scene loaded | Table, base and workspace limits as collision objects from a yaml, a goal inside the table is rejected in simulation | #42 |
 | G7 Serial link measured | Read rate and jitter over 10 min, write streaming at 20 to 50 Hz, silence test, update rate proposed | #20 |
 
 Numbers are initial targets, confirmed with the first measurements (#20).
@@ -42,7 +42,7 @@ B
 - #24 Real arm mirrored in RViz on a laptop
 - #25 mycobot description and MoveIt config building on Jazzy
 - #26 Arm in Gazebo with ros2_control
-- #27 E-stop button wired to the Jetson GPIO and read by a script
+- #42 Planning scene: table, base and workspace limits
 
 C
 - #19 Jetson driver image (arm64) starts on boot

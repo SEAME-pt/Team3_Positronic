@@ -1,6 +1,7 @@
 # M1 issues: epics and user stories
 
-Issues in the team repository. Sprint in brackets.
+Issues in the team repository. Sprint in brackets, "opt" is optional work
+after the basics.
 
 ## EPIC 1 (#12): Arm visible in ROS 2 (driver, read only)
 
@@ -28,13 +29,13 @@ Issues in the team repository. Sprint in brackets.
 ## EPIC 4 (#15): Cartesian goal pose through MoveIt 2
 
 - #41 MoveIt 2 on the real arm, Plan and Execute from RViz [S3]
-- #42 Planning scene: table, base and workspace limits [S3]
+- #42 Planning scene: table, base and workspace limits [S1]
 - #43 Mission node: go-to-pose action and state machine [S3]
 - #44 Pose error measurement: 20 goals on hardware [S3]
 
 ## EPIC 5 (#16): Emergency stop and lifecycle
 
-- #27 E-stop button wired to the Jetson GPIO and read by a script [S1]
+- #27 E-stop button wired to the Jetson GPIO and read by a script [opt]
 - #36 Lifecycle in the driver [S3]
 - #45 Safety supervisor node: e-stop halt logic [S3]
 - #52 E-stop demo with timestamps and video [S4]
@@ -58,24 +59,26 @@ Issues in the team repository. Sprint in brackets.
 
 ## Count
 
-7 epics, 33 stories.
+7 epics, 33 stories, one optional.
 
 | Sprint | Stories |
 |---|---|
 | S1 | 12 |
 | S2 | 8 |
-| S3 | 9 |
+| S3 | 8 |
 | S4 | 4 |
 
 ## Possible split by pairs
 
 Three pairs, one per block. One owner per story inside the pair. Sprint files
-(#31, #40, #48, #56) are the Scrum Master's, the role rotates.
+(#31, #40, #48, #56) are the Scrum Master's, the role rotates. The e-stop demo
+(#52) is proposed for B: the pair that tests is not the pair that wrote the
+supervisor.
 
 - A, motion and safety (C++): driver, ros2_control, lifecycle, safety
-  supervisor, timeouts, e-stop demo
+  supervisor, timeouts
 - B, planning and simulation: URDF, MoveIt, Gazebo, sim-to-real, mission
-  node, RViz, e-stop wiring, joint limits
+  node, RViz, joint limits, fault injection demo
 - C, quality and measurement: CI, HIL runner, coverage, measurements,
   documents, Jetson image
 
@@ -89,12 +92,12 @@ Three pairs, one per block. One owner per story inside the pair. Sprint files
 **B** (4)
 - #25 mycobot description and MoveIt config building on Jazzy
 - #26 Arm in Gazebo with ros2_control
-- #27 E-stop button wired to the Jetson GPIO and read by a script
 - #24 Real arm mirrored in RViz on a laptop
+- #42 Planning scene: table, base and workspace limits
 
 **C** (4)
-- #19 Jetson driver image (arm64) starts on boot
 - #20 Measure the serial link: read rate, write streaming, silence
+- #19 Jetson driver image (arm64) starts on boot
 - #28 CI in the team Docker image on every PR
 - #29 Architecture document v1
 
@@ -119,8 +122,7 @@ Three pairs, one per block. One owner per story inside the pair. Sprint files
 - #36 Lifecycle in the driver
 - #45 Safety supervisor node: e-stop halt logic
 
-**B** (3)
-- #42 Planning scene: table, base and workspace limits
+**B** (2)
 - #43 Mission node: go-to-pose action and state machine
 - #41 MoveIt 2 on the real arm, Plan and Execute from RViz
 
@@ -131,11 +133,11 @@ Three pairs, one per block. One owner per story inside the pair. Sprint files
 
 ### Sprint 4
 
-**A** (1)
-- #52 E-stop demo with timestamps and video
+**A** (0)
 
-**B** (1)
+**B** (2)
 - #53 Sim-to-real report final
+- #52 E-stop demo with timestamps and video
 
 **C** (1)
 - #54 Architecture document final
@@ -144,5 +146,7 @@ Three pairs, one per block. One owner per story inside the pair. Sprint files
 |---|---|---|---|
 | S1 | 3 | 4 | 4 |
 | S2 | 3 | 2 | 2 |
-| S3 | 2 | 3 | 3 |
-| S4 | 1 | 1 | 1 |
+| S3 | 2 | 2 | 3 |
+| S4 | 0 | 2 | 1 |
+
+Optional, after the basics: #27 physical e-stop button on the Jetson GPIO (B).
