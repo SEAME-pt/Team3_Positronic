@@ -83,7 +83,6 @@ NANO_SERVICE := positronic-driver
 nano-service: ## Install or update the boot service on the Jetson (asks for the Jetson sudo password)
 	scp docker/jetson/$(NANO_SERVICE).service $(NANO):/tmp/
 	ssh -t $(NANO) 'sudo install -m 644 /tmp/$(NANO_SERVICE).service /etc/systemd/system/ \
-	  && sudo install -m 644 /tmp/$(NANO_SERVICE).service /etc/systemd/system/ \
 	  && sudo systemctl daemon-reload \
 	  && sudo systemctl enable $(NANO_SERVICE) \
 	  && sudo systemctl restart $(NANO_SERVICE) \
