@@ -21,11 +21,15 @@ StartLimitBurst=5
 [Service]
 Type=simple
 # Remove a container left behind by a power cut ("-" = don't fail if there is none).
-ExecStartPre=-/usr/bin/docker rm -f positronic-driver
+ExecStartPre=-/bin/sh -c '/usr/bin/docker rm -f positronic-driver 2>/deh/null || true'
 # Runs in the foreground (no -d) so systemd supervises the real process.
 # --rm and no --restart: systemd is the only supervisor.
 # --init: forwards SIGTERM to the process, so `docker stop` ends it at once.
 # Its own name, not positronic-arm, so `make nano-shell` keeps working.
+# ROS_DOMAIN_ID must be the same on every machine that talks to the arm, or they can't see
+# each other. 17 is also set in the Makefile (ROS_DOMAIN_ID ?= 17), compose.yaml and
+# .devcontainer/devcontainer.json: change all four together. It's repeated here because
+# systemd can't read the Makefile.
 ExecStart=/usr/bin/docker run --rm --init --name positronic-driver \
   --network host --ipc host -e ROS_DOMAIN_ID=17 \
   --device /dev/ttyTHS1 \
