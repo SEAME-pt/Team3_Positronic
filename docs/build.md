@@ -93,7 +93,7 @@ afterwards.
 
 **`make nano-image`**: rebuilds the Jetson's image on the Jetson. Only needed when the Dockerfile
 changes, and only by one person: tell the group when you run it. Takes 15-25 minutes.
-After it, restart the boot service so it uses the new image: `ssh nano sudo systemctl restart positronic-driver`.
+After it, restart the boot service so it uses the new image: `ssh -t nano sudo systemctl restart positronic-driver`.
 
 ## Jetson boot service
 
@@ -109,7 +109,7 @@ own name, so `make nano-shell` works as before.
 make nano-service
 ```
 
-It copies the unit to `/etc/systemd/system/`, checks it, enables it at boot and (re)starts it.
+It copies the unit to `/etc/systemd/system/`, enables it at boot and (re)starts it.
 The file in the repo is the source of truth: never edit the copy on the Jetson.
 
 **Check it:**
@@ -117,7 +117,7 @@ The file in the repo is the source of truth: never edit the copy on the Jetson.
 ```bash
 ssh nano systemctl status positronic-driver               # running? since when? last log lines
 ssh nano journalctl -u positronic-driver -n 50            # its logs and every start, stop and crash
-ssh nano docker exec positronic-driver bash -lc 'ros2 topic list'
+ssh nano "docker exec positronic-driver bash -c 'source /opt/ros/jazzy/setup.bash && ros2 topic list'"
 ```
 
 | Command (on the Jetson) | Effect |
@@ -154,4 +154,4 @@ Add a variable before the command to override it for that run:
 | Build fails after pulling someone's Dockerfile change | `make image` (and `make nano-image` for the Jetson) |
 | `make tidy` finds nothing | Run `make build` first |
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
-| Laptops don't see the Jetson's topics after a reboot | The service started before the Wi-Fi: `ssh nano sudo systemctl restart positronic-driver`, then open an issue |
+| Laptops don't see the Jetson's topics after a reboot | The service started before the Wi-Fi: `ssh -t nano sudo systemctl restart positronic-driver`, then open an issue |
