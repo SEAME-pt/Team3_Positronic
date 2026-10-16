@@ -10,22 +10,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONUNBUFFERED=1
 
-# ament_cppcheck skips cppcheck 2.13 (Ubuntu 24.04) by default because it can be slow.
-# We run it anyway, so make format-check and make test check the same things.
-ENV AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      sudo gdb ccache python3-pip clang-tidy clangd x11-utils \
+      sudo gdb ccache python3-pip clang-tidy x11-utils \
       ros-${ROS_DISTRO}-ros2-control \
+      ros-${ROS_DISTRO}-ros2-control-cmake \
       ros-${ROS_DISTRO}-ros2-controllers \
       ros-${ROS_DISTRO}-moveit \
       ros-${ROS_DISTRO}-xacro \
       ros-${ROS_DISTRO}-robot-state-publisher \
       ros-${ROS_DISTRO}-joint-state-publisher \
+      ros-${ROS_DISTRO}-joint-state-publisher-gui \
+      ros-${ROS_DISTRO}-rviz2 \
       ros-${ROS_DISTRO}-ament-lint-auto \
       ros-${ROS_DISTRO}-ament-lint-common \
       ros-${ROS_DISTRO}-ament-cmake-clang-format \
       ros-${ROS_DISTRO}-ament-cmake-clang-tidy \
+      ros-${ROS_DISTRO}-turtlesim \
+      ros-${ROS_DISTRO}-rqt \
+      ros-${ROS_DISTRO}-rqt-common-plugins \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned so every machine formats identically, whatever the Ubuntu version.
@@ -48,7 +50,7 @@ RUN cd "$HOME" \
          https://raw.githubusercontent.com/colcon/colcon-mixin-repository/master/index.yaml \
     && colcon mixin update default \
     && echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc \
-    && echo "if [ -f /ws/install/setup.bash ]; then source /ws/install/setup.bash; fi" >> ~/.bashrc
+    && echo "[ -f /ws/install/setup.bash ] && source /ws/install/setup.bash" >> ~/.bashrc
 
 WORKDIR /ws
 CMD ["bash"]
