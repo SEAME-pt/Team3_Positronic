@@ -17,7 +17,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       DISPLAY: ${DISPLAY:-}
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      # Same ID on every machine (see docker/jetson/positronic-driver.service).
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-17}
       ARM_IP: ${ARM_IP:-}
       ARM_PORT: ${ARM_PORT:-22}
     stdin_open: true
