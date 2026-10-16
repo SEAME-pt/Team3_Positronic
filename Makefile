@@ -62,7 +62,7 @@ export ROS_DOMAIN_ID
 
 NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) -v \$$HOME/$(NANO_DIR):/ws
 
-.PHONY: nano-image nano-sync nano-build nano-shell
+.PHONY: nano-image nano-sync nano-build nano-shell nano-service
 
 nano-image: ## Build the Jetson image ON the Jetson (once per Dockerfile change)
 	rsync -a --delete docker/ $(NANO):positronic-docker/
@@ -77,3 +77,13 @@ nano-build: nano-sync ## Sync, then colcon build on the Jetson
 
 nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
 	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"
+
+NANO_SERVICE := positronic-driver
+
+nano-service: ## Install or update the boot service on the Jetson (asks for the Jetson sudo password)
+	scp docker/jetson/$(NANO_SERVICE).service $(NANO):/tmp/
+	ssh -t $(NANO) 'sudo install -m 644 /tmp/$(NANO_SERVICE).service /etc/systemd/system/ \
+	  && sudo systemctl daemon-reload \
+	  && sudo systemctl enable $(NANO_SERVICE) \
+	  && sudo systemctl restart $(NANO_SERVICE) \
+	  && systemctl --no-pager status $(NANO_SERVICE)'
