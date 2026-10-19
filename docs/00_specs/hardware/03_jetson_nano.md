@@ -7,7 +7,7 @@
 
 <!-- nav:auto -->
 <p align="left">
-  <a href="../../README.md"><b>Home</b></a> &nbsp;|&nbsp;
+  <a href="../README.md"><b>Home</b></a> &nbsp;|&nbsp;
   <a href="02_arm_parameters.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
   <a href="04_gripper.md"><b>Forward &#8594;</b></a>
 </p>
