@@ -35,6 +35,9 @@ namespace positronic_protocol
 /// Request frame for power_off: `FE FE 02 11 FA`.
 [[nodiscard]] Frame encode_power_off() noexcept;
 
+/// Request frame for release_all_servos: `FE FE 02 13 FA`.
+[[nodiscard]] Frame encode_release_all_servos() noexcept;
+
 /// Request frame for stop: `FE FE 02 29 FA`.
 [[nodiscard]] Frame encode_stop() noexcept;
 
