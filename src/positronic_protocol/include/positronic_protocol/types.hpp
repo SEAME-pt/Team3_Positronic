@@ -53,11 +53,12 @@ inline constexpr std::uint8_t MAX_SPEED{100};
 /// Command ids of the Elephant serial protocol (myCobot 280).
 enum class CommandId : std::uint8_t
 {
-  POWER_ON = 0x10,
-  POWER_OFF = 0x11,
-  GET_ANGLES = 0x20,
-  SEND_ANGLES = 0x22,
-  STOP = 0x29,
+  POWER_ON = 0x10,            ///< Power the servos on.
+  POWER_OFF = 0x11,           ///< Power the servos off.
+  RELEASE_ALL_SERVOS = 0x13,  ///< Torque off: limp arm, still answers.
+  GET_ANGLES = 0x20,          ///< Read the six joint angles.
+  SEND_ANGLES = 0x22,         ///< Move the six joints to the given angles.
+  STOP = 0x29,                ///< Stop the current motion.
 };
 
 /// Joint angle in the wire unit: 0.01 deg, range +-327.67 deg.
@@ -114,4 +115,3 @@ struct Decoded
 }  // namespace positronic_protocol
 
 #endif  // POSITRONIC_PROTOCOL__TYPES_HPP_
-
