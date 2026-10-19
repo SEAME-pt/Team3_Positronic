@@ -7,9 +7,9 @@
 
 <!-- nav:auto -->
 <p align="left">
-  <a href="../README.md"><b>Home</b></a> &nbsp;|&nbsp;
-  <a href="../templates/standup/template_standup.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
-  <a href="hardware/README.md"><b>Forward &#8594;</b></a>
+  <a href="README.md"><b>Home</b></a> &nbsp;|&nbsp;
+  <a href="software/README.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
+  <a href="brand/README.md"><b>Forward &#8594;</b></a>
 </p>
 
 Central image store for every document under `docs/`. All figures are referenced from here with
@@ -21,17 +21,7 @@ relative paths, so a document's images move with the documentation tree.
 | [`logos/`](logos/README.md) | Tool, language and platform logos. | `../../assets/logos/…` |
 | [`software/`](software/README.md) | ROS/MoveIt/RViz/Gazebo screenshots and software diagrams. | `../../assets/software/…` |
 | [`diagrams/`](diagrams/README.md) | Project process diagrams (roadmap, WBS, risk matrix). | `../../assets/diagrams/…` |
-| `brand/` | Team logo (`.png`/`.svg`), used on every document cover. | `../../assets/brand/logo.png` |
-| `hero/` | Decorative hero/banner artwork for decks and covers. | `../../assets/hero/…` |
-
-`brand/` and `hero/` hold the brand and decorative artwork only; they have no
-per-folder index.
-
-- [Assets index](readme_assets.md) — the flat inventory.
-- [Hardware assets](hardware/README.md)
-- [Logos](logos/README.md)
-- [Software assets](software/README.md)
-- [Diagrams](diagrams/README.md)
+| [`brand/`](brand/README.md) | Team logo (`.png`) and palette variants, used on every document cover. | `../../assets/brand/logo.png` |
 
 ## Conventions
 
