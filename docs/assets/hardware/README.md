@@ -7,8 +7,8 @@
 
 <!-- nav:auto -->
 <p align="left">
-  <a href="../../README.md"><b>Home</b></a> &nbsp;|&nbsp;
-  <a href="../README.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
+  <a href="../README.md"><b>Home</b></a> &nbsp;|&nbsp;
+  <a href="../diagrams/README.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
   <a href="../logos/README.md"><b>Forward &#8594;</b></a>
 </p>
 
