@@ -7,32 +7,32 @@ Sprint N, day D of 10. Scrum Master: @
 
 ## Team
 
-### @user, block A
+### @wlucas-f, block A
 - Done: ... (#issue)
 - Today: ... (#issue)
 - Blocked: none
 
-### @user, block A
+### @Leandro-Gertrudes, block A
 - Done:
 - Today:
 - Blocked:
 
-### @user, block B
+### @ruimouradev, block B
 - Done:
 - Today:
 - Blocked:
 
-### @user, block B
+### @neivaeu, block B
 - Done:
 - Today:
 - Blocked:
 
-### @user, block C
+### @chaudbrush, block C
 - Done:
 - Today:
 - Blocked:
 
-### @user, block C
+### @feazeved, block C
 - Done:
 - Today:
 - Blocked:
