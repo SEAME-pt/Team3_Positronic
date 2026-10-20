@@ -40,7 +40,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
-  foreach(test_name test_types test_encode test_units test_decode test_recorded_frames)
+  foreach(test_name test_types test_encode test_units test_decode test_recorded_frames test_smoke)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     target_compile_definitions(${test_name} PRIVATE
