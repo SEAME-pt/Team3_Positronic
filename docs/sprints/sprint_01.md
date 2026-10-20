@@ -16,13 +16,13 @@ is built and tested by CI.
 
 | Goal | Done when | Issues |
 |---|---|---|
-| G1 Driver publishes joint states from the Jetson container | /joint_states at 50 Hz or more for 10 min, no period above 40 ms, measured with ros2 topic hz and a bag | #19 #21 #22 #23 |
+| G1 Driver publishes joint states from the Jetson container | /joint_states at the rate fixed by G7 for 10 min, no period above 2x nominal, measured with ros2 topic hz and a bag | #19 #21 #22 #23 |
 | G2 Real arm mirrored in RViz on a laptop | Arm moved by hand, RViz follows with less than 100 ms delay, no mirrored joint | #24 |
 | G3 CI in the team image on every PR | Build, 1 GoogleTest, 1 pytest, format check, ruff, all green on a PR to dev | #28 |
 | G4 Simulation baseline | URDF in RViz with sliders, MoveIt demo planning and executing with mock hardware, Gazebo running a 3-point trajectory | #25 #26 |
 | G5 Architecture document v1 | Layers, node graph with topic names, message types, draft timing budget, reviewed by all three pairs | #29 |
-| G6 E-stop button read by a script | Wired to the GPIO, pressed reads 1, wire cut reads 1, released reads 0 | #27 |
-| G7 Serial link measured | Rate and jitter of get_angles over 10 min, plot, update rate proposed | #20 |
+| G6 Planning scene loaded | Table, base and workspace limits as collision objects from a yaml, a goal inside the table is rejected in simulation | #42 |
+| G7 Serial link measured | Read rate and jitter over 10 min, write streaming at 20 to 50 Hz, silence test, update rate proposed | #20 |
 
 Numbers are initial targets, confirmed with the first measurements (#20).
 
@@ -31,23 +31,24 @@ hardware (sprint 3), HIL runner (sprint 3).
 
 ## Sprint backlog
 
+Scrum Master: #31 Sprint 01 file.
+
 A
-- #19 Jetson driver image (arm64) starts on boot
 - #21 Serial protocol library in C++
 - #22 Hardware interface plugin: init and read with a fake backend
-- #23 /joint_states at 50 Hz from the Jetson container
+- #23 /joint_states at the measured rate from the Jetson container
 
 B
 - #24 Real arm mirrored in RViz on a laptop
 - #25 mycobot description and MoveIt config building on Jazzy
 - #26 Arm in Gazebo with ros2_control
-- #27 E-stop button wired to the Jetson GPIO and read by a script
+- #42 Planning scene: table, base and workspace limits
 
 C
-- #20 Measure the serial link: get_angles rate and jitter
+- #19 Jetson driver image (arm64) starts on boot
+- #20 Measure the serial link: read rate, write streaming, silence
 - #28 CI in the team Docker image on every PR
 - #29 Architecture document v1
-- #31 Sprint 01 file: goals, daily log, review
 
 Order inside the sprint: #20 first (two days, fixes the update rate for #22
 and #23), #19 by Wednesday of week 1 so #23 can run on the Jetson in week 2,
@@ -55,7 +56,7 @@ and #23), #19 by Wednesday of week 1 so #23 can run on the Jetson in week 2,
 
 ## Definition of done
 
-- PR to dev, 1 review, CI green
+- PR to dev, 2 approvals (pair partner + one from another pair), CI green, `make format-check` clean
 - Tests added or updated, or the PR says why not
 - Docs updated if an interface or behaviour changed
 - Numbers in the PR evidence section when the story has one

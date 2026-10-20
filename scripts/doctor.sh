@@ -12,7 +12,7 @@ check() {
   fi
 }
 
-echo "Mimesis dev environment"
+echo "Positronic dev environment"
 check "ROS 2"            bash -c 'echo "${ROS_DISTRO:?not sourced}"; command -v ros2 > /dev/null'
 check "colcon"           command -v colcon
 check "colcon mixins"    bash -c 'colcon mixin show 2> /dev/null | grep -q coverage-gcc && echo "coverage-gcc available"'
@@ -29,10 +29,10 @@ import rclpy
 from std_msgs.msg import String
 
 rclpy.init()
-node = rclpy.create_node("mimesis_doctor")
+node = rclpy.create_node("positronic_doctor")
 got = []
-node.create_subscription(String, "/mimesis_doctor", lambda m: got.append(m.data), 10)
-pub = node.create_publisher(String, "/mimesis_doctor", 10)
+node.create_subscription(String, "/positronic_doctor", lambda m: got.append(m.data), 10)
+pub = node.create_publisher(String, "/positronic_doctor", 10)
 start = time.time()
 while not got and time.time() - start < 5.0:
     pub.publish(String(data="ping"))

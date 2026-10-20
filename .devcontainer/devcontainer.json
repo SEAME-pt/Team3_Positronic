@@ -1,0 +1,14 @@
+{
+  // Opens the repo inside our dev image: the editor's clangd sees the same
+  // ROS headers, compiler and paths as `make build`. Run `make image` first.
+  "name": "Positronic",
+  "image": "positronic-dev:jazzy",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/ws,type=bind",
+  "workspaceFolder": "/ws",
+  "remoteUser": "dev",
+  "runArgs": ["--network=host", "--ipc=host"],
+  "containerEnv": { "ROS_DOMAIN_ID": "17" },
+  "customizations": {
+    "vscode": { "extensions": ["llvm-vs-code-extensions.vscode-clangd"] }
+  }
+}
