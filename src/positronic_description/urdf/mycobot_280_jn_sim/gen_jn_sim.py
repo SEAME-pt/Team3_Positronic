@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# Copyright 2026 Team Positronic
+#
+# Use of this source code is governed by an MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT.
+
 """
 Build a Gazebo/RViz-ready myCobot 280 Jetson Nano model from Elephant Robotics' original files.
 
