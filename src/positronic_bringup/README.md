@@ -6,7 +6,7 @@ Launch files and the controllers config:
 
 Files:
 
-- `urdf/positronic_gazebo.urdf.xacro`: includes the arm URDF from `mycobot_description` and adds
+- `urdf/positronic_gazebo.urdf.xacro`: includes the arm URDF from `positronic_description` and adds
   the `ros2_control` tag (6 joints, position command and state) and the Gazebo plugin. Moves to
   `positronic_description` after #25 lands.
 - `config/ros2_controllers.yaml`: controller_manager at 100 Hz, `joint_state_broadcaster` and
@@ -21,7 +21,7 @@ and `ros-jazzy-ros2-controllers` installed.
 
 ```bash
 cd <repo root>
-colcon build --symlink-install --packages-select mycobot_description positronic_bringup
+colcon build --symlink-install --packages-select positronic_description positronic_bringup
 source install/setup.bash
 ros2 launch positronic_bringup gazebo.launch.py
 ```
@@ -56,5 +56,5 @@ launch log is in `~/.ros/log/<date>/launch.log`, one line per process, with time
 | --- | --- |
 | Real-time factor below 0.9 | Power profile too low. `powerprofilesctl set performance` (balanced is enough with the charger plugged in) |
 | Controllers `unconfigured` or spawner times out | Gazebo took more than 10 s to load the arm. Launch again, or close other heavy programs |
-| Arm has no meshes in Gazebo | Gazebo cannot find `package://mycobot_description`. The launch sets `GZ_SIM_RESOURCE_PATH`; check `mycobot_description` is built and sourced |
+| Arm has no meshes in Gazebo | Gazebo cannot find `package://positronic_description`. The launch sets `GZ_SIM_RESOURCE_PATH`; check `positronic_description` is built and sourced |
 | `package 'positronic_bringup' not found` when running xacro | Build the package and `source install/setup.bash` |

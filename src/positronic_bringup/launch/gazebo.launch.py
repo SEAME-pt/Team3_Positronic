@@ -40,10 +40,10 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # Gazebo finds package://mycobot_description/... under this folder.
+    # Gazebo finds package://positronic_description/... under this folder.
     resource_path = SetEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH',
-        PathJoinSubstitution([FindPackageShare('mycobot_description'), '..']))
+        PathJoinSubstitution([FindPackageShare('positronic_description'), '..']))
 
     # Empty world, -r runs it from the start. Closing Gazebo ends the launch.
     gazebo = IncludeLaunchDescription(

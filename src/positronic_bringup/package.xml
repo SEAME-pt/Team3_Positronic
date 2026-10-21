@@ -10,7 +10,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <!-- Needed at run time by the launch files, nothing is compiled. -->
-  <exec_depend>mycobot_description</exec_depend>
+  <exec_depend>positronic_description</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
