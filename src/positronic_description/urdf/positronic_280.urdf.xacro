@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+
+<robot name="positronic_280" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="hardware" default="gazebo"/>
+  <xacro:arg name="serial_port" default="/dev/ttyTHS1"/>
+  <xacro:arg name="baud_rate" default="1000000"/>
+  <xacro:arg name="watchdog_timeout_ms" default="200"/>
+  
+  <xacro:arg name="controllers_file" default=""/>
+
+  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
+
+  <xacro:include filename="$(find positronic_description)/urdf/positronic_280.ros2_control.xacro"/>
+  <xacro:positronic_ros2_control
+      hardware="$(arg hardware)"
+      serial_port="$(arg serial_port)"
+      baud_rate="$(arg baud_rate)"
+      watchdog_timeout_ms="$(arg watchdog_timeout_ms)"/>
+
+  <xacro:if value="${'$(arg hardware)' == 'gazebo'}">
+    <xacro:include filename="$(find positronic_description)/urdf/positronic_280.gazebo.xacro"/>
+    <xacro:if value="${'$(arg controllers_file)' == ''}">
+      <xacro:positronic_gazebo controllers_file="$(find positronic_bringup)/config/ros2_controllers.yaml"/>
+    </xacro:if>
+    <xacro:unless value="${'$(arg controllers_file)' == ''}">
+      <xacro:positronic_gazebo controllers_file="$(arg controllers_file)"/>
+    </xacro:unless>
+  </xacro:if>
+
+</robot>
