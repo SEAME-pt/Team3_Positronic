@@ -54,7 +54,7 @@ launch log is in `~/.ros/log/<date>/launch.log`, one line per process, with time
 
 | Problem | Cause and fix |
 | --- | --- |
-| Real-time factor below 0.9 | Laptop on battery or on the `power-saver` profile. Plug in the charger and `powerprofilesctl set balanced` |
+| Real-time factor below 0.9 | Power profile too low. `powerprofilesctl set performance` (balanced is enough with the charger plugged in) |
 | Controllers `unconfigured` or spawner times out | Gazebo took more than 10 s to load the arm. Launch again, or close other heavy programs |
 | Arm has no meshes in Gazebo | Gazebo cannot find `package://mycobot_description`. The launch sets `GZ_SIM_RESOURCE_PATH`; check `mycobot_description` is built and sourced |
 | `package 'positronic_bringup' not found` when running xacro | Build the package and `source install/setup.bash` |
