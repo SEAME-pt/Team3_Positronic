@@ -1,4 +1,4 @@
-# Nothing to compile. Installs the launch, config, urdf and rviz folders and the scripts.
+# Nothing to compile. Installs the launch, config and urdf folders.
 cmake_minimum_required(VERSION 3.8)
 project(positronic_bringup)
 
@@ -12,9 +12,6 @@ if(BUILD_TESTING)
 endif()
 
 # Copy the folders to install/.
-install(DIRECTORY launch config urdf rviz DESTINATION share/${PROJECT_NAME})
-
-# Scripts go to lib/, where `ros2 run` looks for executables.
-install(PROGRAMS scripts/joint_states_delay.py DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch config urdf DESTINATION share/${PROJECT_NAME})
 
 ament_package()
