@@ -189,31 +189,11 @@ int main()
   ::cfsetospeed(&tty, B1000000);
   ::tcsetattr(fd, TCSANOW, &tty);
 
-  // ---- SEND:----
   const auto move{pp::encode_send_angles({1000, 0, 0, 0, 0, 0}, 20)};
   if (move.has_value()) {
     ::write(fd, move->bytes.data(), move->size);
   }
-  ::usleep(3000000);  // 3 s: let the arm finish moving before we read
-
-  // ---- GET ----
-  const pp::Frame ask{pp::encode_get_angles()};
-  ::write(fd, ask.bytes.data(), ask.size);
-  ::usleep(100000);  // 100 ms: let the whole reply arrive
-
-  std::uint8_t buffer[512]{};
-  const ssize_t n{::read(fd, buffer, sizeof(buffer))};
-  const auto r{pp::decode_get_angles_reply(pp::ByteView{buffer, static_cast<std::size_t>(n)})};
-  if (r.status == pp::DecodeStatus::FOUND) {
-    std::printf("angles (centideg):");
-    for (const auto a : r.value) {
-      std::printf(" %d", a);
-    }
-    std::printf("\n");
-  } else {
-    std::puts("dont found");
-  }
-
+  
   ::close(fd);
   return 0;
 }
