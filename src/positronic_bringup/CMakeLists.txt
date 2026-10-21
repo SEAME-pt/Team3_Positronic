@@ -1,3 +1,4 @@
+# Nothing to compile. Installs the launch, config and rviz folders.
 cmake_minimum_required(VERSION 3.8)
 project(positronic_bringup)
 
@@ -15,6 +16,6 @@ if(BUILD_TESTING)
 endif()
 
 # Copy the folders to install/.
-install(DIRECTORY launch config worlds DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
 ament_package()
