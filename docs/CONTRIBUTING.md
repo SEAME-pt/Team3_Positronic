@@ -502,25 +502,22 @@ Never name a constant or enum value after a common macro (`ERROR`, `OK`, `TRUE`,
 
 ### 3.7 Creating a package
 
-Use `ros2 pkg create` inside `make shell`. It generates the lint setup for you:
+Use `ros2 pkg create` inside `make shell`, then **finish its lint setup by hand**. The template switches two linters off:
 
 ```bash
 ros2 pkg create --build-type ament_cmake --license MIT positronic_<role>     # C++
 ros2 pkg create --build-type ament_python --license MIT positronic_<role>    # Python
 ```
 
-C++ packages keep this in `CMakeLists.txt`. It runs the **full** ROS lint set in `make test`:
+| Package type | What the template does | What you do |
+|---|---|---|
+| C++ (`CMakeLists.txt`) | Sets `ament_cmake_copyright_FOUND TRUE` and `ament_cmake_cpplint_FOUND TRUE`, which **skips** the copyright and cpplint tests | Delete those two `set(...)` lines and their comments, so `ament_lint_auto_find_test_dependencies()` runs the **full** ROS lint set in `make test` |
+| Python (`test/test_copyright.py`) | Adds `@pytest.mark.skip` | Delete that decorator |
+| Both | Source files have no copyright header | `ament_copyright --add-missing "Positronic" mit src/<package>` |
 
-```cmake
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
-endif()
-```
+`package.xml` contains `<license>MIT</license>`. C++ packages also list `<test_depend>ament_lint_auto</test_depend>`, `<test_depend>ament_lint_common</test_depend>` and, if they have GoogleTest tests, `<test_depend>ament_cmake_gtest</test_depend>`. Python packages list `ament_copyright`, `ament_flake8`, `ament_pep257` and `python3-pytest`.
 
-`package.xml` contains `<license>MIT</license>`, plus `<test_depend>ament_lint_auto</test_depend>` and `<test_depend>ament_lint_common</test_depend>`.
-
-Don't exclude any linter. *Why: ROS 2 lint is our standard, and `make format-check` and `make test` must agree.*
+Don't exclude any linter. *Why: ROS 2 lint is our standard, and `make format-check` and `make test` must agree. A skipped linter means CI is green while the code breaks a rule.*
 
 ### 3.8 Python
 
@@ -538,4 +535,17 @@ Python is checked by ROS's **`ament_flake8`** and **`ament_pep257`**, both in `m
 | Naming: `snake_case` functions and variables, `CamelCase` classes, `UPPER_CASE` constants | | PEP 8 |
 | Tests with **pytest**, in each package's `test/` folder | | Run by `make test` |
 
-There's no Python auto-formatter: `make format-check` lists each problem with its file and line, and you fix it by hand. *Why: black, the usual formatter, uses double quotes, which ROS's flake8 rejects.*
+`from x import y` and `import z` sort together, by module name (`from ament_flake8.main import main` goes **before** `import pytest`). This is the order `ros2 pkg create` generates.
+
+**Python tooling: only the ROS ament tools.** There's no Python auto-formatter and we don't use ruff or black, not even as an extra CI check. `make format-check` lists each problem with its file and line, and you fix it by hand. If your editor has a ruff or black plug-in, turn off format-on-save for Python in this repo, or it will quietly bring the double quotes back.
+
+*Why: `ament_flake8` is the check that decides whether `colcon test` passes, and we can't change its configuration. Any other formatter or linter can only disagree with it, and then no code satisfies both. Measured on the same file, with the real ament config.*
+
+| Tool | What it does | What `ament_flake8` says |
+|---|---|---|
+| black | `'joint_'` → `"joint_"` | `Q000 Double quotes found but single quotes preferred` |
+| black, ruff format | `angles[n + 1:]` → `angles[n + 1 :]` | `E203 whitespace before ':'` (neither tool has a setting to avoid it) |
+| ruff `I001` (import sorting) | puts `import pytest` before `from ament_pep257.main import main` | `I100 ... should be before 'import pytest'` (the two sorters demand opposite orders) |
+| ruff, default line length | rejects a 95-character line (`E501`, limit 88) | accepts it (limit 99) |
+
+*The reverse also holds: on the same file, ruff's default rules reported nothing for `A001` (shadowed builtin) or `D400`/`D403` (docstring style), which `colcon test` fails on.*

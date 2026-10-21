@@ -18,7 +18,7 @@ is built and tested by CI.
 |---|---|---|
 | G1 Driver publishes joint states from the Jetson container | /joint_states at the rate fixed by G7 for 10 min, no period above 2x nominal, measured with ros2 topic hz and a bag | #19 #21 #22 #23 |
 | G2 Real arm mirrored in RViz on a laptop | Arm moved by hand, RViz follows with less than 100 ms delay, no mirrored joint | #24 |
-| G3 CI in the team image on every PR | Build, 1 GoogleTest, 1 pytest, format check, ruff, all green on a PR to dev | #28 |
+| G3 CI in the team image on every PR | Build, 1 GoogleTest, 1 pytest, ROS format check (ament lint), all green on a PR to dev | #28 |
 | G4 Simulation baseline | URDF in RViz with sliders, MoveIt demo planning and executing with mock hardware, Gazebo running a 3-point trajectory | #25 #26 |
 | G5 Architecture document v1 | Layers, node graph with topic names, message types, draft timing budget, reviewed by all three pairs | #29 |
 | G6 Planning scene loaded | Table, base and workspace limits as collision objects from a yaml, a goal inside the table is rejected in simulation | #42 |
