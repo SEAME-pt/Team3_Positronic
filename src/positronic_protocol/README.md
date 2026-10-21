@@ -23,9 +23,14 @@ FE FE LEN CMD [DATA...] FA        LEN = N + 2 for N data bytes; the frame has LE
 |-------------|--------|---------------------------------------------|----------------------------------------|
 | power_on    | `0x10` | `FE FE 02 10 FA`                            | `FE FE 03 10 01 FA`                    |
 | power_off   | `0x11` | `FE FE 02 11 FA`                            | `FE FE 03 11 01 FA`                    |
+| release_all_servos | `0x13` | `FE FE 02 13 FA`                     | `FE FE 03 13 01 FA`                    |
 | get_angles  | `0x20` | `FE FE 02 20 FA`                            | `FE FE 0E 20` + 6 x int16 + `FA` (17 B)|
 | send_angles | `0x22` | `FE FE 0F 22` + 6 x int16 + speed + `FA`    | `FE FE 03 22 01 FA`                    |
 | stop        | `0x29` | `FE FE 02 29 FA`                            | `FE FE 03 29 01 FA`                    |
+
+`release_all_servos` turns the torque off but keeps the servos powered: the arm goes limp
+(J2 and J3 drop under their own weight) and get_angles still answers, so it can be moved by
+hand. `power_off` also cuts the torque, but then get_angles gets no reply at all.
 
 The servo bus (Feetech style, `FF FF id len ...`) shares the UART. Up to ~150 bytes of it
 arrive before a get_angles reply, and it keeps flowing while the arm moves. It contains
@@ -41,13 +46,21 @@ lone `FE` bytes, so the decoder searches byte by byte.
 namespace pp = positronic_protocol;
 
 pp::Frame request{pp::encode_get_angles()};             // write request.bytes[0..size)
-std::optional<pp::Frame> move{pp::encode_send_angles(angles, 20)};  // nullopt if speed is bad
+std::optional<pp::Frame> frame{pp::encode_send_angles(angles, 20)};  // nullopt if speed is bad
 
 pp::Decoded<pp::JointAngles> reply{pp::decode_get_angles_reply(rx)};
 pp::Decoded<std::uint8_t> ack{pp::decode_ack(rx, pp::CommandId::STOP)};
 
 std::optional<pp::JointAngles> wire{pp::to_centidegrees(radians)};  // ROS side -> wire
 pp::JointRadians state{pp::to_radians(reply.value)};                // wire -> ROS side
+```
+
+`encode_send_angles` and `to_centidegrees` return a `std::optional`: check it before use.
+
+```cpp
+if (frame.has_value()) {        // did it succeed?
+  write(port, frame->bytes.data(), frame->size);   // *frame / frame-> gets the value
+}                               // empty optional means the speed or an angle was invalid
 ```
 
 Degrees exist only inside the driver; ROS sees radians (REP 103).
@@ -83,6 +96,137 @@ while (!timed_out()) {
 }
 // timeout: resend (pymycobot resends up to 3 times after 0.5 s) or report ERROR
 ```
+
+## Trying it by hand (no ROS, no arm)
+
+The library is just functions over bytes, so you can exercise it with a tiny program and
+`g++`, no ROS and no hardware. Save this as `example.cpp` next to `include/` and `src/`:
+
+```cpp
+#include <cstdint>
+#include <cstdio>
+
+#include "positronic_protocol/decode.hpp"
+#include "positronic_protocol/encode.hpp"
+#include "positronic_protocol/units.hpp"
+
+namespace pp = positronic_protocol;
+
+int main()
+{
+  // ENCODE: a command becomes bytes.
+  const pp::Frame req{pp::encode_get_angles()};
+  std::printf("get_angles ->");
+  for (std::size_t i{0}; i < req.size; ++i) {
+    std::printf(" %02x", req.bytes.at(i));
+  }
+  std::printf("\n");
+
+  // DECODE: a get_angles reply (here written by hand) becomes six angles.
+  const std::uint8_t reply[]{
+    0xfe, 0xfe, 0x0e, 0x20, 0x00, 0x57, 0x00, 0x00, 0xff, 0xc3,
+    0xff, 0x85, 0xff, 0xf8, 0x00, 0x00, 0xfa};
+  const auto r{pp::decode_get_angles_reply(pp::ByteView{reply, sizeof(reply)})};
+  if (r.status == pp::DecodeStatus::FOUND) {
+    std::printf("angles (centideg):");
+    for (const auto a : r.value) {
+      std::printf(" %d", a);
+    }
+    std::printf("\nangles (rad)     :");
+    for (const auto rad : pp::to_radians(r.value)) {
+      std::printf(" %.3f", rad);
+    }
+    std::printf("\n");
+  }
+  return 0;
+}
+```
+
+```bash
+g++ -std=c++17 -Iinclude example.cpp src/encode.cpp src/decode.cpp src/units.cpp -o example
+./example
+```
+
+```
+get_angles -> fe fe 02 20 fa
+angles (centideg): 87 0 -61 -123 -8 0
+angles (rad)     : 0.015 0.000 -0.011 -0.021 -0.001 0.000
+```
+
+The decoded angles match the capture's `get_angles` reply `[0.87, 0, -0.61, ...]` deg.
+This example is a scratch file: it is not built by the package and is not committed.
+
+## Trying it on the arm
+
+The library only builds and reads bytes; the serial I/O is the caller's job (that is #22).
+This scratch program adds the serial with raw POSIX calls and shows one SEND and one GET.
+It is a spike, not package code.
+
+> Safety: there is no e-stop, so keep a hand on the power switch. The move below is
+> absolute and sets all six joints, so clear the workspace and keep the speed low (20).
+> The arm must be powered on (torque engaged) or it ignores the move.
+
+```cpp
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+#include <cstdint>
+#include <cstdio>
+
+#include "positronic_protocol/decode.hpp"
+#include "positronic_protocol/encode.hpp"
+
+namespace pp = positronic_protocol;
+
+int main()
+{
+  const int fd{::open("/dev/ttyTHS1", O_RDWR | O_NOCTTY)};
+  termios tty{};
+  ::tcgetattr(fd, &tty);
+  ::cfmakeraw(&tty);
+  ::cfsetispeed(&tty, B1000000);
+  ::cfsetospeed(&tty, B1000000);
+  ::tcsetattr(fd, TCSANOW, &tty);
+
+  // ---- SEND:----
+  const auto move{pp::encode_send_angles({1000, 0, 0, 0, 0, 0}, 20)};
+  if (move.has_value()) {
+    ::write(fd, move->bytes.data(), move->size);
+  }
+  ::usleep(3000000);  // 3 s: let the arm finish moving before we read
+
+  // ---- GET ----
+  const pp::Frame ask{pp::encode_get_angles()};
+  ::write(fd, ask.bytes.data(), ask.size);
+  ::usleep(100000);  // 100 ms: let the whole reply arrive
+
+  std::uint8_t buffer[512]{};
+  const ssize_t n{::read(fd, buffer, sizeof(buffer))};
+  const auto r{pp::decode_get_angles_reply(pp::ByteView{buffer, static_cast<std::size_t>(n)})};
+  if (r.status == pp::DecodeStatus::FOUND) {
+    std::printf("angles (centideg):");
+    for (const auto a : r.value) {
+      std::printf(" %d", a);
+    }
+    std::printf("\n");
+  } else {
+    std::puts("dont found");
+  }
+
+  ::close(fd);
+  return 0;
+}
+```
+
+```bash
+g++ -std=c++17 -Iinclude arm_example.cpp src/encode.cpp src/decode.cpp -o arm_example
+./arm_example
+```
+
+The single `read` with a fixed 100 ms wait is enough on a quiet desk. For a reply that may
+be split across reads, loop: append, decode, drop `consumed`, repeat (see *How #22 uses
+`consumed`*). The robust loop is what #22 will use.
 
 ## Tests
 
@@ -140,3 +284,8 @@ A get_angles transaction took ~6.4 ms (mean of 20 reads, last byte after the req
 - **The encoder has no error path**: frame sizes are known at compile time, so a
   `static_assert` proves they fit and `std::get<I>` checks every fixed index.
 - **Rounding**: `std::lround`, so 0.29 deg is 29 (pymycobot truncates it to 28).
+
+## AI assistance
+
+The test suite (`test/`) was generated with AI (Claude, Anthropic) and reviewed and
+verified by the Positronic team; each test file carries its own prompt in a header comment.
