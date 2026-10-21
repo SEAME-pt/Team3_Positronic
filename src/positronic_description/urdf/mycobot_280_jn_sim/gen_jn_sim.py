@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-
 # Copyright 2026 Team Positronic
 #
 # Use of this source code is governed by an MIT-style
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
 
-"""
-Build a Gazebo/RViz-ready myCobot 280 Jetson Nano model from Elephant Robotics' original files.
-
-"""
+"""Build a Gazebo/RViz-ready myCobot 280 Jetson Nano model from Elephant Robotics' files."""
 
 import math
 import os
@@ -24,18 +20,20 @@ from scipy.spatial import ConvexHull
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+
 def _required_env(name, what):
     value = os.environ.get(name)
     if not value:
         sys.exit(f'set {name} to {what}')
     return value
 
+
 sys.path.insert(
     0, _required_env('MESH_TOOLS_DIR', 'the folder with dae.py, dae2.py, fk.py, qem.py'))
-from dae import mesh_props, NS  
-from dae2 import apply_T, fix_winding, load_parts, write_dae  
-from fk import T  
-from qem import decimate, weld  
+from dae import mesh_props, NS  # noqa: E402,I100
+from dae2 import apply_T, fix_winding, load_parts, write_dae  # noqa: E402
+from fk import T  # noqa: E402
+from qem import decimate, weld  # noqa: E402
 
 SRC = _required_env('SRC_URDF_DIR', "Elephant Robotics' original robot_model/urdf folder")
 J5_SOURCE = _required_env('J5_SOURCE', 'the joint5.dae mesh')
@@ -43,27 +41,27 @@ J5_SOURCE = _required_env('J5_SOURCE', 'the joint5.dae mesh')
 OUT = os.environ.get('OUT_DIR', HERE)
 VISUAL_FORMAT = os.environ.get(
     'VISUAL_FORMAT', 'dae'
-)  
+)
 PKG = 'positronic_description/urdf/mycobot_280_jn_sim'
 
-ARM_TOTAL_MASS = 1.030  
-GRIPPER_MASS = 0.110  
+ARM_TOTAL_MASS = 1.030
+GRIPPER_MASS = 0.110
 
-CAMERA_MASS = 0.03  
+CAMERA_MASS = 0.03
 
 SIM_GRAVITY_OFF = True
 
-JOINT_EFFORT = 10.0  
+JOINT_EFFORT = 10.0
 
-JOINT_VELOCITY = round(math.radians(150.0), 4)  
-GRIPPER_JOINT_VELOCITY = 1.0  
+JOINT_VELOCITY = round(math.radians(150.0), 4)
+GRIPPER_JOINT_VELOCITY = 1.0
 
 J5_TARGET_TRIS = 10000
 
 J5_CLOSE_TOP_GAP = 0.0
-J5_TUBE_DIAM_ORIG = 0.0386  
+J5_TUBE_DIAM_ORIG = 0.0386
 J5_DIAM_AT_J4_END = (
-    0.0386  
+    0.0386
 )
 WHITE = 0.96
 GREY = 0.80
@@ -71,8 +69,10 @@ RIM = 0.25
 
 H = 1.5708
 
+
 def pose(xyz, rpy):
     return T(xyz, rpy)
+
 
 ARM = [
     ('joint1', f'{SRC}/mycobot_280_jn/joint1_jet.dae', (0, 0, 0), (0, 0, 3.14159)),
@@ -84,7 +84,7 @@ ARM = [
         J5_SOURCE,
         (0, 0, -0.03356),
         (-H, 0, 0),
-    ),  
+    ),
     ('joint6', f'{SRC}/mycobot_280_jn/joint6.dae', (0, 0, -0.038), (0, 0, 0)),
     ('joint6_flange', f'{SRC}/mycobot_280_jn/joint7.dae', (0, 0, -0.012), (0, 0, 0)),
 ]
@@ -134,7 +134,7 @@ GRIP = [
 ]
 GBASE = [
     ('g_base', f'{SRC}/mycobot_280_m5/G_base.dae', (0, 0, 0), (0, 0, H))
-]  
+]
 CAM = [
     (
         'camera_flange',
@@ -151,9 +151,10 @@ RINGS = [
     ('joint6', -0.0372, 0.0192),
     ('joint6_flange', -0.0113, 0.0192),
 ]
-ENABLE_RINGS = False  
-RING_H = 0.001  
-RING_PROTRUDE = 0.00015  
+ENABLE_RINGS = False
+RING_H = 0.001
+RING_PROTRUDE = 0.00015
+
 
 def write_stl(path, V, F):
     a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
@@ -173,6 +174,7 @@ def write_stl(path, V, F):
         rec['v'][:, 2] = c
         f.write(rec.tobytes())
 
+
 def hull(V):
     h = ConvexHull(V)
     F = h.simplices.copy()
@@ -185,8 +187,9 @@ def hull(V):
     remap[used] = np.arange(len(used))
     return V[used], remap[F]
 
+
 def smooth_normals(P, crease_deg=45.0):
-    nt = len(P) 
+    nt = len(P) // 3
     a, b, c = P[0::3], P[1::3], P[2::3]
     fn = np.cross(b - a, c - a)
     area = np.linalg.norm(fn, axis=1)
@@ -210,14 +213,17 @@ def smooth_normals(P, crease_deg=45.0):
     N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
     return N
 
+
 def smoothstep(e0, e1, x):
     t = np.clip((x - e0) / (e1 - e0), 0, 1)
     return t * t * (3 - 2 * t)
 
+
 L1, L2 = (
     0.0339,
     0.0360,
-)  
+)
+
 
 def taper_joint5(P):
     """
@@ -235,10 +241,10 @@ def taper_joint5(P):
     a = np.clip(-z / L1, 0, 1)
     b = np.clip(-y / L2, 0, 1)
     d = (np.abs(z) - np.abs(y)) / (np.abs(z) + np.abs(y) + 1e-9)
-    w1 = smoothstep(-0.25, 0.25, d)  
+    w1 = smoothstep(-0.25, 0.25, d)
     tau = L1 * (1 - a * w1) + (L1 + L2 * b) * (
         1 - w1
-    )  
+    )
     sr = 1 + (S - 1) * (1 - tau / (L1 + L2))
     Q = P.copy()
     Q[:, 0] = x * sr
@@ -246,9 +252,10 @@ def taper_joint5(P):
     Q[:, 2] = z * (1 + (sr - 1) * (1 - w1))
     ext = (
         np.clip((-z - 0.010) / (L1 - 0.010), 0, 1) * w1
-    )  
+    )
     Q[:, 2] -= J5_CLOSE_TOP_GAP * ext
     return Q
+
 
 def warp_normals(P, N, f, eps=1e-5):
     J = np.zeros((len(P), 3, 3))
@@ -258,6 +265,7 @@ def warp_normals(P, N, f, eps=1e-5):
         J[:, :, k] = (f(P + e) - f(P - e)) / (2 * eps)
     Nn = np.linalg.solve(J.transpose(0, 2, 1), N[..., None])[..., 0]
     return Nn / np.maximum(np.linalg.norm(Nn, axis=1, keepdims=True), 1e-12)
+
 
 def link_texture(dae_path):
     """Return (png_path, mean_rgb) for a detailed DAE texture, else (None, mean_rgb)."""
@@ -276,12 +284,14 @@ def link_texture(dae_path):
             return (p if detail else None), mean
     return None, None
 
-PAD_DEPTH = 0.0028  
-PIN_RADIUS = 0.0026  
+
+PAD_DEPTH = 0.0028
+PIN_RADIUS = 0.0026
 EXTRA_MATS = {
     'black': ('color', (0.04, 0.04, 0.045)),
     'silver': ('color', (0.42, 0.43, 0.46)),
 }
+
 
 def split_part(p, mask_tri, new_mat):
     """Split one part into (rest, selected). mask_tri: bool per triangle."""
@@ -309,6 +319,7 @@ def split_part(p, mask_tri, new_mat):
         q['mat'] = new_mat
         out.append(q)
     return out
+
 
 def clip_plane(p, axis, sign, thresh):
     """
@@ -372,24 +383,27 @@ def clip_plane(p, axis, sign, thresh):
 
     return mk(out_P, out_N), mk(ins_P, ins_N)
 
+
 def tri_centroids(P):
     return (P[0::3] + P[1::3] + P[2::3]) / 3
+
 
 def tri_normals(P):
     n = np.cross(P[1::3] - P[0::3], P[2::3] - P[0::3])
     return n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-18)
 
+
 def style_parts(name, parts):
     for p in parts:
         p.setdefault('mat', 'white')
     out = parts
-    if name == 'camera_flange':  
+    if name == 'camera_flange':
         k = int(np.argmin([len(p['P']) for p in parts]))
         parts[k]['mat'] = 'black'
     if name in (
         'gripper_left1',
         'gripper_right1',
-    ):  
+    ):
         k = int(np.argmin([p['area'] for p in parts]))
         sign = +1 if name.startswith('gripper_left') else -1
         p = parts[k]
@@ -403,8 +417,7 @@ def style_parts(name, parts):
             pieces.append(pad)
         out = parts[:k] + pieces + parts[k + 1:]
     if name.startswith('gripper_') and name != 'gripper_base':
-        
-        
+
         new = []
         for p in out:
             c = tri_centroids(p['P'])
@@ -421,37 +434,39 @@ def style_parts(name, parts):
         out = new
     return out
 
+
 M5_BASE_TEXTURE = f'{SRC}/mycobot_280_m5/joint1.png'
 LABEL_CROP = (
     42,
     328,
     258,
     566,
-)  
-LABEL_SIZE = (0.044, 0.040)  
+)
+LABEL_SIZE = (0.044, 0.040)
 LABEL_CENTER = (
     -0.002,
     0.029,
-)  
+)
 WALL_RECT = (
     -0.046,
     0.046,
     0.004,
     0.054,
-)  
+)
 ATLAS_PX_PER_MM = 10
 PANEL_RECT = (
     -0.056,
     0.056,
     0.004,
     0.046,
-)  
-PANEL_PLANE_X = -0.044  
-PANEL_ATLAS_Y = 520  
-GPIO_CROP = (778, 337, 1003, 352)  
-GPIO_ROW_SIZE = (0.040, 0.0027)  
-GPIO_ROW_CENTER = (-0.0224, 0.0388)  
-CONNECTORS = True  
+)
+PANEL_PLANE_X = -0.044
+PANEL_ATLAS_Y = 520
+GPIO_CROP = (778, 337, 1003, 352)
+GPIO_ROW_SIZE = (0.040, 0.0027)
+GPIO_ROW_CENTER = (-0.0224, 0.0388)
+CONNECTORS = True
+
 
 def box_part(x0, x1, y0, y1, z0, z1, mat, name):
     """Axis-aligned box with flat normals, 12 triangles, outward winding."""
@@ -492,6 +507,7 @@ def box_part(x0, x1, y0, y1, z0, z1, mat, name):
         'hi': c.max(0),
         'mat': mat,
     }
+
 
 def cylinder_part(cy, cz, r, x0, x1, mat, name, n=28):
     """Cylinder along x (centre y,z), with end caps."""
@@ -535,6 +551,7 @@ def cylinder_part(cy, cz, r, x0, x1, mat, name, n=28):
         'mat': mat,
     }
 
+
 def panel_cutouts(p):
     """Find the cut-outs of the port panel (holes in its outer face) from the housing geometry."""
     from PIL import ImageDraw
@@ -567,7 +584,7 @@ def panel_cutouts(p):
         ys.max() - 8,
         xs.min() + 8,
         xs.max() - 8,
-    )  
+    )
     inner = np.zeros_like(solid)
     inner[sy0:sy1, sx0:sx1] = True
     lab, nlab = ndimage.label(inner & ~solid)
@@ -595,6 +612,7 @@ def panel_cutouts(p):
         )
     return out
 
+
 def apply_base_decals(out_parts, mats):
     """
     Texture the base housing and add the connector blocks.
@@ -620,23 +638,22 @@ def apply_base_decals(out_parts, mats):
     AW, AH = 2048, 1024
     atlas = Image.new('RGB', (AW, AH), (int(WHITE * 255),) * 3)
     tex = Image.open(M5_BASE_TEXTURE).convert('RGB')
-    
+
     y0, _y1, _z0, z1 = WALL_RECT
     lab = tex.crop(LABEL_CROP).rotate(-90, expand=True)
     lw, lh = int(LABEL_SIZE[0] * 1000 * S), int(LABEL_SIZE[1] * 1000 * S)
     lab = lab.resize((lw, lh), Image.LANCZOS)
     cx = int((LABEL_CENTER[0] - y0) * 1000 * S)
     cy = int((z1 - LABEL_CENTER[1]) * 1000 * S)
-    atlas.paste(lab, (cx - lw 
-    
-    
+    atlas.paste(lab, (cx - lw // 2, cy - lh // 2))
+
     _py0, py1, _pz0, pz1 = PANEL_RECT
     row = tex.crop(GPIO_CROP)
     rw, rh = int(GPIO_ROW_SIZE[0] * 1000 * S), int(GPIO_ROW_SIZE[1] * 1000 * S)
     row = row.resize((rw, rh), Image.LANCZOS)
     rx = int((py1 - GPIO_ROW_CENTER[0]) * 1000 * S)
     ry = PANEL_ATLAS_Y + int((pz1 - GPIO_ROW_CENTER[1]) * 1000 * S)
-    atlas.paste(row, (rx - rw 
+    atlas.paste(row, (rx - rw // 2, ry - rh // 2))
     atlas.save(f'{OUT}/meshes/visual/base_atlas.png')
     white_uv = np.array([(AW - 4) / AW, 1 - (AH - 4) / AH])
     uv = np.tile(white_uv, (len(P), 1))
@@ -670,9 +687,9 @@ def apply_base_decals(out_parts, mats):
     added = 0
     for k, ct in enumerate(sorted(cuts, key=lambda t: (t['y0']))):
         if ct['w'] > 40:
-            continue  
+            continue
         m = 0.0004
-        if ct['round'] and ct['w'] > 12:  
+        if ct['round'] and ct['w'] > 12:
             cyc, czc, r = (
                 (ct['y0'] + ct['y1']) / 2,
                 (ct['z0'] + ct['z1']) / 2,
@@ -688,7 +705,7 @@ def apply_base_decals(out_parts, mats):
             )
             added += 1
         elif ct['round']:
-            continue  
+            continue
         else:
             out_parts.append(
                 box_part(
@@ -718,6 +735,7 @@ def apply_base_decals(out_parts, mats):
             added += 1
     print(f'base connectors: {added} blocks behind {len(cuts)} detected cut-outs')
 
+
 for sub in ('visual', 'collision'):
     shutil.rmtree(f'{OUT}/meshes/{sub}', ignore_errors=True)
     os.makedirs(f'{OUT}/meshes/{sub}')
@@ -742,12 +760,12 @@ for name, path, xyz, rpy in ARM + GRIP + CAM + GBASE:
             if nfix and p['uv'] is not None:
                 p['uv'] = p['uv'][idx]
         out_parts.append({'P': P, 'N': N, 'uv': p['uv'], 'idx': k})
-    
+
     for p in out_parts:
         a, b, c = p['P'][0::3], p['P'][1::3], p['P'][2::3]
         p['area'] = np.linalg.norm(np.cross(b - a, c - a), axis=1).sum() / 2
         p['lo'], p['hi'] = p['P'].min(0), p['P'].max(0)
-    
+
     for p in out_parts:
         p['P'] = apply_T(p['P'], M)
     for p in out_parts:
@@ -757,7 +775,7 @@ for name, path, xyz, rpy in ARM + GRIP + CAM + GBASE:
             p['N'] = warp_normals(p['P'], p['N'], taper_joint5)
             p['P'] = taper_joint5(p['P'])
     allpos = [p['P'] for p in out_parts]
-    
+
     mats = {
         'white': ('color', (WHITE,) * 3),
         'grey': ('color', (GREY,) * 3),
@@ -780,7 +798,7 @@ for name, path, xyz, rpy in ARM + GRIP + CAM + GBASE:
             if rank in (0, 1):
                 m = 'white'
             elif rank == 2:
-                m = 'rim'  
+                m = 'rim'
             elif size[2] < 0.003 and size[0] > 0.07:
                 m = 'pcb'
             elif p['area'] > 0.005:
@@ -844,6 +862,7 @@ for name, path, xyz, rpy in ARM + GRIP + CAM + GBASE:
     )
 print('\n'.join(report))
 
+
 def assign(group, total):
     vs = sum(links[n]['vol'] for n, *_ in group)
     for n, *_ in group:
@@ -851,12 +870,14 @@ def assign(group, total):
         links[n]['mass'] = rho * links[n]['vol']
         links[n]['Icom'] = links[n]['I'] * rho
 
+
 assign(ARM + GBASE, ARM_TOTAL_MASS)
 assign(GRIP, GRIPPER_MASS)
 assign(CAM, CAMERA_MASS)
 for n, d in links.items():
     w = np.linalg.eigvalsh(d['Icom'])
     assert (w > 0).all() and w[0] + w[1] >= w[2] * 0.999, n
+
 
 def link_xml(n):
     d = links[n]
@@ -898,6 +919,7 @@ def link_xml(n):
   </link>
 """
 
+
 def joint_xml(name, parent, child, xyz, rpy, lo, up, mimic=None, jtype='revolute'):
     s = (
         f'  <joint name="{name}" type="{jtype}">\n'
@@ -915,6 +937,7 @@ def joint_xml(name, parent, child, xyz, rpy, lo, up, mimic=None, jtype='revolute
         if mimic:
             s += f'    <mimic joint="{mimic[0]}" multiplier="{mimic[1]}" offset="0"/>\n'
     return s + '  </joint>\n'
+
 
 ARM_JOINTS = [
     ('joint2_to_joint1', 'joint1', 'joint2', '0 0 0.15756', '0 0 0', -2.9321, 2.9321),
@@ -963,8 +986,7 @@ GRIP_JOINTS = [
         'gripper_left3',
         '-0.012 0.005 0',
         '0 0 0',
-        
-        
+
         -0.74,
         0.15,
         None,
@@ -1021,7 +1043,7 @@ GRIP_JOINTS = [
     ),
 ]
 CAMERA_SENSOR = f"""
-  
+
   <link name="camera_link"/>
   <joint name="camera_flange_to_camera_link" type="fixed">
     <parent link="camera_flange"/><child link="camera_link"/>
@@ -1040,10 +1062,11 @@ CAMERA_SENSOR = f"""
   </gazebo>
 """
 
+
 def build(gripper, camera, g_base=True):
     s = '<?xml version="1.0"?>\n<robot name="mycobot_280_jn">\n'
     s += '  <link name="world"/>\n'
-    if g_base:  
+    if g_base:
         s += (
             '  <joint name="world_to_g_base" type="fixed"><parent link="world"/>'
             '<child link="g_base"/><origin xyz="0 0 0" rpy="0 0 0"/></joint>\n\n'
@@ -1053,7 +1076,7 @@ def build(gripper, camera, g_base=True):
             '  <joint name="g_base_to_joint1" type="fixed"><parent link="g_base"/>'
             f'<child link="joint1"/><origin xyz="0 0 {G_TOP:.4f}" rpy="0 0 0"/></joint>\n\n'
         )
-    else:  
+    else:
         s += (
             '  <joint name="world_to_joint1" type="fixed"><parent link="world"/>'
             '<child link="joint1"/><origin xyz="0 0 0" rpy="0 0 0"/></joint>\n\n'
@@ -1065,7 +1088,7 @@ def build(gripper, camera, g_base=True):
     if gripper:
         gz = 0.034 + (
             (CAM_THICK + 0.0005) if camera else 0.0
-        )  
+        )
         s += joint_xml(
             'joint6output_to_gripper_base',
             'joint6_flange',
@@ -1104,6 +1127,7 @@ def build(gripper, camera, g_base=True):
         for n in moving:
             s += f'  <gazebo reference="{n}"><turnGravityOff>true</turnGravityOff></gazebo>\n'
     return s + '</robot>\n'
+
 
 VARIANTS = {
     'mycobot_280_jn': (False, False),
