@@ -7,7 +7,7 @@
 
 <!-- nav:auto -->
 <p align="left">
-  <a href="../../README.md"><b>Home</b></a> &nbsp;|&nbsp;
+  <a href="../README.md"><b>Home</b></a> &nbsp;|&nbsp;
   <a href="07_serial_protocol.md"><b>&#8592; Back</b></a> &nbsp;|&nbsp;
   <a href="09_buttons_and_e_stop.md"><b>Forward &#8594;</b></a>
 </p>
