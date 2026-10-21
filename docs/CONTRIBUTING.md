@@ -539,7 +539,7 @@ Python is checked by ROS's **`ament_flake8`** and **`ament_pep257`**, both in `m
 
 **Python tooling: only the ROS ament tools.** There's no Python auto-formatter and we don't use ruff or black, not even as an extra CI check. `make format-check` lists each problem with its file and line, and you fix it by hand. If your editor has a ruff or black plug-in, turn off format-on-save for Python in this repo, or it will quietly bring the double quotes back.
 
-*Why: `ament_flake8` is the check that decides whether `colcon test` passes, and we can't change its configuration. Any other formatter or linter can only disagree with it, and then no code satisfies both. Measured on the same file, with the real ament config (full evidence in [ADR 0001](decisions/0001-python-lint-with-ament-only.md)):*
+*Why: `ament_flake8` is the check that decides whether `colcon test` passes, and we can't change its configuration. Any other formatter or linter can only disagree with it, and then no code satisfies both. Measured on the same file, with the real ament config.*
 
 | Tool | What it does | What `ament_flake8` says |
 |---|---|---|
