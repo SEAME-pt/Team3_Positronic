@@ -19,6 +19,7 @@
 // THE SOFTWARE.
 
 #include "positronic_hardware/positronic_hardware.hpp"
+#include <hardware_interface/hardware_component_interface.hpp>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,14 @@ CallbackReturn RobotSystem::on_init(
   if (hardware_interface::SystemInterface::on_init(params) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
   }
+
+  const hardware_interface::HardwareInfo & info = params.hardware_info;
+
+  if (info.joints.size() != 6){
+      RCLCPP_FATAL(get_logger(), "The URDF must have exactly 6 joint.");
+      return hardware_interface::CallbackReturn::ERROR;
+}
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
