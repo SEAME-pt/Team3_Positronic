@@ -21,6 +21,8 @@
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>positronic_hardware</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
   <!-- ROS linters, run by make test. -->
   <test_depend>ament_lint_auto</test_depend>

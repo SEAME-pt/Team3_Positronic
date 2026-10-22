@@ -18,4 +18,7 @@ endif()
 # Copy the folders to install/.
 install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
+# Scripts go to lib/, where `ros2 run` looks for executables.
+install(PROGRAMS scripts/joint_states_delay.py DESTINATION lib/${PROJECT_NAME})
+
 ament_package()
