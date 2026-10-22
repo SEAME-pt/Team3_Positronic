@@ -14,17 +14,21 @@
 
 </div>
 
-The single xacro entry point for the robot description.
+The arm URDF, its meshes, and the xacro that prepares it for Gazebo.
 
 ## What this is
 
-`positronic_280.urdf.xacro` includes the myCobot URDF and adds the `<ros2_control>` and `<gazebo>` blocks.
+`mycobot_280_jn_sim/` holds the plain URDFs and meshes of the myCobot 280 Jetson Nano, from
+Elephant Robotics. `positronic_gazebo.urdf.xacro` includes `mycobot_280_jn.urdf` (arm only) and adds
+the `<ros2_control>` tag (6 joints, position command and state) and the `<gazebo>` plugin. The
+Gazebo launch in `positronic_bringup` runs it with `controllers_file:=` set to the controllers yaml.
 
 ## Files in this folder
 
 | File | What it is |
 | :--- | :--- |
-| `positronic_280.urdf.xacro` | The xacro entry point. |
+| `positronic_gazebo.urdf.xacro` | The xacro entry point for Gazebo and ros2_control. |
+| `mycobot_280_jn_sim/` | URDFs, meshes and the generator script. |
 
 ## See also
 

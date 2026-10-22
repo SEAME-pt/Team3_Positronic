@@ -1,4 +1,4 @@
-# Nothing to compile. Installs the launch, config and urdf folders.
+# Nothing to compile. Installs the launch and config folders.
 cmake_minimum_required(VERSION 3.8)
 project(positronic_bringup)
 
@@ -12,6 +12,6 @@ if(BUILD_TESTING)
 endif()
 
 # Copy the folders to install/.
-install(DIRECTORY launch config urdf DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 ament_package()
