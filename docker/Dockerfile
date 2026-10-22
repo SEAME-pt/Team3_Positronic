@@ -12,6 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sudo gdb ccache python3-pip clang-tidy x11-utils \
+	  sudo gdb ccache python3-pip clang-tidy clangd x11-utils \
       ros-${ROS_DISTRO}-ros2-control \
       ros-${ROS_DISTRO}-ros2-control-cmake \
       ros-${ROS_DISTRO}-ros2-controllers \
