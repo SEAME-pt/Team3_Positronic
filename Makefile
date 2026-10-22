@@ -53,12 +53,8 @@ doctor: ## Check the environment
 clean: ## Delete build/, install/ and log/
 	rm -rf build install log
 
-fclean: clean ## Full clean: Delete build artifacts and wipe ALL host Docker data
-	-@docker stop $$(docker ps -qa) 2>/dev/null || true
-	-@docker rm $$(docker ps -qa) 2>/dev/null || true
-	-@docker rmi -f $$(docker images -qa) 2>/dev/null || true
-	-@docker volume rm $$(docker volume ls -q) 2>/dev/null || true
-	-@docker network rm $$(docker network ls -q) 2>/dev/null || true
+fclean: clean ## Full clean: remove this project's containers, images and volumes
+	@docker compose down --rmi local -v --remove-orphans
 
 # ---------- Jetson (one shared machine, user er) ----------
 NANO          ?= nano
