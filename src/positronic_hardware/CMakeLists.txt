@@ -60,6 +60,19 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # M2: load RobotSystem through the ResourceManager, as the controller manager does.
+  # It does not link the plugin: pluginlib must find it, so registration is tested too.
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
+  find_package(lifecycle_msgs REQUIRED)
+  ament_add_gtest(test_load_robot_system test/test_load_robot_system.cpp)
+  target_link_libraries(test_load_robot_system
+    ament_index_cpp::ament_index_cpp
+    hardware_interface::hardware_interface
+    ${lifecycle_msgs_TARGETS}
+    rclcpp::rclcpp
+  )
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
