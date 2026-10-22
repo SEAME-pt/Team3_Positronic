@@ -6,22 +6,31 @@ Launch files and the controllers config:
 
 Files:
 
-- `urdf/positronic_gazebo.urdf.xacro`: includes the arm URDF from `positronic_description` and adds
-  the `ros2_control` tag (6 joints, position command and state) and the Gazebo plugin. Moves to
-  `positronic_description` after #25 lands.
+- `positronic_description/urdf/positronic_gazebo.urdf.xacro` (in the description package): includes
+  the arm URDF and adds the `ros2_control` tag (6 joints, position command and state) and the
+  Gazebo plugin. The Gazebo launch reads it from there.
 - `config/ros2_controllers.yaml`: controller_manager at 100 Hz, `joint_state_broadcaster` and
   `arm_controller` (a `JointTrajectoryController`). Same file on the real arm: the hardware
   plugin is in the xacro, not here.
 
 ## Arm in Gazebo
 
-Runs in the dev container (`make shell`), or on your machine with ROS 2 Jazzy and
-`ros-jazzy-ros-gz`, `ros-jazzy-gz-ros2-control` and `ros-jazzy-ros2-controllers` installed.
+In the dev container (`make build`, then `make shell`):
+
+```bash
+source install/setup.bash
+ros2 launch positronic_bringup gazebo.launch.py
+```
+
+On your machine, with ROS 2 Jazzy, `ros-jazzy-ros-gz`, `ros-jazzy-gz-ros2-control` and
+`ros-jazzy-ros2-controllers` installed, build outside the repo: `build/` and `install/` in the repo
+belong to the container, and the two do not mix (CMake caches the paths).
 
 ```bash
 cd <repo root>
-colcon build --symlink-install --packages-select positronic_description positronic_bringup
-source install/setup.bash
+colcon build --symlink-install --packages-select positronic_description positronic_bringup \
+  --build-base ../Positronic_host/build --install-base ../Positronic_host/install
+source ../Positronic_host/install/setup.bash
 ros2 launch positronic_bringup gazebo.launch.py
 ```
 
@@ -56,4 +65,5 @@ launch log is in `~/.ros/log/<date>/launch.log`, one line per process, with time
 | Real-time factor below 0.9 | Power profile too low. `powerprofilesctl set performance` (balanced is enough with the charger plugged in) |
 | Controllers `unconfigured` or spawner times out | Gazebo took more than 10 s to load the arm. Launch again, or close other heavy programs |
 | Arm has no meshes in Gazebo | Gazebo cannot find `package://positronic_description`. The launch sets `GZ_SIM_RESOURCE_PATH`; check `positronic_description` is built and sourced |
-| `package 'positronic_bringup' not found` when running xacro | Build the package and `source install/setup.bash` |
+| `package 'positronic_bringup' not found` | Build the package and source the matching `install/setup.bash` (container or `../Positronic_host`) |
+| CMake error `CMakeCache.txt directory ... is different` | A build made in the container is being reused on the host, or the reverse. Use the two build folders above |
