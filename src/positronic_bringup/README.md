@@ -15,9 +15,8 @@ Files:
 
 ## Arm in Gazebo
 
-Until the dev image has `ros_gz` and `gz_ros2_control`, this runs on your machine, not in the
-container. You need ROS 2 Jazzy with `ros-jazzy-ros-gz`, `ros-jazzy-gz-ros2-control`
-and `ros-jazzy-ros2-controllers` installed.
+Runs in the dev container (`make shell`), or on your machine with ROS 2 Jazzy and
+`ros-jazzy-ros-gz`, `ros-jazzy-gz-ros2-control` and `ros-jazzy-ros2-controllers` installed.
 
 ```bash
 cd <repo root>
