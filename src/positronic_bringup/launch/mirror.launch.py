@@ -38,7 +38,7 @@ def generate_launch_description():
     # The URDF is read here, when Python runs, so the path is built with os.path, not
     # with launch substitutions, which only get a value later.
     urdf = os.path.join(
-        get_package_share_directory('mycobot_description'),
+        get_package_share_directory('positronic_description'),
         'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn.urdf')
     with open(urdf) as f:
         robot_description = f.read()
