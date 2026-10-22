@@ -17,8 +17,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       DISPLAY: ${DISPLAY:-}
-      # Same ID on every machine (see docker/jetson/positronic-driver.service).
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-17}
+      AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS: "1" # to allow cppcheck to run
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-17} # Same ID on every machine (see docker/jetson/positronic-driver.service).
       ARM_IP: ${ARM_IP:-}
       ARM_PORT: ${ARM_PORT:-22}
     stdin_open: true
