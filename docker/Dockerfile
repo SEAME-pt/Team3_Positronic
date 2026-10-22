@@ -26,7 +26,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-ament-lint-common \
       ros-${ROS_DISTRO}-ament-cmake-clang-format \
       ros-${ROS_DISTRO}-ament-cmake-clang-tidy \
-      ros-${ROS_DISTRO}-turtlesim \
       ros-${ROS_DISTRO}-rqt \
       ros-${ROS_DISTRO}-rqt-common-plugins \
     && rm -rf /var/lib/apt/lists/*
