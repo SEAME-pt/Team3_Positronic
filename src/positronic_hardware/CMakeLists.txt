@@ -67,11 +67,14 @@ if(BUILD_TESTING)
   find_package(ament_index_cpp REQUIRED)
   find_package(lifecycle_msgs REQUIRED)
   ament_add_gtest(test_load_robot_system test/test_load_robot_system.cpp)
+  # Only the headers (FakeArm::START_POSE), not the plugin library itself.
+  target_include_directories(test_load_robot_system PRIVATE include)
   target_link_libraries(test_load_robot_system
     ament_index_cpp::ament_index_cpp
     hardware_interface::hardware_interface
     ${lifecycle_msgs_TARGETS}
     rclcpp::rclcpp
+    rclcpp_lifecycle::rclcpp_lifecycle
   )
 endif()
 
