@@ -59,8 +59,9 @@ def generate_launch_description():
     robot_description = ParameterValue(
         Command([
             FindExecutable(name='xacro'), ' ',
-            PathJoinSubstitution(
-                [FindPackageShare('positronic_bringup'), 'urdf', 'positronic_gazebo.urdf.xacro']),
+            PathJoinSubstitution([
+                FindPackageShare('positronic_description'), 'urdf', 'positronic_gazebo.urdf.xacro',
+            ]),
             ' controllers_file:=', controllers_yaml,
         ]),
         value_type=str)
