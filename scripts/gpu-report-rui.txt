@@ -1,0 +1,103 @@
+Positronic GPU report for rui, 2026-10-23T14:40:41+01:00
+
+===== A. Host =====
+$ uname -m
+x86_64
+[exit 0]
+$ bash -c grep PRETTY_NAME /etc/os-release
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+[exit 0]
+$ bash -c echo "session=${XDG_SESSION_TYPE:-unset} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
+session=wayland DISPLAY=:0 WAYLAND_DISPLAY=wayland-0
+[exit 0]
+$ nproc
+8
+[exit 0]
+$ bash -c lspci | grep -iE "vga|3d|display"
+00:02.0 VGA compatible controller: Intel Corporation UHD Graphics 620 (rev 07)
+01:00.0 3D controller: NVIDIA Corporation GM108M [GeForce 940MX] (rev a2)
+[exit 0]
+$ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.
+
+[exit 9]
+$ ls -l /dev/dri
+total 0
+drwxr-xr-x  2 root root         80 Oct 23 10:22 by-path
+crw-rw----+ 1 root video  226,   1 Oct 23 12:41 card1
+crw-rw----+ 1 root render 226, 128 Oct 23 12:41 renderD128
+[exit 0]
+$ bash -c stat -c "%n gid=%g (%G)" /dev/dri/* 2>/dev/null
+/dev/dri/by-path gid=0 (root)
+/dev/dri/card1 gid=44 (video)
+/dev/dri/renderD128 gid=992 (render)
+[exit 0]
+$ docker --version
+Docker version 29.9.1, build dfc520d
+[exit 0]
+$ docker compose version
+Docker Compose version v5.6.0
+[exit 0]
+$ bash -c docker info 2>/dev/null | grep -i runtimes
+ Runtimes: runc io.containerd.runc.v2
+[exit 0]
+$ nvidia-ctk --version
+scripts/gpu-report.sh: line 31: nvidia-ctk: command not found
+[exit 127]
+
+===== B. Container: plain dev image, no GPU options (the same as 'make shell') =====
+ Container positronic-dev-run-a1a5af6e7dd6 Creating 
+ Container positronic-dev-run-a1a5af6e7dd6 Created 
+DISPLAY=:0
+$ ls -l /dev/dri
+ls: cannot access '/dev/dri': No such file or directory
+
+$ glxinfo -B   (default rendering)
+MESA: error: Failed to query drm device.
+glx: failed to create dri3 screen
+failed to load driver: iris
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+$ LIBGL_ALWAYS_SOFTWARE=1 glxinfo -B   (software rendering)
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+$ gz sim -r shapes.sdf   (default rendering, 45 s)
+stats topic: /stats
+sim_time {
+real_time_factor: 0.81527033956824912
+sim_time {
+real_time_factor: 0.37429226012264061
+sim_time {
+real_time_factor: 0.6699781453128999
+sim_time {
+real_time_factor: 0.627736933028002
+gz processes still running: 0
+--- errors in the gz log (first 5 distinct)
+
+$ gz sim -r shapes.sdf   (software rendering, 45 s)
+stats topic: /stats
+sim_time {
+real_time_factor: 0.72050210350589117
+sim_time {
+real_time_factor: 0.72250158950349685
+sim_time {
+real_time_factor: 0.685871526660855
+sim_time {
+real_time_factor: 0.70694210073500774
+sim_time {
+real_time_factor: 0.74583840814216873
+gz processes still running: 0
+--- errors in the gz log (first 5 distinct)
+
+===== Done =====
+In the Gazebo windows you saw: were they drawn, and what RTF did the GUI show?
+Now share the file:
+  git pull && git add scripts/gpu-report-rui.txt && git commit -m "chore(gpu): add gpu report for rui" && git push
