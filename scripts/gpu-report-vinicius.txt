@@ -1,0 +1,94 @@
+Positronic GPU report for vinicius, 2026-10-23T14:36:01+01:00
+
+===== A. Host =====
+$ uname -m
+x86_64
+[exit 0]
+$ bash -c grep PRETTY_NAME /etc/os-release
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+[exit 0]
+$ bash -c echo "session=${XDG_SESSION_TYPE:-unset} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
+session=x11 DISPLAY=:1 WAYLAND_DISPLAY=unset
+[exit 0]
+$ nproc
+28
+[exit 0]
+$ bash -c lspci | grep -iE "vga|3d|display"
+01:00.0 VGA compatible controller: NVIDIA Corporation AD106M [GeForce RTX 4070 Max-Q / Mobile] (rev a1)
+[exit 0]
+$ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+NVIDIA GeForce RTX 4070 Laptop GPU, 595.99.02
+[exit 0]
+$ ls -l /dev/dri
+total 0
+drwxr-xr-x  2 root root         80 Oct 23 11:21 by-path
+crw-rw----+ 1 root video  226,   1 Oct 23 11:21 card1
+crw-rw----+ 1 root render 226, 128 Oct 23 11:21 renderD128
+[exit 0]
+$ bash -c stat -c "%n gid=%g (%G)" /dev/dri/* 2>/dev/null
+/dev/dri/by-path gid=0 (root)
+/dev/dri/card1 gid=44 (video)
+/dev/dri/renderD128 gid=992 (render)
+[exit 0]
+$ docker --version
+Docker version 29.9.2, build a82e528
+[exit 0]
+$ docker compose version
+Docker Compose version v5.6.1
+[exit 0]
+$ bash -c docker info 2>/dev/null | grep -i runtimes
+ Runtimes: io.containerd.runc.v2 runc
+[exit 0]
+$ nvidia-ctk --version
+scripts/gpu-report.sh: line 31: nvidia-ctk: command not found
+[exit 127]
+
+===== B. Container: plain dev image, no GPU options (the same as 'make shell') =====
+ Container positronic-dev-run-8c786c27669b Creating 
+ Container positronic-dev-run-8c786c27669b Created 
+DISPLAY=:1
+$ ls -l /dev/dri
+ls: cannot access '/dev/dri': No such file or directory
+
+$ glxinfo -B   (default rendering)
+glx: failed to create dri3 screen
+failed to load driver: nvidia-drm
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+$ LIBGL_ALWAYS_SOFTWARE=1 glxinfo -B   (software rendering)
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+$ gz sim -r shapes.sdf   (default rendering, 45 s)
+stats topic: /stats
+sim_time {
+real_time_factor: 0.72475006993838176
+sim_time {
+real_time_factor: 0.74217285948070166
+sim_time {
+real_time_factor: 0.71063710037322658
+gz processes still running: 0
+--- errors in the gz log (first 5 distinct)
+
+$ gz sim -r shapes.sdf   (software rendering, 45 s)
+stats topic: /stats
+sim_time {
+real_time_factor: 2.3225782476611636
+sim_time {
+real_time_factor: 1.0822136029921041
+sim_time {
+real_time_factor: 1.0016557369331505
+gz processes still running: 0
+--- errors in the gz log (first 5 distinct)
+
+===== Done =====
+In the Gazebo windows you saw: were they drawn, and what RTF did the GUI show?
+Now share the file:
+  git pull && git add scripts/gpu-report-vinicius.txt && git commit -m "chore(gpu): add gpu report for vinicius" && git push
