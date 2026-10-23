@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <!--
-  Arm model for Gazebo. Includes the URDF from the description package and
-  adds what ros2_control needs: the joints it can command and the Gazebo
-  plugin that runs the controller_manager inside the simulation.
+  Arm model for Gazebo. Includes the plain URDF of this package and adds
+  what ros2_control needs: the joints it can command and the Gazebo plugin
+  that runs the controller_manager inside the simulation.
 -->
 <robot name="positronic" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
