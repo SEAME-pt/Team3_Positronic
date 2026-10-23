@@ -1,0 +1,129 @@
+Positronic GPU test for pedro, 2026-10-23T15:06:17+01:00  (REPS=3 WARMUP=15 SAMPLES=20)
+
+===== A. Host =====
+$ uname -m
+x86_64
+[exit 0]
+$ bash -c grep PRETTY_NAME /etc/os-release
+PRETTY_NAME="Ubuntu 24.04.4 LTS"
+[exit 0]
+$ bash -c echo "session=${XDG_SESSION_TYPE:-unset} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
+session=wayland DISPLAY=:0 WAYLAND_DISPLAY=wayland-0
+[exit 0]
+$ nproc
+8
+[exit 0]
+$ bash -c echo "loadavg: $(cut -d" " -f1-3 /proc/loadavg)"
+loadavg: 0.62 0.61 0.80
+[exit 0]
+$ bash -c lspci | grep -iE "vga|3d|display"
+00:02.0 VGA compatible controller: Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] (rev 01)
+01:00.0 Non-Volatile memory controller: Sandisk Corp SanDisk Ultra 3D / WD Blue SN570 NVMe SSD (DRAM-less)
+[exit 0]
+$ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+scripts/gpu-test.sh: line 45: nvidia-smi: command not found
+[exit 127]
+$ bash -c stat -c "%n gid=%g (%G)" /dev/dri/* 2>/dev/null
+/dev/dri/by-path gid=0 (root)
+/dev/dri/card1 gid=44 (video)
+/dev/dri/renderD128 gid=992 (render)
+[exit 0]
+$ docker compose version
+Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1
+[exit 0]
+$ bash -c docker info 2>/dev/null | grep -i runtimes
+ Runtimes: io.containerd.runc.v2 runc
+[exit 0]
+$ nvidia-ctk --version
+scripts/gpu-test.sh: line 45: nvidia-ctk: command not found
+[exit 127]
+modes available: dri=1 nvidia=0
+nvidia mode skipped: needs nvidia-ctk and a working nvidia-smi on the host.
+
+===== B. Container runs =====
+
+----- mode=sw rep=1 -----
+loadavg before: 0.62 0.61 0.80
+container user: uid=1002(dev) gid=1002(dev) groups=1002(dev),20(dialout),44(video)
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+ls: cannot access '/dev/dri': No such file or directory
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+RESULT mode=sw rep=1 kind=gui n=20 min=0.65 med=1.00 max=1.76
+
+----- mode=dri rep=1 -----
+loadavg before: 2.23 0.97 0.91
+container user: uid=1002(dev) gid=1002(dev) groups=1002(dev),20(dialout),44(video),992
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+total 0
+crw-rw---- 1 0  44 226,   1 Oct 23 14:06 card1
+crw-rw---- 1 0 992 226, 128 Oct 23 14:06 renderD128
+/dev/dri/card1: usable by this user
+/dev/dri/renderD128: usable by this user
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.6
+OpenGL renderer string: Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+RESULT mode=dri rep=1 kind=gui n=20 min=1.00 med=1.00 max=1.00
+
+----- mode=dri rep=2 -----
+loadavg before: 1.69 0.94 0.90
+RESULT mode=dri rep=2 kind=gui n=20 min=1.00 med=1.00 max=1.00
+
+----- mode=sw rep=2 -----
+loadavg before: 1.79 1.01 0.93
+RESULT mode=sw rep=2 kind=gui n=20 min=0.25 med=1.00 max=1.31
+
+----- mode=sw rep=3 -----
+loadavg before: 2.14 1.14 0.97
+RESULT mode=sw rep=3 kind=gui n=20 min=0.40 med=1.00 max=1.26
+
+----- mode=dri rep=3 -----
+loadavg before: 3.26 1.44 1.07
+RESULT mode=dri rep=3 kind=gui n=20 min=1.00 med=1.00 max=1.08
+
+----- mode=dri-names rep=1 -----
+Error response from daemon: Unable to find group render: no matching entries in group file
+
+----- mode=dri-nogroup rep=1 -----
+loadavg before: 2.62 1.41 1.07
+container user: uid=1002(dev) gid=1002(dev) groups=1002(dev),20(dialout),44(video)
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+total 0
+crw-rw---- 1 0  44 226,   1 Oct 23 14:08 card1
+crw-rw---- 1 0 992 226, 128 Oct 23 14:08 renderD128
+/dev/dri/card1: usable by this user
+/dev/dri/renderD128: NOT usable by this user
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.6
+OpenGL renderer string: Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+----- mode=headless rep=1 -----
+loadavg before: 2.04 1.34 1.06
+RESULT mode=headless rep=1 kind=headless n=20 min=1.00 med=1.00 max=1.00
+
+===== Summary: median RTF of each run (1.00 = real time) =====
+dri              1.00 1.00 1.00
+headless         1.00
+sw               1.00 1.00 1.00
+
+Renderer seen in each mode (first repetition):
+  sw             llvmpipe (LLVM 20.1.2, 256 bits)
+  dri            Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+  dri-nogroup    Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+
+===== Done =====
+Share the file:
+  git pull && git add scripts/gpu-test-pedro.txt && git commit -m "chore(gpu): add gpu test for pedro" && git push
