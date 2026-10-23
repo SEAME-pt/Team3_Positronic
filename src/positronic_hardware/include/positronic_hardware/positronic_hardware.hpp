@@ -29,8 +29,9 @@
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "rclcpp/rclcpp.hpp"
+#include "positronic_hardware/fake_arm.hpp"
 #include "rclcpp/logging.hpp"
+#include "rclcpp/rclcpp.hpp"
 
 namespace positronic_hardware
 {
@@ -46,14 +47,18 @@ public:
   hardware_interface::CallbackReturn on_configure(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  /*
   hardware_interface::CallbackReturn on_activate(
-      const rclcpp_lifecycle::State & previous_state);
-      */
+    const rclcpp_lifecycle::State & previous_state) override;
 
   return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
-  return_type write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/) override;
+  return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
+
+private:
+  /// Asks the arm where the joints are and stores the answer in the state interfaces.
+  void update_positions();
+
+  FakeArm arm_;
 };
 
 }  // namespace positronic_hardware

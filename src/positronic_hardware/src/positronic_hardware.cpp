@@ -19,9 +19,10 @@
 // THE SOFTWARE.
 
 #include "positronic_hardware/positronic_hardware.hpp"
-#include <hardware_interface/hardware_component_interface.hpp>
+
+#include <cstddef>
+#include <limits>
 #include <string>
-#include <vector>
 
 namespace positronic_hardware
 {
@@ -34,45 +35,71 @@ CallbackReturn RobotSystem::on_init(
 
   const hardware_interface::HardwareInfo & info = params.hardware_info;
 
-  if (info.joints.size() != 6){
-      RCLCPP_FATAL(get_logger(), "The URDF must have exactly 6 joint.");
-      return hardware_interface::CallbackReturn::ERROR;
-}
-
-  return hardware_interface::CallbackReturn::SUCCESS;
-}
-
-CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
-{
-  // reset values always when configuring hardware
-  for (const auto & [name, descr] : joint_state_interfaces_) {
-    set_state(name, 0.0);
+  if (info.joints.size() != NUM_JOINTS) {
+    RCLCPP_ERROR(
+      get_logger(), "The URDF must have exactly %zu joints, %zu were read.", NUM_JOINTS,
+      info.joints.size());
+    return CallbackReturn::ERROR;
   }
-  for (const auto & [name, descr] : joint_command_interfaces_) {
-    set_command(name, 0.0);
+
+  // Each joint reports exactly one thing: its position.
+  for (const auto & joint : info.joints) {
+    if (
+      joint.state_interfaces.size() != 1 ||
+      joint.state_interfaces.front().name != hardware_interface::HW_IF_POSITION)
+    {
+      RCLCPP_ERROR(
+        get_logger(), "Joint '%s' must have one state interface, named 'position'.",
+        joint.name.c_str());
+      return CallbackReturn::ERROR;
+    }
   }
 
   return CallbackReturn::SUCCESS;
 }
 
-return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
+CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  (void)period;
-  /*
-      for (std::size_t i = 0; i < info_.joints.size(); i++)
-      {
-        const auto name_vel = info_.joints[i].name + "/" + hardware_interface::HW_IF_VELOCITY;
-        const auto name_pos = info_.joints[i].name + "/" + hardware_interface::HW_IF_POSITION;
-        set_state(name_vel, get_command(name_vel));
-        set_state(name_pos, get_state(name_pos) + get_state(name_vel) * period.seconds());
-      }
-      */
+  // "Plug in the cable": a fresh fake arm. The real arm will open the serial port here.
+  arm_ = FakeArm{};
+
+  // Nothing measured yet. NaN means "unknown"; 0.0 would claim the arm is at zero.
+  for (const auto & [name, description] : joint_state_interfaces_) {
+    set_state(name, std::numeric_limits<double>::quiet_NaN());
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // "Allow motion": every command starts at the measured position, so the first thing a
+  // controller sees is "stay where you are". There are no command interfaces until #32.
+  update_positions();
+  for (const auto & [name, description] : joint_command_interfaces_) {
+    set_command(name, get_state(name));
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+{
+  update_positions();
   return return_type::OK;
 }
 
-return_type RobotSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
+return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
+  // Read-only driver (#22): nothing is sent, so the arm cannot move. Commands come in #32.
   return return_type::OK;
+}
+
+void RobotSystem::update_positions()
+{
+  const JointPositions angles{arm_.read_angles()};
+  // on_init checked that there are NUM_JOINTS joints; the URDF lists them J1 to J6.
+  for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
+    set_state(info_.joints.at(i).name + "/" + hardware_interface::HW_IF_POSITION, angles.at(i));
+  }
 }
 
 }  // namespace positronic_hardware
