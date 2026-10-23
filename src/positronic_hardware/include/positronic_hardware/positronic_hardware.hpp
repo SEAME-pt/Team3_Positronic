@@ -21,8 +21,7 @@
 #ifndef POSITRONIC_HARDWARE__POSITRONIC_HARDWARE_HPP_
 #define POSITRONIC_HARDWARE__POSITRONIC_HARDWARE_HPP_
 
-#include <string>
-#include <vector>
+#include <array>
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -35,13 +34,10 @@
 
 namespace positronic_hardware
 {
-using hardware_interface::return_type;
-using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
-
 class RobotSystem : public hardware_interface::SystemInterface
 {
 public:
-  CallbackReturn on_init(
+  hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareComponentInterfaceParams & params) override;
 
   hardware_interface::CallbackReturn on_configure(
@@ -50,15 +46,25 @@ public:
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
+  hardware_interface::return_type read(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
-  return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
+  hardware_interface::return_type write(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
+  /// The state interfaces of one joint, looked up once so read() needs no string.
+  struct JointHandles
+  {
+    hardware_interface::StateInterface::SharedPtr position;
+    hardware_interface::StateInterface::SharedPtr velocity;
+  };
+
   /// Asks the arm where the joints are and stores the answer in the state interfaces.
   void update_positions();
 
   FakeArm arm_;
+  std::array<JointHandles, NUM_JOINTS> handles_{};
 };
 
 }  // namespace positronic_hardware
