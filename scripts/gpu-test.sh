@@ -103,6 +103,10 @@ services:
     gpus: all
     environment:
       NVIDIA_DRIVER_CAPABILITIES: graphics,display,utility,compute
+      # Laptops with two GPUs (PRIME): without these two, GLX picks Mesa, finds no Intel
+      # device inside the container and falls back to zink; Gazebo then segfaults.
+      __NV_PRIME_RENDER_OFFLOAD: "1"
+      __GLX_VENDOR_LIBRARY_NAME: nvidia
 EOF
 
 # ---------------------------------------------------------------- what runs inside the container
