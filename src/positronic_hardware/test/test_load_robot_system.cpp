@@ -30,6 +30,10 @@
 // Follow-up prompt:
 //   Add tests for the fake arm: positions are NaN after configure and before any read,
 //   read() reports FakeArm::START_POSE, and the component activates and still reads.
+// Follow-up prompt:
+//   Apply the review of #22: each joint has position and velocity state interfaces and no
+//   command interface; test twelve exported states, a joint without velocity, a joint with
+//   a command interface, and check loaded_ in the rejection tests.
 
 #include <gtest/gtest.h>
 
@@ -77,14 +81,30 @@ std::string read_description()
   return content.str();
 }
 
-/// One <joint> entry of the <ros2_control> block.
-std::string joint_block(const std::string & name, bool with_position_state)
+constexpr std::string_view POSITION{"<state_interface name=\"position\"/>"};
+constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
+constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
+
+/// One <joint> entry of the <ros2_control> block, with the given interface tags.
+std::string joint_block(const std::string & name, std::string_view interfaces)
 {
-  std::string block{"<joint name=\"" + name + "\">"};
-  if (with_position_state) {
-    block += "<state_interface name=\"position\"/>";
+  return "<joint name=\"" + name + "\">" + std::string{interfaces} + "</joint>";
+}
+
+/// A valid joint: position and velocity state interfaces.
+std::string good_joint(const std::string & name)
+{
+  return joint_block(name, std::string{POSITION} + std::string{VELOCITY});
+}
+
+/// All six joints valid, except joint `index`, which gets `interfaces` instead.
+std::string joints_with_one_bad(std::size_t index, const std::string & interfaces)
+{
+  std::string blocks;
+  for (std::size_t i{0}; i < JOINTS.size(); ++i) {
+    blocks += i == index ? joint_block(JOINTS.at(i), interfaces) : good_joint(JOINTS.at(i));
   }
-  return block + "</joint>";
+  return blocks;
 }
 
 /// The arm's URDF with a <ros2_control> block that uses RobotSystem for `joint_blocks`.
@@ -100,11 +120,11 @@ std::string urdf_with(const std::string & joint_blocks)
   return urdf;
 }
 
-std::string all_joints_with_position()
+std::string all_good_joints()
 {
   std::string blocks;
   for (const auto & joint : JOINTS) {
-    blocks += joint_block(joint, true);
+    blocks += good_joint(joint);
   }
   return blocks;
 }
@@ -157,10 +177,10 @@ protected:
     return resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(0.01)).result;
   }
 
-  /// The position a controller would see for `joint`.
-  std::optional<double> position(const std::string & joint)
+  /// The value a controller would see for `joint`/`interface`.
+  std::optional<double> state(const std::string & joint, const std::string & interface)
   {
-    const auto loaned{resource_manager_->claim_state_interface(joint + "/position")};
+    const auto loaned{resource_manager_->claim_state_interface(joint + "/" + interface)};
     return loaned.get_optional();
   }
 
@@ -184,22 +204,23 @@ TEST_F(LoadRobotSystem, DescriptionHasTheSixJoints)
 
 TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
 {
-  load(urdf_with(all_joints_with_position()));
+  load(urdf_with(all_good_joints()));
 
   EXPECT_TRUE(loaded_);
   // on_init returned SUCCESS: the component sits in UNCONFIGURED.
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, ExportsExactlyTheSixPositionStates)
+TEST_F(LoadRobotSystem, ExportsExactlyTheTwelveStates)
 {
-  auto & resource_manager{load(urdf_with(all_joints_with_position()))};
+  auto & resource_manager{load(urdf_with(all_good_joints()))};
   ASSERT_TRUE(loaded_);
 
   std::vector<std::string> expected;
-  expected.reserve(JOINTS.size());
+  expected.reserve(2 * JOINTS.size());
   for (const auto & joint : JOINTS) {
     expected.push_back(joint + "/position");
+    expected.push_back(joint + "/velocity");
   }
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
@@ -211,27 +232,43 @@ TEST_F(LoadRobotSystem, InitRejectsFiveJoints)
 {
   std::string blocks;
   for (std::size_t i{0}; i + 1 < JOINTS.size(); ++i) {
-    blocks += joint_block(JOINTS.at(i), true);
+    blocks += good_joint(JOINTS.at(i));
   }
   load(urdf_with(blocks));
 
+  EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, InitRejectsJointWithoutPositionState)
 {
-  std::string blocks;
-  for (std::size_t i{0}; i < JOINTS.size(); ++i) {
-    blocks += joint_block(JOINTS.at(i), i != 2);  // J3 has no position state interface
-  }
-  load(urdf_with(blocks));
+  load(urdf_with(joints_with_one_bad(2, std::string{VELOCITY})));  // J3: velocity only
 
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsJointWithoutVelocityState)
+{
+  load(urdf_with(joints_with_one_bad(2, std::string{POSITION})));  // J3: position only
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsCommandInterface)
+{
+  // J1 asks to be commanded: refused until #32, so no controller believes it moves the arm.
+  load(urdf_with(
+    joints_with_one_bad(0, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+
+  EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
 {
-  load(urdf_with(all_joints_with_position()));
+  load(urdf_with(all_good_joints()));
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
@@ -239,15 +276,17 @@ TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
     hardware_interface::return_type::OK);
 
   for (const auto & joint : JOINTS) {
-    const auto value{position(joint)};
-    ASSERT_TRUE(value.has_value()) << joint;
-    EXPECT_TRUE(std::isnan(value.value_or(0.0))) << joint;
+    for (const std::string interface : {"position", "velocity"}) {
+      const auto value{state(joint, interface)};
+      ASSERT_TRUE(value.has_value()) << joint << "/" << interface;
+      EXPECT_TRUE(std::isnan(value.value_or(0.0))) << joint << "/" << interface;
+    }
   }
 }
 
 TEST_F(LoadRobotSystem, ReadReportsTheFakeArmPose)
 {
-  load(urdf_with(all_joints_with_position()));
+  load(urdf_with(all_good_joints()));
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
@@ -257,16 +296,21 @@ TEST_F(LoadRobotSystem, ReadReportsTheFakeArmPose)
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
   for (std::size_t i{0}; i < JOINTS.size(); ++i) {
-    const auto value{position(JOINTS.at(i))};
-    ASSERT_TRUE(value.has_value()) << JOINTS.at(i);
-    EXPECT_DOUBLE_EQ(value.value_or(std::nan("")), positronic_hardware::FakeArm::START_POSE.at(i))
+    const auto position{state(JOINTS.at(i), "position")};
+    ASSERT_TRUE(position.has_value()) << JOINTS.at(i);
+    EXPECT_DOUBLE_EQ(
+      position.value_or(std::nan("")), positronic_hardware::FakeArm::START_POSE.at(i))
       << JOINTS.at(i);
+    // The fake arm stands still.
+    const auto velocity{state(JOINTS.at(i), "velocity")};
+    ASSERT_TRUE(velocity.has_value()) << JOINTS.at(i);
+    EXPECT_DOUBLE_EQ(velocity.value_or(std::nan("")), 0.0) << JOINTS.at(i);
   }
 }
 
 TEST_F(LoadRobotSystem, ActivatesAndReadStillWorks)
 {
-  load(urdf_with(all_joints_with_position()));
+  load(urdf_with(all_good_joints()));
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
