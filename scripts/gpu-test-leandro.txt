@@ -1,0 +1,192 @@
+Positronic GPU test for leandro, 2026-10-23T15:14:40+01:00  (REPS=3 WARMUP=15 SAMPLES=20)
+
+===== A. Host =====
+$ uname -m
+x86_64
+[exit 0]
+$ bash -c grep PRETTY_NAME /etc/os-release
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+[exit 0]
+$ bash -c echo "session=${XDG_SESSION_TYPE:-unset} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
+session=x11 DISPLAY=:0 WAYLAND_DISPLAY=unset
+[exit 0]
+$ nproc
+32
+[exit 0]
+$ bash -c echo "loadavg: $(cut -d" " -f1-3 /proc/loadavg)"
+loadavg: 0.22 0.32 0.50
+[exit 0]
+$ bash -c lspci | grep -iE "vga|3d|display"
+00:02.0 VGA compatible controller: Intel Corporation Device a788 (rev 04)
+01:00.0 VGA compatible controller: NVIDIA Corporation Device 28b8 (rev a1)
+[exit 0]
+$ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+NVIDIA RTX 2000 Ada Generation Laptop GPU, 580.178.04
+[exit 0]
+$ bash -c stat -c "%n gid=%g (%G)" /dev/dri/* 2>/dev/null
+/dev/dri/by-path gid=0 (root)
+/dev/dri/card1 gid=44 (video)
+/dev/dri/card2 gid=44 (video)
+/dev/dri/renderD128 gid=110 (render)
+/dev/dri/renderD129 gid=110 (render)
+[exit 0]
+$ docker compose version
+Docker Compose version v5.0.2
+[exit 0]
+$ bash -c docker info 2>/dev/null | grep -i runtimes
+ Runtimes: runc io.containerd.runc.v2
+[exit 0]
+$ nvidia-ctk --version
+NVIDIA Container Toolkit CLI version 1.19.0
+commit: ec7b4e2fa2caecad6d89be4a26029b831fe7503a
+[exit 0]
+modes available: dri=1 nvidia=1
+
+===== B. Container runs =====
+
+----- mode=sw rep=1 -----
+ Container positronic-dev-run-fc8dd9861c78 Creating 
+ Container positronic-dev-run-fc8dd9861c78 Created 
+loadavg before: 0.44 0.37 0.51
+container user: uid=1000(dev) gid=1000(dev) groups=1000(dev),20(dialout),44(video)
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+ls: cannot access '/dev/dri': No such file or directory
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+RESULT mode=sw rep=1 kind=gui n=20 min=0.72 med=1.00 max=1.62
+
+----- mode=dri rep=1 -----
+ Container positronic-dev-run-3fdc40955b8a Creating 
+ Container positronic-dev-run-3fdc40955b8a Created 
+loadavg before: 2.76 0.92 0.69
+container user: uid=1000(dev) gid=1000(dev) groups=1000(dev),20(dialout),44(video),110
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+total 0
+crw-rw---- 1 0  44 226,   1 Oct 23 14:15 card1
+crw-rw---- 1 0  44 226,   2 Oct 23 14:15 card2
+crw-rw---- 1 0 110 226, 128 Oct 23 14:15 renderD128
+crw-rw---- 1 0 110 226, 129 Oct 23 14:15 renderD129
+/dev/dri/card1: usable by this user
+/dev/dri/card2: usable by this user
+/dev/dri/renderD128: usable by this user
+/dev/dri/renderD129: usable by this user
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.6
+OpenGL renderer string: Mesa Intel(R) Graphics (RPL-S)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+RESULT mode=dri rep=1 kind=gui n=20 min=0.83 med=1.00 max=1.01
+
+----- mode=nvidia rep=1 -----
+ Container positronic-dev-run-bd6a18b39fbe Creating 
+ Container positronic-dev-run-bd6a18b39fbe Created 
+loadavg before: 2.62 1.02 0.73
+container user: uid=1000(dev) gid=1000(dev) groups=1000(dev),20(dialout),44(video)
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+ls: cannot access '/dev/dri': No such file or directory
+$ nvidia-smi -L
+GPU 0: NVIDIA RTX 2000 Ada Generation Laptop GPU (UUID: GPU-f37ce6c0-ed47-a8b0-8d87-a1ba1d60838f)
+$ glxinfo -B
+MESA: error: Failed to query drm device.
+glx: failed to create dri3 screen
+failed to load driver: iris
+direct rendering: Yes
+    Max core profile version: 4.5
+OpenGL renderer string: llvmpipe (LLVM 20.1.2, 256 bits)
+OpenGL core profile version string: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.5 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+RESULT mode=nvidia rep=1 kind=gui n=20 min=0.85 med=1.00 max=1.14
+
+----- mode=nvidia rep=2 -----
+ Container positronic-dev-run-70157a087c9d Creating 
+ Container positronic-dev-run-70157a087c9d Created 
+loadavg before: 3.53 1.40 0.87
+RESULT mode=nvidia rep=2 kind=gui n=20 min=0.80 med=1.00 max=1.36
+
+----- mode=dri rep=2 -----
+ Container positronic-dev-run-89d25bb8701d Creating 
+ Container positronic-dev-run-89d25bb8701d Created 
+loadavg before: 5.82 2.05 1.09
+RESULT mode=dri rep=2 kind=gui n=20 min=1.00 med=1.00 max=1.00
+
+----- mode=sw rep=2 -----
+ Container positronic-dev-run-32ac37cc7ec8 Creating 
+ Container positronic-dev-run-32ac37cc7ec8 Created 
+loadavg before: 4.67 2.03 1.10
+RESULT mode=sw rep=2 kind=gui n=20 min=0.93 med=1.00 max=1.12
+
+----- mode=sw rep=3 -----
+ Container positronic-dev-run-6a063b3f2e57 Creating 
+ Container positronic-dev-run-6a063b3f2e57 Created 
+loadavg before: 6.23 2.52 1.28
+RESULT mode=sw rep=3 kind=gui n=20 min=0.75 med=1.00 max=1.46
+
+----- mode=dri rep=3 -----
+ Container positronic-dev-run-4d9d928bd427 Creating 
+ Container positronic-dev-run-4d9d928bd427 Created 
+loadavg before: 7.49 3.03 1.48
+RESULT mode=dri rep=3 kind=gui n=20 min=0.99 med=1.00 max=1.01
+
+----- mode=nvidia rep=3 -----
+ Container positronic-dev-run-ceb7650cfee7 Creating 
+ Container positronic-dev-run-ceb7650cfee7 Created 
+loadavg before: 5.64 2.94 1.49
+RESULT mode=nvidia rep=3 kind=gui n=20 min=0.96 med=1.00 max=1.04
+
+----- mode=dri-names rep=1 -----
+ Container positronic-dev-run-e621b1115599 Creating 
+ Container positronic-dev-run-e621b1115599 Created 
+Error response from daemon: Unable to find group render: no matching entries in group file
+
+----- mode=dri-nogroup rep=1 -----
+ Container positronic-dev-run-90cd8e7df420 Creating 
+ Container positronic-dev-run-90cd8e7df420 Created 
+loadavg before: 14.18 5.13 2.25
+container user: uid=1000(dev) gid=1000(dev) groups=1000(dev),20(dialout),44(video)
+container groups: video:x:44:dev 
+$ ls -ln /dev/dri
+total 0
+crw-rw---- 1 0  44 226,   1 Oct 23 14:18 card1
+crw-rw---- 1 0  44 226,   2 Oct 23 14:18 card2
+crw-rw---- 1 0 110 226, 128 Oct 23 14:18 renderD128
+crw-rw---- 1 0 110 226, 129 Oct 23 14:18 renderD129
+/dev/dri/card1: usable by this user
+/dev/dri/card2: usable by this user
+/dev/dri/renderD128: NOT usable by this user
+/dev/dri/renderD129: NOT usable by this user
+$ glxinfo -B
+direct rendering: Yes
+    Max core profile version: 4.6
+OpenGL renderer string: Mesa Intel(R) Graphics (RPL-S)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4
+
+----- mode=headless rep=1 -----
+ Container positronic-dev-run-6284a0714d87 Creating 
+ Container positronic-dev-run-6284a0714d87 Created 
+loadavg before: 13.12 5.07 2.24
+RESULT mode=headless rep=1 kind=headless n=20 min=1.00 med=1.00 max=1.00
+
+===== Summary: median RTF of each run (1.00 = real time) =====
+dri              1.00 1.00 1.00
+headless         1.00
+nvidia           1.00 1.00 1.00
+sw               1.00 1.00 1.00
+
+Renderer seen in each mode (first repetition):
+  sw             llvmpipe (LLVM 20.1.2, 256 bits)
+  dri            Mesa Intel(R) Graphics (RPL-S)
+  nvidia         llvmpipe (LLVM 20.1.2, 256 bits)
+  dri-nogroup    Mesa Intel(R) Graphics (RPL-S)
+
+===== Done =====
+Share the file:
+  git pull && git add scripts/gpu-test-leandro.txt && git commit -m "chore(gpu): add gpu test for leandro" && git push
