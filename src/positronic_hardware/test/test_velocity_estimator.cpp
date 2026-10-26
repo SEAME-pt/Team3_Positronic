@@ -48,6 +48,7 @@ JointPositions uniform(double value)
   out.fill(value);
   return out;
 }
+}  // namespace
 
 TEST(VelocityEstimator, FirstSampleHasNoVelocity)
 {
@@ -98,11 +99,11 @@ TEST(VelocityEstimator, SmoothingLagsThenCatchesUp)
   for (int step{1}; step <= 8; ++step) {
     const JointPositions velocity{estimator.update(uniform(STEP * step), DT)};
     current = velocity.at(0);
-    EXPECT_GT(current, previous);            // monotonically rising
-    EXPECT_LT(current, TRUE_RATE + 1e-9);    // but never overshoots a constant rate
+    EXPECT_GT(current, previous);          // monotonically rising
+    EXPECT_LT(current, TRUE_RATE + 1e-9);  // but never overshoots a constant rate
     previous = current;
   }
-  EXPECT_NEAR(current, TRUE_RATE, 0.2);      // and has nearly arrived after a few ticks
+  EXPECT_NEAR(current, TRUE_RATE, 0.2);  // and has nearly arrived after a few ticks
 }
 
 TEST(VelocityEstimator, ZeroPeriodHoldsTheEstimate)
@@ -135,7 +136,7 @@ TEST(VelocityEstimator, LongGapRestartsAtZero)
   // And it rebased on the post-gap sample: a normal step from there differences cleanly.
   const JointPositions resumed{estimator.update(uniform(5.1), DT)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
-    EXPECT_DOUBLE_EQ(resumed.at(i), 0.1 / DT) << i;
+    EXPECT_NEAR(resumed.at(i), 0.1 / DT, 1e-9) << i;  // 5.1 - 5.0 is not exactly 0.1
   }
 }
 
@@ -153,5 +154,3 @@ TEST(VelocityEstimator, ResetClearsHistory)
     EXPECT_DOUBLE_EQ(velocity.at(i), 0.0) << i;
   }
 }
-
-}  // namespace

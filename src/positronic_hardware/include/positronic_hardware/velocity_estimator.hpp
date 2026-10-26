@@ -65,7 +65,8 @@ public:
   static constexpr double MIN_DT{1e-6};
 
   explicit VelocityEstimator(double alpha = DEFAULT_ALPHA, double max_gap = DEFAULT_MAX_GAP)
-  : alpha_{alpha}, max_gap_{max_gap}
+  : alpha_{alpha},
+    max_gap_{max_gap}
   {
   }
 

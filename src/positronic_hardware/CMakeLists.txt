@@ -69,6 +69,10 @@ if(BUILD_TESTING)
     rclcpp::rclcpp
     rclcpp_lifecycle::rclcpp_lifecycle
   )
+
+  # Header-only VelocityEstimator: no plugin or ROS libraries needed.
+  ament_add_gtest(test_velocity_estimator test/test_velocity_estimator.cpp)
+  target_include_directories(test_velocity_estimator PRIVATE include)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
