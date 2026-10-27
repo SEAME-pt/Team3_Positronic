@@ -33,6 +33,7 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/velocity_estimator.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -46,6 +47,12 @@ public:
     const hardware_interface::HardwareComponentInterfaceParams & params) override;
 
   hardware_interface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_cleanup(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_shutdown(
     const rclcpp_lifecycle::State & previous_state) override;
 
   hardware_interface::CallbackReturn on_activate(
@@ -86,11 +93,13 @@ private:
     hardware_interface::StateInterface::SharedPtr velocity;
   };
 
-  /// Asks the arm where the joints are and stores the answer in the state interfaces.
-  void update_positions();
+  /// Asks the arm where the joints are, estimates the velocity from the change since the last
+  /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
+  void update_states(double dt);
 
   Config config_{};
   std::unique_ptr<ArmBackend> arm_;
+  VelocityEstimator velocity_estimator_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
 };
 

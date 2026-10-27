@@ -193,8 +193,20 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
 
 CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // "Plug in the cable": a fresh fake arm. The real arm will open the serial port here.
-  arm_ = std::make_unique<FakeArm>();
+  // "Plug in the cable". SerialArm opens the port and starts its polling thread; it throws if
+  // the port cannot be opened. Allocating and throwing are fine here, outside the control loop.
+  try {
+    if (config_.backend == Backend::SERIAL) {
+      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud);
+    } else {
+      arm_ = std::make_unique<FakeArm>();
+    }
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(get_logger(), "Cannot start the serial backend: %s", error.what());
+    return CallbackReturn::ERROR;
+  }
+  // A fresh history: the first read() after (re)configure has no earlier sample to difference.
+  velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
 
   // Look the handles up once, here, so read() builds no string. This throws if a name is
   // missing, which is fine outside the control loop.
@@ -218,20 +230,34 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   return CallbackReturn::SUCCESS;
 }
 
+CallbackReturn RobotSystem::on_cleanup(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // "Unplug the cable": SerialArm's destructor stops its thread and closes the port.
+  arm_.reset();
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  arm_.reset();
+  return CallbackReturn::SUCCESS;
+}
+
 CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Allow motion": every command starts at the measured position, so the first thing a
   // controller sees is "stay where you are". There are no command interfaces until #32.
-  update_positions();
+  // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
+  update_states(0.0);
   for (const auto & [name, description] : joint_command_interfaces_) {
     set_command(name, get_state(name));
   }
   return CallbackReturn::SUCCESS;
 }
 
-return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
-  update_positions();
+  update_states(period.seconds());
   return return_type::OK;
 }
 
@@ -241,14 +267,14 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
   return return_type::OK;
 }
 
-void RobotSystem::update_positions()
+void RobotSystem::update_states(double dt)
 {
   const JointPositions angles{arm_->read_angles()};
+  const JointPositions velocities{velocity_estimator_.update(angles, dt)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_set = false: never block on a controller that is reading the handle.
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);
-    // The fake arm stands still. Real velocity comes with the serial poller.
-    std::ignore = set_state(handles_.at(i).velocity, 0.0, false);
+    std::ignore = set_state(handles_.at(i).velocity, velocities.at(i), false);
   }
 }
 

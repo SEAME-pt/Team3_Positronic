@@ -38,6 +38,10 @@
 //   on_init reads the <hardware> parameters backend, port, baud and velocity_filter_alpha.
 //   Every test URDF selects backend=fake; test that valid values load and that an unknown
 //   parameter or a bad value is rejected.
+// Follow-up prompt:
+//   on_configure creates SerialArm or FakeArm from the backend parameter and on_cleanup
+//   destroys it. Test that configure fails cleanly with backend=serial on a port that does not
+//   exist, and that the component can be cleaned up and configured again.
 
 #include <gtest/gtest.h>
 
@@ -370,4 +374,44 @@ TEST_F(LoadRobotSystem, ActivatesAndReadStillWorks)
 
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(read_once(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, ConfigureFailsWhenTheSerialPortIsMissing)
+{
+  // The serial path without an arm: opening the port throws, configure must report an error.
+  load(urdf_with(
+    all_good_joints(), param("backend", "serial") + param("port", "/dev/positronic_no_such_port")));
+  ASSERT_TRUE(loaded_);
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+}
+
+TEST_F(LoadRobotSystem, CleanupThenConfigureAgain)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED,
+      hardware_interface::lifecycle_state_names::UNCONFIGURED),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const auto position{state(JOINTS.at(1), "position")};
+  ASSERT_TRUE(position.has_value());
+  EXPECT_DOUBLE_EQ(position.value_or(std::nan("")), positronic_hardware::FakeArm::START_POSE.at(1));
 }
