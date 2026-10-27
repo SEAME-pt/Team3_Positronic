@@ -34,7 +34,7 @@
 namespace positronic_hardware
 {
 
-/// The real arm behind the ArmBackend interface (#23).
+/// The real arm behind the ArmBackend interface (#22).
 ///
 /// A dedicated thread owns the serial port: it asks the arm for its angles (get_angles), decodes
 /// the reply and keeps the newest pose in a lock-free buffer. read_angles(), called from the

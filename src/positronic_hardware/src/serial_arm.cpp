@@ -74,13 +74,13 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
     throw std::runtime_error{"tcgetattr failed on " + port + ": " + message};
   }
 
-  ::cfmakeraw(&tty);                  // 8N1, no echo, no line processing: raw bytes in and out.
+  ::cfmakeraw(&tty);  // 8N1, no echo, no line processing: raw bytes in and out.
   ::cfsetispeed(&tty, speed.value());
   ::cfsetospeed(&tty, speed.value());
   tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);  // ignore modem lines, enable receiver.
   tty.c_cflag &= static_cast<tcflag_t>(~CRTSCTS);        // no hardware flow control.
-  tty.c_cc[VMIN] = 0;                 // read() returns what is there, even if that is nothing,
-  tty.c_cc[VTIME] = 1;                // after at most 0.1 s, so the thread can check stop_.
+  tty.c_cc[VMIN] = 0;   // read() returns what is there, even if that is nothing,
+  tty.c_cc[VTIME] = 1;  // after at most 0.1 s, so the thread can check stop_.
 
   if (::tcsetattr(fd_, TCSANOW, &tty) != 0) {
     const std::string message{std::strerror(errno)};

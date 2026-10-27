@@ -108,13 +108,12 @@ const std::vector<std::vector<std::uint8_t>> & recorded_bursts()
 {
   static const std::vector<std::vector<std::uint8_t>> bursts{
     parse_hex("ff ff"), parse_hex("07 02 01 f5 ff ff fe 0a 82"),
-    parse_hex(
-      "38 0f 01 02 03 04 05 06 19 ff ff 01 11 00 01 08 00 00 00 00 79 26 00 00 00 01 08 00 "
-      "00 3c ff ff 02 11 00 02 08 00 00 00 00 79 23 00 00 00 02 08 00 00 3c ff ff 03 11 00 "
-      "f9 07 00 00 00 00 7b 21 00 00 00 f9 07 00 00 4f ff ff 04 11 00 0e 08 00 00 00 00 4a "
-      "21 00 00 00 0e 08 00 00 53 ff ff 05 11 00 fb 07 00 00 00 00 49 20 00 00 00 fb 07 00 "
-      "00 7c ff ff 06 11 00 f9 07 00 00 00 00 49 23 00 00 00 f9 07 00 00 7c fe fe 0e 20 ff "
-      "f8 ff ef ff c3 ff 85 00 2b 00 3d fa")};
+    parse_hex("38 0f 01 02 03 04 05 06 19 ff ff 01 11 00 01 08 00 00 00 00 79 26 00 00 00 01 08 00 "
+              "00 3c ff ff 02 11 00 02 08 00 00 00 00 79 23 00 00 00 02 08 00 00 3c ff ff 03 11 00 "
+              "f9 07 00 00 00 00 7b 21 00 00 00 f9 07 00 00 4f ff ff 04 11 00 0e 08 00 00 00 00 4a "
+              "21 00 00 00 0e 08 00 00 53 ff ff 05 11 00 fb 07 00 00 00 00 49 20 00 00 00 fb 07 00 "
+              "00 7c ff ff 06 11 00 f9 07 00 00 00 00 49 23 00 00 00 f9 07 00 00 7c fe fe 0e 20 ff "
+              "f8 ff ef ff c3 ff 85 00 2b 00 3d fa")};
   return bursts;
 }
 
