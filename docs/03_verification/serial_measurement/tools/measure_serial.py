@@ -23,6 +23,7 @@ import os
 import sys
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 from pymycobot import MyCobot280
 
@@ -62,16 +63,6 @@ def analyse_reads(t, dur, valid):
 
 
 def plot_hist(period_s, summary, path):
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print(
-            "matplotlib not installed, skipping the plot (re-run with --from-csv on a machine that has it)"
-        )
-        return False
     p = np.asarray(period_s) * 1000
     fig, (a, b) = plt.subplots(1, 2, figsize=(11, 4))
     a.hist(p, bins=np.linspace(0, np.percentile(p, 99.5), 80), color="tab:blue")

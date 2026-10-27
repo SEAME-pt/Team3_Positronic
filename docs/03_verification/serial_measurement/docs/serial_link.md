@@ -25,12 +25,9 @@ Conventions used throughout:
 
 | What | File |
 |---|---|
-| Read measurement script | [tools/measure_serial.py](../../tools/measure_serial.py) |
-| One row per read: `id, t, duration, valid` | [data/measure_serial_fresh1_reads.csv](data/measure_serial_fresh1_reads.csv) (60,800 rows) |
-| Round trip, one row per write + read pair | [data/measure_serial_fresh1_rtt.csv](data/measure_serial_fresh1_rtt.csv) (200 rows) |
-| Statistics and run metadata | [data/measure_serial_fresh1_summary.json](data/measure_serial_fresh1_summary.json) |
-| Write streaming script | [tools/py_hz_write.py](../../tools/py_hz_write.py) |
-| Silence test script | [tools/py_silence.py](../../tools/py_silence.py) |
+| Read measurement script | [tools/measure_serial.py](../tools/measure_serial.py) |
+| Write streaming script | [tools/py_hz_write.py](../tools/py_hz_write.py) |
+| Silence test script | [tools/py_silence.py](../tools/py_silence.py) |
 
 `measure_serial.py` sets the fresh mode, then calls `get_angles()` back to back with no sleep for 600 s, so the loop runs as fast as the
 port allows. Each read gets one timestamp row (`t` is the start of the call in seconds since the first read, `duration` is how long the call
@@ -300,8 +297,3 @@ A single-threaded driver against a threaded one was not measured, the recommenda
 3. Treat any call over 450 ms as a stall, log it, and keep running.
 4. Never rely on silence to stop the arm; send `stop()` explicitly.
 
-**Data**
-
-- Read test and round trip: [data/](data/) (`measure_serial_fresh1_*`).
-- Write runs, run metadata (`.meta.json`), silence results and batch scripts: [data/write_and_silence/](data/write_and_silence/).
-  Per-run write statistics come from `summarize.py` in that folder.
