@@ -59,7 +59,8 @@ fclean: clean ## Full clean: remove this project's containers, images and volume
 # ---------- Jetson (one shared machine, user er) ----------
 NANO          ?= nano
 NANO_DIR      ?= positronic/$(USER)
-NANO_IMAGE    := positronic-dev:nano
+# Also written in docker/jetson/positronic-driver.service, change both together.
+NANO_IMAGE    := positronic-runtime:nano
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
@@ -67,9 +68,9 @@ NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMA
 
 .PHONY: nano-image nano-sync nano-build nano-shell nano-service
 
-nano-image: ## Build the Jetson image ON the Jetson (once per Dockerfile change)
+nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once per Dockerfile change
 	rsync -a --delete docker/ $(NANO):positronic-docker/
-	ssh $(NANO) 'docker build -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
+	ssh $(NANO) 'docker build --target runtime -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
 
 nano-sync: ## Copy this repo to ~/positronic/<you> on the Jetson
 	ssh $(NANO) mkdir -p $(NANO_DIR)

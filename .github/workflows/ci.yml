@@ -31,18 +31,22 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build the dev image
+      # The "ci" target of docker/Dockerfile: build and lint tools plus MoveIt, no Gazebo or GUI.
+      # Tagged positronic-dev:jazzy because that is the image compose.yaml runs, so
+      # `docker compose run` finds it and does not rebuild the full dev image.
+      - name: Build the CI image
         uses: docker/build-push-action@v6
         with:
           context: docker
+          target: ci
           load: true
           tags: positronic-dev:jazzy
           build-args: |
             ROS_DISTRO=jazzy
             USER_UID=${{ steps.ids.outputs.uid }}
             USER_GID=${{ steps.ids.outputs.gid }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,mode=max,scope=image
 
       # ament_uncrustify, cpplint, cppcheck, flake8, pep257, copyright (scripts/lint.sh)
       - name: Format check
@@ -54,6 +58,19 @@ jobs:
       # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint)
       - name: Test
         run: make RUN="$RUN_DEV" test
+
+      # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
+      # layers with the image above, it costs little.
+      - name: Check the Jetson image builds
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          target: runtime
+          build-args: |
+            ROS_DISTRO=jazzy
+            USER_UID=${{ steps.ids.outputs.uid }}
+            USER_GID=${{ steps.ids.outputs.gid }}
+          cache-from: type=gha,scope=image
 
       - name: Keep the logs when something failed
         if: failure()

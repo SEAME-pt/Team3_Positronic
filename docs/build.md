@@ -7,22 +7,37 @@ terminal on your machine or in your editor's dev container terminal (see the REA
 ## Where things run
 
 - **Your Machine**: you edit code in `src/`, and build, test and format it in the `positronic-dev:jazzy` container.
-- **The Jetson** (`ssh nano`): only code that needs the arm runs there, in the `positronic-dev:nano` container.
+- **The Jetson** (`ssh nano`): only code that needs the arm runs there, in the `positronic-runtime:nano` container.
   Each person has their own copy of the repo in `~/positronic/<your machine username>`.
 - Both containers use ROS 2 Jazzy and `ROS_DOMAIN_ID=17`, so nodes on your machine and the Jetson see each other.
 
 Always edit on your machine. Every `nano-*` command first mirrors your machine's repo onto the Jetson, so anything
 you change directly on the Jetson is overwritten.
 
+## Docker images
+
+One `docker/Dockerfile`, three targets that share their lower layers (why: issue #82):
+
+| Target | Image | Used by | Has |
+| --- | --- | --- | --- |
+| `runtime` | `positronic-runtime:nano` | The Jetson (`make nano-image`) | ros2_control, pymycobot, ROS lint set |
+| `ci` | `positronic-dev:jazzy` in CI | GitHub Actions | `runtime` + clang tools + MoveIt |
+| `dev` | `positronic-dev:jazzy` | Your machine (`make image`) | `ci` + Gazebo, RViz, rqt |
+
+**Adding a package:** put it in the lowest stage that needs it (rules at the top of the Dockerfile),
+then `make image`. Only that stage's layer is downloaded again. CI builds `ci` and `runtime`, so a
+package missing from the wrong stage fails in CI, not on your laptop. Build one target by hand with
+`docker build --target <name> docker`.
+
 ## First time
 
 ```bash
-make image                    # build the dev image (10-20 min)
+make image                    # build the dev image (a few minutes up to 20, depending on your connection)
 ARM_IP=<jetson ip> make doctor  # every line should say [ok]
 ```
 
-Get the Jetson's IP with `ssh nano "hostname -I"` (the first address). The Jetson image already
-exists, so you don't need `make nano-image`.
+Get the Jetson's IP with `ssh nano "hostname -I"` (the first address). The Jetson image is built by
+one person, not by everyone (see *Jetson commands*).
 
 For errors and warnings in your editor, open the repo in the dev container: README,
 "Errors and warnings in your editor". Nothing is installed on your machine.
@@ -46,7 +61,7 @@ and RViz, all talking to the nodes on the Jetson.
 
 ## Dev commands
 
-**`make image`**: builds `positronic-dev:jazzy` from `docker/Dockerfile`. Run it once, and again whenever
+**`make image`**: builds `positronic-dev:jazzy`, the `dev` target of `docker/Dockerfile`. Run it once, and again whenever
 someone changes the Dockerfile. It doesn't compile our code.
 
 **`make shell`**: opens a terminal inside a fresh container. Your repo is at `/ws`, and ROS is already
@@ -91,9 +106,11 @@ the Jetson builds its own. You rarely call it directly; the two commands below r
 so `ros2 run` works straight away. If you rebuild inside the shell, run `source install/setup.bash`
 afterwards.
 
-**`make nano-image`**: rebuilds the Jetson's image on the Jetson. Only needed when the Dockerfile
-changes, and only by one person: tell the group when you run it. Takes 15-25 minutes.
-After it, restart the boot service so it uses the new image: `ssh -t nano sudo systemctl restart positronic-driver`.
+**`make nano-image`**: builds the slim Jetson image (`runtime` target, `positronic-runtime:nano`) on the
+Jetson. Only needed when the Dockerfile changes, and only by one person: tell the group when you run it.
+Then run `make nano-service`, because the unit names the image: restarting the old unit would start the old
+image. The old `positronic-dev:nano` stays on the Jetson as a rollback; remove it later with
+`ssh nano docker rmi positronic-dev:nano`.
 
 ## Jetson boot service
 
@@ -124,7 +141,7 @@ ssh nano "docker exec positronic-driver bash -c 'source /opt/ros/jazzy/setup.bas
 | --- | --- |
 | `sudo systemctl stop positronic-driver` | Stops it until the next boot |
 | `sudo systemctl disable positronic-driver` | No longer starts at boot (still running until stopped) |
-| `sudo systemctl restart positronic-driver` | After `make nano-image`, to use the new image |
+| `sudo systemctl restart positronic-driver` | Restarts it with the current unit. After `make nano-image`, run `make nano-service` instead (the unit names the image) |
 
 Why systemd and not a Docker restart policy: systemd starts a fresh container from the current
 image on every boot, waits for the network, keeps start/crash/stop history in one log, and
@@ -154,4 +171,6 @@ Add a variable before the command to override it for that run:
 | Build fails after pulling someone's Dockerfile change | `make image` (and `make nano-image` for the Jetson) |
 | `make tidy` finds nothing | Run `make build` first |
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
+| `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
+| CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |
 | Laptops don't see the Jetson's topics after a reboot | The service started before the Wi-Fi: `ssh -t nano sudo systemctl restart positronic-driver`, then open an issue |
