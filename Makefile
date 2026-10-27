@@ -86,12 +86,16 @@ NANO          ?= nano
 NANO_DIR      ?= positronic/$(USER)
 # Also written in docker/jetson/positronic-driver.service, change both together.
 NANO_IMAGE    := positronic-runtime:nano
+# The packages the Jetson builds, plus whatever they depend on (colcon --packages-up-to).
+# MoveIt, Gazebo and RViz run on laptops only, so a package that needs them to build stays out
+# of this list. CI builds exactly this list in the runtime image (make nano-packages).
+NANO_PACKAGES := positronic_hardware positronic_bringup
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
 NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) -v \$$HOME/$(NANO_DIR):/ws
 
-.PHONY: nano-image nano-sync nano-build nano-shell nano-service
+.PHONY: nano-image nano-sync nano-build nano-shell nano-service nano-packages
 
 nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once per Dockerfile change
 	rsync -a --delete docker/ $(NANO):positronic-docker/
@@ -101,8 +105,11 @@ nano-sync: ## Copy this repo to ~/positronic/<you> on the Jetson
 	ssh $(NANO) mkdir -p $(NANO_DIR)
 	rsync -a --delete --exclude .git --exclude build --exclude install --exclude log ./ $(NANO):$(NANO_DIR)/
 
-nano-build: nano-sync ## Sync, then colcon build on the Jetson
-	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2'"
+nano-build: nano-sync ## Sync, then colcon build NANO_PACKAGES on the Jetson
+	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2 --packages-up-to $(NANO_PACKAGES)'"
+
+nano-packages: ## Print the packages the Jetson builds (CI reads this)
+	@echo $(NANO_PACKAGES)
 
 nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
 	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"

@@ -11,6 +11,19 @@ terminal on your machine or in your editor's dev container terminal (see the REA
   Each person has their own copy of the repo in `~/positronic/<your machine username>`.
 - Both containers use ROS 2 Jazzy and `ROS_DOMAIN_ID=17`, so nodes on your machine and the Jetson see each other.
 
+**What runs where on the real arm.** The Jetson runs the driver, `controller_manager` and the joint trajectory
+controller: the loop that talks to the servos. Your machine runs MoveIt (`move_group`), RViz and Gazebo.
+MoveIt sends each planned trajectory once over the network to the controller on the Jetson, so a Wi-Fi hiccup
+delays the next plan but never stalls the control loop. It also keeps MoveIt's memory use and size off the
+Jetson (4 GB RAM, small disk). Two consequences:
+
+- The clocks of your machine and the Jetson must agree (NTP). MoveIt rejects `/joint_states` that look old
+  ("didn't receive robot state with recent timestamp").
+- If your machine dies mid-motion, the Jetson's controller still finishes the trajectory it already has.
+  The e-stop must never depend on your machine.
+
+Revisit when the arm must plan with no laptop around (a standalone demo), or the Wi-Fi proves unreliable.
+
 Always edit on your machine. Every `nano-*` command first mirrors your machine's repo onto the Jetson, so anything
 you change directly on the Jetson is overwritten.
 
@@ -26,9 +39,9 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: issue
 
 **Adding a package:** put it in the lowest stage that needs it (rules at the top of the Dockerfile),
 then `make image`. Only that stage's layer is downloaded again. CI builds, lints and tests `src/` in
-`ci`, and builds `src/` again in `runtime` (what `make nano-build` does on the Jetson), so a package
-in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't catch
-a package that only fails on the Jetson's arm64. Build one target by hand with
+`ci`, and builds the Jetson's packages (`NANO_PACKAGES`, see `make nano-build`) in `runtime`, so a
+package in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't
+catch a package that only fails on the Jetson's arm64. Build one target by hand with
 `docker build --target <name> docker`.
 
 ## First time
@@ -101,8 +114,12 @@ then `make build` again.
 deleted on your machine are deleted there too. `.git`, `build/`, `install/` and `log/` are not copied, since
 the Jetson builds its own. You rarely call it directly; the two commands below run it first.
 
-**`make nano-build`**: syncs, then compiles on the Jetson in a throwaway container. It compiles
-2 packages at a time at most, because the Jetson has 4 GB of RAM. Slower than our machines; that's normal.
+**`make nano-build`**: syncs, then compiles on the Jetson in a throwaway container. It compiles only the
+packages in `NANO_PACKAGES` (top of the Jetson section of the Makefile) and what they depend on, 2 at a
+time at most, because the Jetson has 4 GB of RAM. Slower than our machines; that's normal. A new package
+the Jetson must run goes into `NANO_PACKAGES`; laptop-only packages (MoveIt config, mission node, Gazebo
+launch) stay out, so they can depend on MoveIt and Gazebo. `make nano-packages` prints the list; CI builds
+exactly that list in the Jetson image.
 
 **`make nano-shell`**: syncs, then opens a shell in a Jetson container that can use the arm
 (`/dev/ttyTHS1`). Only one person at a time: if someone already has it open, you get
@@ -199,7 +216,8 @@ Put per-machine values in `.env` (copy `.env.example`), or override one run with
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
 | `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
 | CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |
-| CI's "Build the workspace in the Jetson image" fails | A package in `src/` needs something that isn't in `core`. Move it to `core` if the Jetson needs it; if it's laptop-only (MoveIt config, Gazebo launch), talk to the team: `make nano-build` must then skip that package |
+| CI's "Build the Jetson packages in the Jetson image" fails | A package in `NANO_PACKAGES`, or one they depend on, needs something that isn't in `core`. If the Jetson really needs it, add it to `core`. If it's MoveIt or Gazebo, that code belongs on your machine: take it out of the Jetson's packages |
+| `make nano-build` or CI says a package `specified with --packages-up-to` wasn't found | A name in `NANO_PACKAGES` doesn't match a package in `src/` (typo, or a renamed package) |
 | Gazebo closes with `OpenGL 3.3 is not supported` | `make doctor`, then set `GPU=` in `.env` (`sw` if nothing else works) |
 | `GPU=sw make shell` seems to do nothing | A value in `.env` beats the environment: use `make GPU=sw shell` |
 | `could not select device driver "nvidia"` with `GPU=nvidia` | The NVIDIA Container Toolkit isn't installed on the host: install it, or use `GPU=dri` or `sw` |
