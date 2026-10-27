@@ -80,12 +80,14 @@ if(BUILD_TESTING)
   ament_add_gtest(test_velocity_estimator test/test_velocity_estimator.cpp)
   target_include_directories(test_velocity_estimator PRIVATE include)
 
-  ament_add_gtest(test_serial_arm test/test_serial_arm.cpp src/serial_arm.cpp)
-  target_include_directories(test_serial_arm PRIVATE include)
-  target_link_libraries(test_serial_arm
-    positronic_protocol::positronic_protocol
-    realtime_tools::realtime_tools
-  )
+  # Links the library rather than compiling src/serial_arm.cpp a second time.
+  ament_add_gtest(test_serial_arm test/test_serial_arm.cpp)
+  target_link_libraries(test_serial_arm ${PROJECT_NAME})
+
+  # Pure-logic unit test for the reply assembler: no port, no thread, header-only.
+  ament_add_gtest(test_reply_assembler test/test_reply_assembler.cpp)
+  target_include_directories(test_reply_assembler PRIVATE include)
+  target_link_libraries(test_reply_assembler positronic_protocol::positronic_protocol)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

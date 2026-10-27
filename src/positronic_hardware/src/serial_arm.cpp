@@ -21,6 +21,7 @@
 #include "positronic_hardware/serial_arm.hpp"
 
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -66,6 +67,15 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
     throw std::runtime_error{"Cannot open " + port + ": " + std::strerror(errno)};
   }
 
+  // Exclusive access: while we hold the port, a second open() (another driver, a terminal
+  // left open on it) fails with EBUSY instead of stealing half of the replies.
+  if (::ioctl(fd_, TIOCEXCL) != 0) {
+    const std::string message{std::strerror(errno)};
+    ::close(fd_);
+    fd_ = -1;
+    throw std::runtime_error{"Cannot lock " + port + " for exclusive use: " + message};
+  }
+
   termios tty{};
   if (::tcgetattr(fd_, &tty) != 0) {
     const std::string message{std::strerror(errno)};
@@ -105,6 +115,9 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
 PosixSerialPort::~PosixSerialPort()
 {
   if (fd_ >= 0) {
+    // The exclusive flag belongs to the device, not to this descriptor: it outlives close() if
+    // anything else still holds the device open. Clear it so the port can be opened again.
+    ::ioctl(fd_, TIOCNXCL);
     ::close(fd_);
   }
 }
@@ -174,8 +187,12 @@ void SerialArm::poll_loop()
 
   while (!stop_.load()) {
     // Ask for the angles. A failed write is transient (unplugged cable, busy port): skip this
-    // round, keep the last known pose, try again next tick.
-    transport_->write(request.bytes.data(), request.size);
+    // round, keep the last known pose, try again next tick. No request went out, so there is
+    // no reply to wait for.
+    if (!transport_->write(request.bytes.data(), request.size)) {
+      std::this_thread::sleep_for(POLL_PERIOD);
+      continue;
+    }
 
     // Drain whatever is there and feed the assembler. One get_angles reply usually arrives over
     // a few reads, so we keep reading until the port goes quiet or a reply completes.
