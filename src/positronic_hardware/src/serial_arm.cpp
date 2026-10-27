@@ -74,19 +74,31 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
     throw std::runtime_error{"tcgetattr failed on " + port + ": " + message};
   }
 
-  ::cfmakeraw(&tty);  // 8N1, no echo, no line processing: raw bytes in and out.
+  ::cfmakeraw(&tty);                  // 8N1, no echo, no line processing: raw bytes in and out.
   ::cfsetispeed(&tty, speed.value());
   ::cfsetospeed(&tty, speed.value());
   tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);  // ignore modem lines, enable receiver.
   tty.c_cflag &= static_cast<tcflag_t>(~CRTSCTS);        // no hardware flow control.
-  tty.c_cc[VMIN] = 0;   // read() returns what is there, even if that is nothing,
-  tty.c_cc[VTIME] = 1;  // after at most 0.1 s, so the thread can check stop_.
+  tty.c_cc[VMIN] = 0;                 // read() returns what is there, even if that is nothing,
+  tty.c_cc[VTIME] = 1;                // after at most 0.1 s, so the thread can check stop_.
 
   if (::tcsetattr(fd_, TCSANOW, &tty) != 0) {
     const std::string message{std::strerror(errno)};
     ::close(fd_);
     fd_ = -1;
     throw std::runtime_error{"tcsetattr failed on " + port + ": " + message};
+  }
+
+  // open() used O_NONBLOCK so it would not block waiting for carrier. Clear it now that the
+  // port is configured: VMIN/VTIME only take effect in blocking mode. Left on, read() would
+  // return immediately and miss the reply (which arrives a few ms after the request), picking
+  // it up only on the next cycle. Cleared, read() waits up to VTIME (0.1 s) for the bytes.
+  const int flags{::fcntl(fd_, F_GETFL, 0)};
+  if (flags < 0 || ::fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+    const std::string message{std::strerror(errno)};
+    ::close(fd_);
+    fd_ = -1;
+    throw std::runtime_error{"fcntl failed on " + port + ": " + message};
   }
 }
 
@@ -116,7 +128,7 @@ bool PosixSerialPort::write(const std::uint8_t * data, std::size_t count)
 std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
 {
   const ssize_t n{::read(fd_, dst, max)};
-  if (n <= 0) {
+  if (n <= 0) {  // 0 = nothing within VTIME; <0 with EAGAIN = same. Both mean "no bytes now".
     return 0;
   }
   return static_cast<std::size_t>(n);
