@@ -68,10 +68,8 @@ public:
   [[nodiscard]] JointPositions read_angles() const override;
 
 private:
-  /// Pose reported until the first real reply lands, so read() never sees NaN at start-up.
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-  /// The thread body: poll, decode, publish, until stop_ is set.
   void poll_loop();
 
   std::unique_ptr<SerialTransport> transport_;
