@@ -1,0 +1,9 @@
+<library path="positronic_hardware">
+
+  <class name="positronic_hardware/RobotSystem" type="positronic_hardware::RobotSystem" base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control hardware interface for the myCobot 280 Jetson Nano arm.
+    </description>
+  </class>
+
+</library>
