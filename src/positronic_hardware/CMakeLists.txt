@@ -11,8 +11,8 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   pluginlib
   rclcpp
   rclcpp_lifecycle
-  positronic_protocol   # #23: the serial backend builds and decodes get_angles frames
-  realtime_tools        # #23: RealtimeBuffer hands the latest pose to the control loop
+  positronic_protocol
+  realtime_tools
 )
 
 find_package(ament_cmake REQUIRED)
