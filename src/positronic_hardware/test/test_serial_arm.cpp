@@ -154,6 +154,7 @@ TEST(SerialArm, StartsAtStartPoseBeforeAnyReply)
   // A transport that never answers: read_angles() must give the start pose, never NaN.
   const std::vector<std::vector<std::uint8_t>> no_reply{};
   SerialArm arm{std::make_unique<ReplayTransport>(no_reply)};
+  EXPECT_FALSE(arm.has_sample());  // so the plugin knows this pose is not a measurement
   const JointPositions pose{arm.read_angles()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     EXPECT_DOUBLE_EQ(pose.at(i), 0.0) << i;
@@ -164,6 +165,7 @@ TEST(SerialArm, DecodesRecordedReply)
 {
   SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
   const JointPositions pose{wait_for_reply(arm)};
+  EXPECT_TRUE(arm.has_sample());
   const JointPositions expected{expected_pose()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     EXPECT_NEAR(pose.at(i), expected.at(i), 1e-9) << i;

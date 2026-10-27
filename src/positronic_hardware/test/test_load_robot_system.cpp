@@ -42,13 +42,20 @@
 //   on_configure creates SerialArm or FakeArm from the backend parameter and on_cleanup
 //   destroys it. Test that configure fails cleanly with backend=serial on a port that does not
 //   exist, and that the component can be cleaned up and configured again.
+// Follow-up prompt:
+//   The states stay NaN until the arm's first reply, and on_activate fails if no reply comes.
+//   Test it on a pseudo-terminal that opens like a serial port but never answers.
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -414,4 +421,45 @@ TEST_F(LoadRobotSystem, CleanupThenConfigureAgain)
   const auto position{state(JOINTS.at(1), "position")};
   ASSERT_TRUE(position.has_value());
   EXPECT_DOUBLE_EQ(position.value_or(std::nan("")), positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmIsSilent)
+{
+  // A pseudo-terminal stands in for the serial port: it opens and configures like one, but
+  // nothing ever answers get_angles. No arm is needed.
+  const int controller{::posix_openpt(O_RDWR | O_NOCTTY)};
+  ASSERT_GE(controller, 0);
+  ASSERT_EQ(::grantpt(controller), 0);
+  ASSERT_EQ(::unlockpt(controller), 0);
+  std::array<char, 128> port{};
+  ASSERT_EQ(::ptsname_r(controller, port.data(), port.size()), 0);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+
+  // No reply yet: read() works but reports "unknown", not the placeholder pose of zeros.
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  for (const auto & joint : JOINTS) {
+    for (const std::string interface : {"position", "velocity"}) {
+      const auto value{state(joint, interface)};
+      ASSERT_TRUE(value.has_value()) << joint << "/" << interface;
+      EXPECT_TRUE(std::isnan(value.value_or(0.0))) << joint << "/" << interface;
+    }
+  }
+
+  // And the component refuses to become active on an arm that never answered.
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();  // closes the port before its pseudo-terminal goes away
+  ::close(controller);
 }

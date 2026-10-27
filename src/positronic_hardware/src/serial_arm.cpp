@@ -160,6 +160,11 @@ JointPositions SerialArm::read_angles() const
   return *latest_.readFromRT();
 }
 
+bool SerialArm::has_sample() const
+{
+  return has_sample_.load();
+}
+
 void SerialArm::poll_loop()
 {
   ReplyAssembler assembler{};
@@ -181,6 +186,8 @@ void SerialArm::poll_loop()
       }
       if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
         latest_.writeFromNonRT(pose.value());
+        // Set after the write, so whoever sees true also finds the real pose in the buffer.
+        has_sample_.store(true);
         break;
       }
     }

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <iterator>
@@ -32,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 
@@ -55,6 +57,10 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
   return joint.state_interfaces.size() == 2 && has(hardware_interface::HW_IF_POSITION) &&
          has(hardware_interface::HW_IF_VELOCITY);
 }
+
+/// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
+/// milliseconds, so this is generous; the arm not answering at all is what it catches.
+constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 
 /// The <param> names the <hardware> tag may use. Anything else is a typo.
 constexpr std::array<std::string_view, 4> KNOWN_PARAMETERS{
@@ -247,6 +253,19 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
 {
   // "Allow motion": every command starts at the measured position, so the first thing a
   // controller sees is "stay where you are". There are no command interfaces until #32.
+  // Never activate on a placeholder pose: wait for the arm to answer. Sleeping is fine here,
+  // outside the control loop.
+  const auto deadline{std::chrono::steady_clock::now() + FIRST_SAMPLE_TIMEOUT};
+  while (!arm_->has_sample()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The arm did not answer within %d ms. Is it powered and on %s?",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()), config_.port.c_str());
+      return CallbackReturn::ERROR;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
   for (const auto & [name, description] : joint_command_interfaces_) {
@@ -269,6 +288,11 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
 void RobotSystem::update_states(double dt)
 {
+  // No reply from the arm yet: keep the states NaN ("unknown") rather than publish the
+  // placeholder pose, and keep the velocity estimator from using it as a baseline.
+  if (!arm_->has_sample()) {
+    return;
+  }
   const JointPositions angles{arm_->read_angles()};
   const JointPositions velocities{velocity_estimator_.update(angles, dt)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {

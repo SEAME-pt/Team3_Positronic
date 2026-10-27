@@ -41,6 +41,12 @@ public:
     return angles_;
   }
 
+  /// The fake pose is known from the start.
+  [[nodiscard]] bool has_sample() const override
+  {
+    return true;
+  }
+
 private:
   JointPositions angles_{START_POSE};
 };
