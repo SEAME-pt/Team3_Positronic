@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <string>
 #include <tuple>
 
@@ -88,7 +89,7 @@ CallbackReturn RobotSystem::on_init(
 CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Plug in the cable": a fresh fake arm. The real arm will open the serial port here.
-  arm_ = FakeArm{};
+  arm_ = std::make_unique<FakeArm>();
 
   // Look the handles up once, here, so read() builds no string. This throws if a name is
   // missing, which is fine outside the control loop.
@@ -137,7 +138,7 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
 void RobotSystem::update_positions()
 {
-  const JointPositions angles{arm_.read_angles()};
+  const JointPositions angles{arm_->read_angles()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_set = false: never block on a controller that is reading the handle.
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);

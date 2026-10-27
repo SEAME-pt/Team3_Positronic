@@ -22,6 +22,7 @@
 #define POSITRONIC_HARDWARE__POSITRONIC_HARDWARE_HPP_
 
 #include <array>
+#include <memory>
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -63,7 +64,7 @@ private:
   /// Asks the arm where the joints are and stores the answer in the state interfaces.
   void update_positions();
 
-  FakeArm arm_;
+  std::unique_ptr<ArmBackend> arm_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
 };
 
