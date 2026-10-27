@@ -22,7 +22,10 @@
 #define POSITRONIC_HARDWARE__POSITRONIC_HARDWARE_HPP_
 
 #include <array>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -30,6 +33,7 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/velocity_estimator.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -54,6 +58,27 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
+  /// Where the joint angles come from.
+  enum class Backend : std::uint8_t
+  {
+    SERIAL,
+    FAKE
+  };
+
+  /// The <param> values of the <hardware> tag, checked in on_init. A parameter the URDF does
+  /// not set keeps its default.
+  struct Config
+  {
+    Backend backend{Backend::SERIAL};
+    std::string port{"/dev/ttyTHS1"};
+    int baud{1000000};
+    double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
+  };
+
+  /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown
+  /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
+  bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
+
   /// The state interfaces of one joint, looked up once so read() needs no string.
   struct JointHandles
   {
@@ -64,6 +89,7 @@ private:
   /// Asks the arm where the joints are and stores the answer in the state interfaces.
   void update_positions();
 
+  Config config_{};
   std::unique_ptr<ArmBackend> arm_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
 };

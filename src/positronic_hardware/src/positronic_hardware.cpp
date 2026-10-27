@@ -21,12 +21,19 @@
 #include "positronic_hardware/positronic_hardware.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstddef>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <tuple>
+#include <unordered_map>
 
 namespace positronic_hardware
 {
@@ -47,6 +54,32 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
     }};
   return joint.state_interfaces.size() == 2 && has(hardware_interface::HW_IF_POSITION) &&
          has(hardware_interface::HW_IF_VELOCITY);
+}
+
+/// The <param> names the <hardware> tag may use. Anything else is a typo.
+constexpr std::array<std::string_view, 4> KNOWN_PARAMETERS{
+  "backend", "port", "baud", "velocity_filter_alpha"};
+
+/// The value of `key`, or nullptr if the URDF does not set it.
+const std::string * find_parameter(
+  const std::unordered_map<std::string, std::string> & parameters, const std::string & key)
+{
+  const auto it{parameters.find(key)};
+  return it == parameters.end() ? nullptr : &it->second;
+}
+
+/// `text` as a number, or nullopt unless the whole text is one. from_chars ignores the
+/// locale and throws nothing, unlike std::stoi/std::stod.
+template<typename Number>
+std::optional<Number> parse_number(const std::string & text)
+{
+  Number value{};
+  const char * const end{std::next(text.data(), static_cast<std::ptrdiff_t>(text.size()))};
+  const auto [stop, error]{std::from_chars(text.data(), end, value)};
+  if (error != std::errc{} || stop != end) {
+    return std::nullopt;
+  }
+  return value;
 }
 }  // namespace
 
@@ -83,7 +116,79 @@ CallbackReturn RobotSystem::on_init(
     }
   }
 
+  if (!read_parameters(info.hardware_parameters)) {
+    return CallbackReturn::ERROR;
+  }
   return CallbackReturn::SUCCESS;
+}
+
+bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::string> & parameters)
+{
+  for (const auto & [key, value] : parameters) {
+    if (std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(),
+        key) == KNOWN_PARAMETERS.end())
+    {
+      RCLCPP_ERROR(
+        get_logger(),
+        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha.",
+        key.c_str());
+      return false;
+    }
+  }
+
+  Config config{};
+
+  if (const std::string * backend{find_parameter(parameters, "backend")}) {
+    if (*backend == "serial") {
+      config.backend = Backend::SERIAL;
+    } else if (*backend == "fake") {
+      config.backend = Backend::FAKE;
+    } else {
+      RCLCPP_ERROR(
+        get_logger(), "Parameter 'backend' is '%s'; use 'serial' or 'fake'.", backend->c_str());
+      return false;
+    }
+  }
+
+  if (const std::string * port{find_parameter(parameters, "port")}) {
+    if (port->empty()) {
+      RCLCPP_ERROR(get_logger(), "Parameter 'port' is empty.");
+      return false;
+    }
+    config.port = *port;
+  }
+
+  if (const std::string * baud{find_parameter(parameters, "baud")}) {
+    // Only the rates PosixSerialPort can set.
+    const std::optional<int> value{parse_number<int>(*baud)};
+    if (value != 115200 && value != 1000000) {
+      RCLCPP_ERROR(get_logger(), "Parameter 'baud' is '%s'; use 115200 or 1000000.", baud->c_str());
+      return false;
+    }
+    config.baud = *value;
+  }
+
+  if (const std::string * alpha{find_parameter(parameters, "velocity_filter_alpha")}) {
+    // Not a number becomes NaN. from_chars also accepts "nan" itself. Every comparison with
+    // NaN is false, so both fail the range check.
+    const double value{
+      parse_number<double>(*alpha).value_or(std::numeric_limits<double>::quiet_NaN())};
+    const bool in_range{value > 0.0 && value <= 1.0};
+    if (!in_range) {
+      RCLCPP_ERROR(
+        get_logger(), "Parameter 'velocity_filter_alpha' is '%s'; use a number in (0, 1].",
+        alpha->c_str());
+      return false;
+    }
+    config.velocity_filter_alpha = value;
+  }
+
+  config_ = config;
+  RCLCPP_INFO(
+    get_logger(), "Backend '%s', port %s at %d baud, velocity filter alpha %.3f.",
+    config_.backend == Backend::SERIAL ? "serial" : "fake", config_.port.c_str(), config_.baud,
+    config_.velocity_filter_alpha);
+  return true;
 }
 
 CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)

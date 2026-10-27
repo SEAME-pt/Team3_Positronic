@@ -34,6 +34,10 @@
 //   Apply the review of #22: each joint has position and velocity state interfaces and no
 //   command interface; test twelve exported states, a joint without velocity, a joint with
 //   a command interface, and check loaded_ in the rejection tests.
+// Follow-up prompt:
+//   on_init reads the <hardware> parameters backend, port, baud and velocity_filter_alpha.
+//   Every test URDF selects backend=fake; test that valid values load and that an unknown
+//   parameter or a bad value is rejected.
 
 #include <gtest/gtest.h>
 
@@ -47,6 +51,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
@@ -107,15 +112,25 @@ std::string joints_with_one_bad(std::size_t index, const std::string & interface
   return blocks;
 }
 
-/// The arm's URDF with a <ros2_control> block that uses RobotSystem for `joint_blocks`.
-std::string urdf_with(const std::string & joint_blocks)
+/// One <param> of the <hardware> tag.
+std::string param(std::string_view name, std::string_view value)
+{
+  return "<param name=\"" + std::string{name} + "\">" + std::string{value} + "</param>";
+}
+
+/// Tests never open a serial port.
+constexpr std::string_view FAKE_BACKEND{"<param name=\"backend\">fake</param>"};
+
+/// The arm's URDF with a <ros2_control> block that uses RobotSystem for `joint_blocks`,
+/// with `parameters` in its <hardware> tag.
+std::string urdf_with(const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND)
 {
   std::string urdf{read_description()};
   const std::string ros2_control{
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
-    "<hardware><plugin>positronic_hardware/RobotSystem</plugin></hardware>" +
-    joint_blocks + "</ros2_control>"};
+    "<hardware><plugin>positronic_hardware/RobotSystem</plugin>" +
+    std::string{parameters} + "</hardware>" + joint_blocks + "</ros2_control>"};
   urdf.insert(urdf.rfind("</robot>"), ros2_control);
   return urdf;
 }
@@ -264,6 +279,42 @@ TEST_F(LoadRobotSystem, InitRejectsCommandInterface)
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
+{
+  load(urdf_with(
+    all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
+                         param("baud", "115200") + param("velocity_filter_alpha", "0.5")));
+
+  EXPECT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsBadParameters)
+{
+  // Each case is the fake backend plus one wrong <param>: a typo must stop the driver.
+  const std::vector<std::pair<std::string, std::string>> bad{
+    {"baudrate", "115200"},             // unknown name
+    {"backend", "simulated"},           // only serial or fake
+    {"port", ""},                       // empty
+    {"baud", "9600"},                   // a rate PosixSerialPort cannot set
+    {"baud", "115200x"},                // not only a number
+    {"velocity_filter_alpha", "0"},     // the filter would never move
+    {"velocity_filter_alpha", "1.5"},   // above 1
+    {"velocity_filter_alpha", "fast"},  // not a number
+    {"velocity_filter_alpha", "nan"},   // from_chars reads it, the range check must not
+  };
+  for (const auto & [name, value] : bad) {
+    SCOPED_TRACE(::testing::Message{} << name << "=" << value);
+    // "backend" replaces the fake one rather than appearing twice.
+    const std::string parameters{
+      name == "backend" ? param(name, value) : std::string{FAKE_BACKEND} + param(name, value)};
+    load(urdf_with(all_good_joints(), parameters));
+
+    EXPECT_FALSE(loaded_);
+    EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  }
 }
 
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
