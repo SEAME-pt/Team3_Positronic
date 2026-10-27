@@ -33,7 +33,7 @@ Conventions used throughout:
 port allows. Each read gets one timestamp row (`t` is the start of the call in seconds since the first read, `duration` is how long the call
 took, `valid` is 0 if the reply was not a list of six angles). The read period is the time between the starts of consecutive reads.
 Afterwards it runs 200 round trips of `send_angles(current pose)` followed by `get_angles()`. The write re-sends the pose the arm is already
-at, so the arm does not move. The same script rebuilds the statistics and plot from the CSV with `--from-csv`.
+at, so the arm does not move.
 
 `py_hz_write.py` streams `send_angles` on joint 6 on a fixed schedule with no reads, sweeping -30 to +30 degrees in 10 degree steps at
 speed 30, for 120 s after a 15 s settle. It logs the intended time, the actual start and the call duration of every write.
