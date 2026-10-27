@@ -1,0 +1,6 @@
+# GPU=sw: software rendering (llvmpipe). For machines where the GPU path gives OpenGL below 3.3
+# in the container (a Mac VM with virgl gives 2.1, and Gazebo crashes).
+services:
+  dev:
+    environment:
+      LIBGL_ALWAYS_SOFTWARE: "1"

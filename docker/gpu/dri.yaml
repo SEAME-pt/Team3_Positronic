@@ -1,0 +1,8 @@
+# GPU=dri: Intel, AMD and laptops with two GPUs (it uses the Intel one), through Mesa.
+services:
+  dev:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:?set by the Makefile when GPU=dri}"
