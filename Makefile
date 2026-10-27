@@ -4,6 +4,9 @@
 # Set it in .env (see .env.example); each value is a file in docker/gpu/.
 # One-off override: "make GPU=sw shell". Not "GPU=sw make shell". A variable in .env beats the environment.
 GPU ?=
+# Make keeps trailing spaces in values ("GPU=sw " in .env would be "sw "). override: also
+# strips a value given on the command line, which a plain assignment can't change.
+override GPU := $(strip $(GPU))
 
 COMPOSE ?= docker compose
 # Inside a container (the dev container's terminal) run commands directly;

@@ -25,8 +25,10 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: issue
 | `dev` | `positronic-dev:jazzy` | Your machine (`make image`) | `ci` + Gazebo, RViz, rqt |
 
 **Adding a package:** put it in the lowest stage that needs it (rules at the top of the Dockerfile),
-then `make image`. Only that stage's layer is downloaded again. CI builds `ci` and `runtime`, so a
-package missing from the wrong stage fails in CI, not on your laptop. Build one target by hand with
+then `make image`. Only that stage's layer is downloaded again. CI builds, lints and tests `src/` in
+`ci`, and builds `src/` again in `runtime` (what `make nano-build` does on the Jetson), so a package
+in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't catch
+a package that only fails on the Jetson's arm64. Build one target by hand with
 `docker build --target <name> docker`.
 
 ## First time
@@ -160,7 +162,7 @@ mode from `GPU` in your `.env` (each mode is a file in `docker/gpu/`):
 | `dri` | Intel, AMD, laptops with two GPUs (it uses the Intel one) | Passes `/dev/dri` into the container and adds your `video` and `render` groups. Their numbers are read from your machine, because they differ per machine |
 | `nvidia` | NVIDIA-only machines. Needs the NVIDIA Container Toolkit on the host | Gives the container the NVIDIA GPU (`gpus: all`) and the variables laptops with two GPUs need |
 | `sw` | A Mac VM, or any machine where the others crash Gazebo | Software rendering (llvmpipe): slow, but works everywhere |
-| empty | | No GPU file; Mesa decides. This is how it was before |
+| empty | | No GPU file, so no GPU in the container: Mesa falls back to software rendering and `make doctor` says `[warn]`. This is how it was before |
 
 1. `cp .env.example .env`, then set `GPU=` (one line, no quotes, no spaces; comments on their own lines).
 2. `make doctor`: the `OpenGL` line must be `[ok]`. `[fail]` means Gazebo would crash; `[warn]` means
@@ -169,7 +171,7 @@ mode from `GPU` in your `.env` (each mode is a file in `docker/gpu/`):
 
 A new mode is a new file `docker/gpu/<name>.yaml`; the Makefile finds it by name. The editor's dev container
 terminal doesn't get the GPU (it runs the image directly): start Gazebo and RViz with `make shell` from a normal
-terminal. The test data of the six team machines is in `scripts/gpu-test-*.txt`.
+terminal. The test outputs of the six team machines are attached to issue #82.
 
 ## Changing the defaults
 
@@ -197,6 +199,7 @@ Put per-machine values in `.env` (copy `.env.example`), or override one run with
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
 | `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
 | CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |
+| CI's "Build the workspace in the Jetson image" fails | A package in `src/` needs something that isn't in `core`. Move it to `core` if the Jetson needs it; if it's laptop-only (MoveIt config, Gazebo launch), talk to the team: `make nano-build` must then skip that package |
 | Gazebo closes with `OpenGL 3.3 is not supported` | `make doctor`, then set `GPU=` in `.env` (`sw` if nothing else works) |
 | `GPU=sw make shell` seems to do nothing | A value in `.env` beats the environment: use `make GPU=sw shell` |
 | `could not select device driver "nvidia"` with `GPU=nvidia` | The NVIDIA Container Toolkit isn't installed on the host: install it, or use `GPU=dri` or `sw` |

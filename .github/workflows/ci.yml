@@ -60,17 +60,30 @@ jobs:
         run: make RUN="$RUN_DEV" test
 
       # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
-      # layers with the image above, it costs little.
-      - name: Check the Jetson image builds
+      # layers with the image above, it costs little. No cache-to: writing to the same scope
+      # would replace the ci image's cache.
+      - name: Build the Jetson image
         uses: docker/build-push-action@v6
         with:
           context: docker
           target: runtime
+          load: true
+          tags: positronic-runtime:ci
           build-args: |
             ROS_DISTRO=jazzy
             USER_UID=${{ steps.ids.outputs.uid }}
             USER_GID=${{ steps.ids.outputs.gid }}
           cache-from: type=gha,scope=image
+
+      # `make nano-build` builds all of src/ in the runtime image, so CI does the same: a package
+      # that needs something only in tools or sim (MoveIt, Gazebo, clang tools) fails here, not
+      # on the Jetson. Outputs go to /tmp so they don't mix with the build/ of the steps above.
+      # Limit: CI is amd64 and the Jetson arm64, so an arm64-only problem still shows up there.
+      - name: Build the workspace in the Jetson image
+        run: >
+          docker run --rm -v "$PWD:/ws" positronic-runtime:ci
+          bash -c 'source /opt/ros/jazzy/setup.bash && colcon --log-base /tmp/log build
+          --symlink-install --build-base /tmp/build --install-base /tmp/install'
 
       - name: Keep the logs when something failed
         if: failure()

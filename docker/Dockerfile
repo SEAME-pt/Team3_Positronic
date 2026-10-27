@@ -7,9 +7,15 @@
 #
 #   docker build --target <name> docker        (the last stage, dev, is the default)
 #
+# Stage order: core -> runtime -> tools -> ci -> sim -> dev.
+#
 # Rules for editing it:
-#  - Stages go from stable to volatile: core -> tools -> sim. Inside a stage, one apt layer
-#    per theme, so adding a package re-downloads that layer and not the whole image.
+#  - Package stages go from stable to volatile: core -> tools -> sim. Inside a stage, one apt
+#    layer per theme, so adding a package re-downloads that layer and not the whole image.
+#  - Each target sits right after the stage it is built from, and runtime right after core.
+#    The classic builder builds EVERY stage above the --target, needed or not: with runtime
+#    further down, the Jetson would install MoveIt and Gazebo before reaching it. BuildKit
+#    skips unused stages, so CI would never notice.
 #  - The uid/gid steps stay in the last lines of each target. A changed build arg
 #    invalidates the cache of every instruction after the ARG.
 #  - Add a package to the lowest stage that needs it. Jetson needs it? core. Only
@@ -49,6 +55,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir pymycobot
 
 # ---------------------------------------------------------------------------
+# runtime target: core + the container user. Right after core, see the rules above.
+# ---------------------------------------------------------------------------
+FROM core AS runtime
+
+ARG ROS_DISTRO
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+COPY setup-user.sh /tmp/setup-user.sh
+RUN bash /tmp/setup-user.sh "${USERNAME}" "${USER_UID}" "${USER_GID}" "${ROS_DISTRO}" \
+    && rm /tmp/setup-user.sh
+
+USER ${USERNAME}
+WORKDIR /ws
+CMD ["bash"]
+
+# ---------------------------------------------------------------------------
 # tools: what building and checking our code needs beyond running it (CI and laptops).
 # ---------------------------------------------------------------------------
 FROM core AS tools
@@ -69,6 +93,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-moveit \
       ros-${ROS_DISTRO}-joint-state-publisher \
     && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# ci target: tools + the container user.
+# ---------------------------------------------------------------------------
+FROM tools AS ci
+
+ARG ROS_DISTRO
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+COPY setup-user.sh /tmp/setup-user.sh
+RUN bash /tmp/setup-user.sh "${USERNAME}" "${USER_UID}" "${USER_GID}" "${ROS_DISTRO}" \
+    && rm /tmp/setup-user.sh
+
+USER ${USERNAME}
+WORKDIR /ws
+CMD ["bash"]
 
 # ---------------------------------------------------------------------------
 # sim: simulation and GUI tools. Laptops only (never the Jetson, never CI for now).
@@ -92,40 +134,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# Targets. Each one only adds the container user (the host's uid/gid, see the Makefile),
-# so a different uid never invalidates the layers above.
+# dev target: sim + the container user. Keep it last: it is what `docker build` makes
+# when no --target is given.
 # ---------------------------------------------------------------------------
-FROM core AS runtime
-
-ARG ROS_DISTRO
-ARG USERNAME=dev
-ARG USER_UID=1000
-ARG USER_GID=1000
-
-COPY setup-user.sh /tmp/setup-user.sh
-RUN bash /tmp/setup-user.sh "${USERNAME}" "${USER_UID}" "${USER_GID}" "${ROS_DISTRO}" \
-    && rm /tmp/setup-user.sh
-
-USER ${USERNAME}
-WORKDIR /ws
-CMD ["bash"]
-
-FROM tools AS ci
-
-ARG ROS_DISTRO
-ARG USERNAME=dev
-ARG USER_UID=1000
-ARG USER_GID=1000
-
-COPY setup-user.sh /tmp/setup-user.sh
-RUN bash /tmp/setup-user.sh "${USERNAME}" "${USER_UID}" "${USER_GID}" "${ROS_DISTRO}" \
-    && rm /tmp/setup-user.sh
-
-USER ${USERNAME}
-WORKDIR /ws
-CMD ["bash"]
-
-# Keep dev last: it is what `docker build` makes when no --target is given.
 FROM sim AS dev
 
 ARG ROS_DISTRO
