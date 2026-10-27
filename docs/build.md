@@ -32,11 +32,13 @@ package missing from the wrong stage fails in CI, not on your laptop. Build one 
 ## First time
 
 ```bash
+cp .env.example .env          # your per-machine settings (git-ignored): set GPU=, see "GPU for Gazebo and RViz"
 make image                    # build the dev image (a few minutes up to 20, depending on your connection)
-ARM_IP=<jetson ip> make doctor  # every line should say [ok]
+make doctor                   # every line should say [ok]
 ```
 
-Get the Jetson's IP with `ssh nano "hostname -I"` (the first address). The Jetson image is built by
+Get the Jetson's IP with `ssh nano "hostname -I"` (the first address) and put it in `.env` as `ARM_IP=<ip>`,
+so `make doctor` also checks that the Jetson is reachable. The Jetson image is built by
 one person, not by everyone (see *Jetson commands*).
 
 For errors and warnings in your editor, open the repo in the dev container: README,
@@ -148,16 +150,38 @@ image on every boot, waits for the network, keeps start/crash/stop history in on
 stopping it never disables it for the next boot. Never add `--restart` to this container:
 two supervisors fight over it.
 
+## GPU for Gazebo and RViz
+
+Gazebo needs OpenGL 3.3. How the container reaches the GPU depends on the machine, so `make` picks a
+mode from `GPU` in your `.env` (each mode is a file in `docker/gpu/`):
+
+| `GPU=` | Use it on | What it does |
+| --- | --- | --- |
+| `dri` | Intel, AMD, laptops with two GPUs (it uses the Intel one) | Passes `/dev/dri` into the container and adds your `video` and `render` groups. Their numbers are read from your machine, because they differ per machine |
+| `nvidia` | NVIDIA-only machines. Needs the NVIDIA Container Toolkit on the host | Gives the container the NVIDIA GPU (`gpus: all`) and the variables laptops with two GPUs need |
+| `sw` | A Mac VM, or any machine where the others crash Gazebo | Software rendering (llvmpipe): slow, but works everywhere |
+| empty | | No GPU file; Mesa decides. This is how it was before |
+
+1. `cp .env.example .env`, then set `GPU=` (one line, no quotes, no spaces; comments on their own lines).
+2. `make doctor`: the `OpenGL` line must be `[ok]`. `[fail]` means Gazebo would crash; `[warn]` means
+   software rendering without `GPU=sw` (works, but slow).
+3. One run with another mode: `make GPU=sw shell`. Not `GPU=sw make shell`: a value in `.env` beats the environment.
+
+A new mode is a new file `docker/gpu/<name>.yaml`; the Makefile finds it by name. The editor's dev container
+terminal doesn't get the GPU (it runs the image directly): start Gazebo and RViz with `make shell` from a normal
+terminal. The test data of the six team machines is in `scripts/gpu-test-*.txt`.
+
 ## Changing the defaults
 
-Add a variable before the command to override it for that run:
+Put per-machine values in `.env` (copy `.env.example`), or override one run with `make VAR=value target`:
 
 | Variable | Default | Example |
 | --- | --- | --- |
-| `NANO` | `nano` (from `~/.ssh/config`) | `NANO=10.20.118.0 make nano-shell` if `nano.local` doesn't resolve |
-| `NANO_DIR` | `positronic/<your username>` | `NANO_DIR=positronic/test make nano-build` for a separate copy |
+| `NANO` | `nano` (from `~/.ssh/config`) | `make NANO=10.20.118.0 nano-shell` if `nano.local` doesn't resolve |
+| `NANO_DIR` | `positronic/<your username>` | `make NANO_DIR=positronic/test nano-build` for a separate copy |
 | `ROS_DOMAIN_ID` | `17` | Must be the same on both sides, and different from other teams |
-| `ARM_IP` | empty | `ARM_IP=10.20.118.0 make doctor` |
+| `ARM_IP` | empty | `ARM_IP=10.20.118.0` in `.env`, or `make ARM_IP=10.20.118.0 doctor` |
+| `GPU` | empty | `GPU=sw` in `.env`, or `make GPU=sw shell` (see above) |
 
 ## When something goes wrong
 
@@ -173,4 +197,7 @@ Add a variable before the command to override it for that run:
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
 | `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
 | CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |
+| Gazebo closes with `OpenGL 3.3 is not supported` | `make doctor`, then set `GPU=` in `.env` (`sw` if nothing else works) |
+| `GPU=sw make shell` seems to do nothing | A value in `.env` beats the environment: use `make GPU=sw shell` |
+| `could not select device driver \"nvidia\"` with `GPU=nvidia` | The NVIDIA Container Toolkit isn't installed on the host: install it, or use `GPU=dri` or `sw` |
 | Laptops don't see the Jetson's topics after a reboot | The service started before the Wi-Fi: `ssh -t nano sudo systemctl restart positronic-driver`, then open an issue |

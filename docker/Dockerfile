@@ -84,7 +84,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      x11-utils \
+      x11-utils mesa-utils \
       ros-${ROS_DISTRO}-joint-state-publisher-gui \
       ros-${ROS_DISTRO}-rviz2 \
       ros-${ROS_DISTRO}-rqt \
