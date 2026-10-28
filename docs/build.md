@@ -22,14 +22,14 @@ Jetson (4 GB RAM, small disk). Two consequences:
 - If your machine dies mid-motion, the Jetson's controller still finishes the trajectory it already has.
   The e-stop must never depend on your machine.
 
-Revisit when the arm must plan with no laptop around (a standalone demo), or the Wi-Fi proves unreliable.
+Why, and when to revisit: [ADR 0003](02_architecture/adr/0003-moveit-on-laptops.md).
 
 Always edit on your machine. Every `nano-*` command first mirrors your machine's repo onto the Jetson, so anything
 you change directly on the Jetson is overwritten.
 
 ## Docker images
 
-One `docker/Dockerfile`, three targets that share their lower layers (why: issue #82):
+One `docker/Dockerfile`, three targets that share their lower layers (why: [ADR 0001](02_architecture/adr/0001-one-dockerfile-three-targets.md)):
 
 | Target | Image | Used by | Has |
 | --- | --- | --- | --- |
@@ -172,7 +172,7 @@ two supervisors fight over it.
 ## GPU for Gazebo and RViz
 
 Gazebo needs OpenGL 3.3. How the container reaches the GPU depends on the machine, so `make` picks a
-mode from `GPU` in your `.env` (each mode is a file in `docker/gpu/`):
+mode from `GPU` in your `.env` (each mode is a file in `docker/gpu/`; why: [ADR 0002](02_architecture/adr/0002-gpu-mode-per-machine.md)):
 
 | `GPU=` | Use it on | What it does |
 | --- | --- | --- |
