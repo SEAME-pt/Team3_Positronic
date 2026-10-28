@@ -64,24 +64,53 @@ launch log is in `~/.ros/log/<date>/launch.log`, one line per process, with time
 
 ## Real arm in RViz
 
-The Jetson driver publishes `/joint_states` (#23), this launch only draws it. With the driver running
-on `ROS_DOMAIN_ID=17`:
+The Jetson driver publishes `/joint_states` (#23); `mirror.launch.py` only draws it on a laptop.
+Evidence of the run on the real arm: `docs/03_verification/rviz_mirror/`.
+
+**On the Jetson** (from the laptop, with the `nano` alias of `docs/build.md`; the Jetson needs a
+copy of the repo that contains the driver launch of #23):
 
 ```bash
+make nano-build        # sync this repo to the Jetson and build it there
+make nano-shell        # a shell in the container, with /dev/ttyTHS1
+```
+
+Inside that shell, with a hand on the arm, because it gives when the servos release:
+
+```bash
+python3 -c "from pymycobot import MyCobot280; m = MyCobot280('/dev/ttyTHS1', 1000000); print(m.get_angles()); m.release_all_servos()"
+ros2 launch positronic_bringup driver.launch.py
+```
+
+The six angles printed, in degrees, are the reference for the radians check. The launch must end
+with `Successful 'activate' of hardware` and `Configured and activated joint_state_broadcaster`.
+Do it in this order: the driver locks the port, so `pymycobot` cannot read once it runs.
+
+**On the laptop**, same network, native ROS 2 Jazzy, built outside the repo as above:
+
+```bash
+export ROS_DOMAIN_ID=17            # the Jetson container uses 17 (Makefile)
+ros2 topic hz /joint_states        # 50 Hz expected
+ros2 topic echo --once /joint_states   # six URDF names, positions = reference in radians
 ros2 launch positronic_bringup mirror.launch.py
 ```
 
-Release the servos, move the arm by hand, and the model follows. Every joint must turn the same way
-as the arm: a mirrored joint is a sign error in the driver or in the URDF. In a second terminal:
+RViz opens with the model in the pose of the real arm. Move the joints by hand, one at a time
+from the base to the flange: the model must follow and turn the same way. A mirrored joint is a
+sign error in the driver or in the URDF. In a second terminal, same `ROS_DOMAIN_ID`:
 
 ```bash
 ros2 run positronic_bringup joint_states_delay.py
 ```
 
-Each line is one second: messages received, average and maximum delay in ms. The delay is only
-valid if the laptop and the Jetson clocks are synchronised: check with `timedatectl` on both (NTP
-active and synchronised). Without the driver, the same launch can be fed by a simulation or by
-`joint_state_publisher_gui`, but not by two of them at once.
+Each line is one second: messages received, average and maximum delay in ms, from the header
+stamp of each message to its arrival here. The number is only valid if both machines have NTP
+active and synchronised: `timedatectl` on the laptop and `ssh nano timedatectl`. Start the
+measurement once everything is running, and keep it for a few minutes.
+
+Expected: two `robot_state_publisher` nodes publish `/tf` for the same links (the driver's and
+the mirror's). RViz warns and tolerates it. Without the driver, the same launch can be fed by
+a simulation or by `joint_state_publisher_gui`, but not by two of them at once.
 
 ## Troubleshooting
 
