@@ -30,16 +30,23 @@
 //   (RESULT, in radians); and the destructor stops the thread and returns promptly even while
 //   the transport is still streaming. The device I/O in PosixSerialPort is out of scope here and
 //   is verified on the Jetson.
+// Follow-up prompt:
+//   PosixSerialPort takes the port with TIOCEXCL. On a pseudo-terminal, check that a second
+//   PosixSerialPort on the same device is refused while the first one is open.
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -54,6 +61,7 @@ namespace
 {
 using positronic_hardware::JointPositions;
 using positronic_hardware::NUM_JOINTS;
+using positronic_hardware::PosixSerialPort;
 using positronic_hardware::SerialArm;
 using positronic_hardware::SerialTransport;
 
@@ -154,6 +162,7 @@ TEST(SerialArm, StartsAtStartPoseBeforeAnyReply)
   // A transport that never answers: read_angles() must give the start pose, never NaN.
   const std::vector<std::vector<std::uint8_t>> no_reply{};
   SerialArm arm{std::make_unique<ReplayTransport>(no_reply)};
+  EXPECT_FALSE(arm.has_sample());  // so the plugin knows this pose is not a measurement
   const JointPositions pose{arm.read_angles()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     EXPECT_DOUBLE_EQ(pose.at(i), 0.0) << i;
@@ -164,6 +173,7 @@ TEST(SerialArm, DecodesRecordedReply)
 {
   SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
   const JointPositions pose{wait_for_reply(arm)};
+  EXPECT_TRUE(arm.has_sample());
   const JointPositions expected{expected_pose()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     EXPECT_NEAR(pose.at(i), expected.at(i), 1e-9) << i;
@@ -180,4 +190,25 @@ TEST(SerialArm, StopsCleanly)
   }
   const auto elapsed{std::chrono::steady_clock::now() - start};
   EXPECT_LT(elapsed, std::chrono::seconds{2});
+}
+
+TEST(PosixSerialPort, SecondOpenIsRefusedWhileTheFirstHoldsThePort)
+{
+  // A pseudo-terminal opens and configures like the real UART, so no arm is needed.
+  const int controller{::posix_openpt(O_RDWR | O_NOCTTY)};
+  ASSERT_GE(controller, 0);
+  ASSERT_EQ(::grantpt(controller), 0);
+  ASSERT_EQ(::unlockpt(controller), 0);
+  std::array<char, 128> port{};
+  ASSERT_EQ(::ptsname_r(controller, port.data(), port.size()), 0);
+
+  {
+    const PosixSerialPort first{port.data(), 1000000};
+    // TIOCEXCL: another program (or a second driver) must not share the port.
+    EXPECT_THROW(PosixSerialPort(port.data(), 1000000), std::runtime_error);
+  }
+  // Closed again: the port is free.
+  EXPECT_NO_THROW(PosixSerialPort(port.data(), 1000000));
+
+  ::close(controller);
 }

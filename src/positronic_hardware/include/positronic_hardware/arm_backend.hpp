@@ -45,7 +45,8 @@ using JointPositions = std::array<double, NUM_JOINTS>;
 ///   the serial port directly. An implementation that talks to hardware keeps the latest
 ///   sample in a lock-free buffer filled by its own thread and just copies it out here.
 /// - It always returns six finite angles. Before the first real sample is available an
-///   implementation returns its start pose, never NaN: read() turns this into joint states.
+///   implementation returns its start pose, never NaN. That pose is a placeholder, not a
+///   measurement: callers check has_sample() before trusting it.
 class ArmBackend
 {
 public:
@@ -59,6 +60,10 @@ public:
 
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
+
+  /// True once read_angles() returns a real measurement. Non-blocking, safe from the control
+  /// loop. Until then the plugin reports "unknown" (NaN) instead of the placeholder pose.
+  [[nodiscard]] virtual bool has_sample() const = 0;
 };
 
 }  // namespace positronic_hardware
