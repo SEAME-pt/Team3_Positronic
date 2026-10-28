@@ -21,32 +21,30 @@
 #ifndef POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 #define POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 
-#include <array>
-#include <cstddef>
+#include "positronic_hardware/arm_backend.hpp"
 
 namespace positronic_hardware
 {
 
-/// Number of joints of the myCobot 280.
-inline constexpr std::size_t NUM_JOINTS{6};
-
-/// Six joint angles in radians, J1 (base) to J6 (flange).
-using JointPositions = std::array<double, NUM_JOINTS>;
-
 /// A pretend arm, so the driver runs without the robot. It never touches the serial port.
 ///
-/// It stands still in a fixed pose. The real arm (#23) will answer the same question
-/// from the serial port instead.
-class FakeArm
+/// It stands still in a fixed pose. SerialArm answers the same question from the serial port.
+class FakeArm : public ArmBackend
 {
 public:
   /// The pose the fake arm reports, in radians.
   static constexpr JointPositions START_POSE{0.0, 0.5, 0.3, 0.0, 0.0, 0.0};
 
   /// Where the joints are now.
-  JointPositions read_angles() const
+  [[nodiscard]] JointPositions read_angles() const override
   {
     return angles_;
+  }
+
+  /// The fake pose is known from the start.
+  [[nodiscard]] bool has_sample() const override
+  {
+    return true;
   }
 
 private:
