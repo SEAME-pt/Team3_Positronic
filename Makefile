@@ -19,7 +19,7 @@ export USER_UID USER_GID
 ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy doctor clean fclean
+.PHONY: help image shell build test verify format format-check tidy doctor clean fclean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -36,6 +36,11 @@ build: ## colcon build
 
 test: ## colcon test and show results
 	$(RUN) bash -c 'colcon test && colcon test-result --verbose'
+
+verify: ## One verification of docs/03_verification, with windows: make verify V=gazebo_pick
+	@test -n "$(V)" || { echo "usage: make verify V=<folder of docs/03_verification>"; exit 1; }
+	$(ALLOW_X)
+	$(RUN) bash docs/03_verification/$(V)/run.sh
 
 format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 	$(RUN) bash scripts/lint.sh --fix
