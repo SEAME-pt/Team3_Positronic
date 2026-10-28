@@ -34,19 +34,45 @@ mkdir -p "${OUT_DIR}"
 } > "${OUT_DIR}/run_info.txt"
 
 echo "Recording ${TOPIC} for ${DURATION_S} s into ${OUT_DIR} (Ctrl+C stops early)..."
-# A background job of a script starts with SIGINT ignored, and Python keeps it ignored, so
-# ros2 topic hz is stopped with SIGTERM. PYTHONUNBUFFERED (set in the image) keeps its log whole.
+
+# ros2 topic hz, for the rate log. A background job of a script starts with SIGINT ignored and
+# Python keeps it ignored, so it is stopped with SIGTERM at the end.
 ros2 topic hz "${TOPIC}" --window 500 > "${OUT_DIR}/topic_hz.log" 2>&1 &
 HZ_PID=$!
 trap 'kill -TERM "${HZ_PID}" 2> /dev/null || true' EXIT
 
-# SIGINT lets ros2 bag close the recording cleanly; timeout exits 124 when time is up.
-timeout --signal=INT --kill-after=10 "${DURATION_S}" \
-  ros2 bag record --output "${OUT_DIR}/bag" "${TOPIC}" || true
+# ros2 bag writes metadata.yaml only on a clean SIGINT; a SIGKILL (what the old timeout
+# --kill-after sent) leaves a bag the checker cannot read. 'set -m' (job control) puts the
+# recorder in its own process group with SIGINT at its default, so kill -INT reaches it the same
+# way Ctrl+C does; without it a background job ignores SIGINT. We then wait for it to finish
+# writing, however long that takes, instead of killing it.
+set -m
+ros2 bag record --output "${OUT_DIR}/bag" --topics "${TOPIC}" \
+  > "${OUT_DIR}/bag_record.log" 2>&1 &
+BAG_PID=$!
+set +m
+
+stop_bag() {
+  kill -INT "${BAG_PID}" 2> /dev/null || true
+  wait "${BAG_PID}" 2> /dev/null || true
+}
+
+# A Ctrl+C on the script goes to the script's group, not the recorder's own group, so forward it
+# and still close the bag cleanly before leaving.
+trap 'echo; echo "Stopping early..."; stop_bag; kill -TERM "${HZ_PID}" 2> /dev/null || true; \
+      exit 130' INT TERM
+
+sleep "${DURATION_S}"
+stop_bag
 
 kill -TERM "${HZ_PID}" 2> /dev/null || true
 wait "${HZ_PID}" 2> /dev/null || true
-trap - EXIT
+trap - INT TERM EXIT
+
+if [ ! -f "${OUT_DIR}/bag/metadata.yaml" ]; then
+  echo "WARNING: ${OUT_DIR}/bag/metadata.yaml is missing: the bag did not close cleanly." >&2
+  echo "See ${OUT_DIR}/bag_record.log." >&2
+fi
 
 echo
 echo "Done. Last ros2 topic hz lines:"

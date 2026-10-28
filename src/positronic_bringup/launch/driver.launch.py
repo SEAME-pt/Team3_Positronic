@@ -22,13 +22,20 @@
 """
 Run the real arm driver on the Jetson and publish /joint_states (#23).
 
-Starts ros2_control_node with the hardware plugin on the serial backend, then the
-joint_state_broadcaster. Read-only: no controller can move the arm (#32).
+Three nodes:
+- robot_state_publisher, which publishes the URDF on /robot_description (latched). The
+  controller_manager reads the description from that topic.
+- ros2_control_node (the controller_manager), which loads the hardware plugin and, on the
+  serial backend, opens the port and reads the arm.
+- the spawner, which activates joint_state_broadcaster, the controller that turns the plugin's
+  state interfaces into /joint_states.
 
-The controller_manager reads the URDF from a topic, so a robot_state_publisher publishes
-it. That one runs in the "driver" namespace with its TF moved there too, because the laptop
-mirror (mirror.launch.py) runs its own robot_state_publisher on /tf: two of them on the same
-ROS_DOMAIN_ID would publish every transform twice.
+Read-only: no controller can move the arm (#32).
+
+The mirror launch (mirror.launch.py, #24) runs its own robot_state_publisher. Running the
+driver and the mirror at the same time on one ROS_DOMAIN_ID gives two /tf publishers for the
+same robot, which RViz warns about but tolerates. The 10 minute run only records
+/joint_states and does not need the mirror.
 
 Launch arguments:
   backend:=serial|fake        fake stands still, to try the launch without the arm
@@ -51,7 +58,7 @@ def generate_launch_description():
         description='serial: the real arm. fake: a standing arm, no serial port.')
     port = DeclareLaunchArgument(
         'port', default_value='/dev/ttyTHS1',
-        description='Serial port of the arm.')
+        description="The arm's serial port.")
     baud = DeclareLaunchArgument(
         'baud', default_value='1000000',
         description='Baud rate of the arm serial link: 115200 or 1000000.')
@@ -77,18 +84,15 @@ def generate_launch_description():
         ]),
         value_type=str)
 
-    # Only here to hand the URDF to the controller_manager on /driver/robot_description.
-    # Its TF stays under /driver, so the laptop mirror is the only publisher on /tf.
+    # Publishes the URDF on /robot_description (latched), which the controller_manager reads.
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
-        namespace='driver',
         output='both',
-        parameters=[{'robot_description': robot_description}],
-        remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')])
+        parameters=[{'robot_description': robot_description}])
 
-    # The controller_manager. It loads the hardware plugin, which opens the serial port.
-    # The update_rate argument comes after the yaml, so it wins.
+    # The controller_manager. It reads /robot_description, loads the hardware plugin, and on the
+    # serial backend opens the port. The update_rate argument comes after the yaml, so it wins.
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
@@ -96,8 +100,7 @@ def generate_launch_description():
         parameters=[
             controllers_yaml,
             {'update_rate': ParameterValue(LaunchConfiguration('update_rate'), value_type=int)},
-        ],
-        remappings=[('~/robot_description', '/driver/robot_description')])
+        ])
 
     # Publishes /joint_states from the plugin's state interfaces, once per update.
     joint_state_broadcaster = Node(
