@@ -35,6 +35,24 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 
+NS_PER_S = 10**9
+NS_PER_MS = 10**6
+
+
+def delay_ms(stamp, now_ns):
+    """Return how old a message is, in ms: the time `now_ns` minus its header stamp."""
+    stamp_ns = stamp.sec * NS_PER_S + stamp.nanosec
+    return (now_ns - stamp_ns) / NS_PER_MS
+
+
+def summary(delays_ms):
+    """Return the line printed every second for a list of delays, or None when it is empty."""
+    if not delays_ms:
+        return None
+    n = len(delays_ms)
+    return f'{n} msgs  avg {sum(delays_ms) / n:.1f} ms  max {max(delays_ms):.1f} ms'
+
+
 class JointStatesDelay(Node):
 
     def __init__(self):
@@ -44,18 +62,11 @@ class JointStatesDelay(Node):
         self.create_timer(1.0, self.report)
 
     def on_message(self, msg):
-        now = self.get_clock().now().nanoseconds
-        stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
-        self.delays_ms.append((now - stamp) / 10**6)
+        self.delays_ms.append(delay_ms(msg.header.stamp, self.get_clock().now().nanoseconds))
 
     def report(self):
-        if not self.delays_ms:
-            self.get_logger().info('no messages')
-            return
-        n = len(self.delays_ms)
-        avg = sum(self.delays_ms) / n
-        worst = max(self.delays_ms)
-        self.get_logger().info(f'{n} msgs  avg {avg:.1f} ms  max {worst:.1f} ms')
+        line = summary(self.delays_ms)
+        self.get_logger().info(line if line else 'no messages')
         self.delays_ms = []
 
 

@@ -13,6 +13,8 @@ if(BUILD_TESTING)
   # Expands the real arm xacro and checks its <ros2_control> block against the URDF (#23).
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_robot_description test/test_robot_description.py)
+  # The maths of the delay script, without ROS running.
+  ament_add_pytest_test(test_joint_states_delay test/test_joint_states_delay.py)
 endif()
 
 # Copy the folders to install/.
