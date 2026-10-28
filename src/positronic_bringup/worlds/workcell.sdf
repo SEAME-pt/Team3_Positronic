@@ -1,0 +1,110 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="positronic_workcell">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.81</gravity>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.3 0.3 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="bench">
+      <static>true</static>
+      <pose>0 0 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.70 0.70 0.75</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.70 0.70 0.75</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="work_box">
+      <static>true</static>
+      <link name="wall_front">
+        <pose>0.33 0.00 1.05 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.68 0.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.68 0.60</size></box></geometry>
+          <material><ambient>0.60 0.80 1.00 0.25</ambient><diffuse>0.70 0.85 1.00 0.25</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+          <transparency>0.75</transparency>
+        </visual>
+      </link>
+      <link name="wall_back">
+        <pose>-0.33 0.00 1.05 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.68 0.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.68 0.60</size></box></geometry>
+          <material><ambient>0.60 0.80 1.00 0.25</ambient><diffuse>0.70 0.85 1.00 0.25</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+          <transparency>0.75</transparency>
+        </visual>
+      </link>
+      <link name="wall_left">
+        <pose>0.00 0.33 1.05 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.64 0.02 0.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.64 0.02 0.60</size></box></geometry>
+          <material><ambient>0.60 0.80 1.00 0.25</ambient><diffuse>0.70 0.85 1.00 0.25</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+          <transparency>0.75</transparency>
+        </visual>
+      </link>
+      <link name="wall_right">
+        <pose>0.00 -0.33 1.05 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.64 0.02 0.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.64 0.02 0.60</size></box></geometry>
+          <material><ambient>0.60 0.80 1.00 0.25</ambient><diffuse>0.70 0.85 1.00 0.25</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+          <transparency>0.75</transparency>
+        </visual>
+      </link>
+      <link name="roof">
+        <pose>0.00 0.00 1.36 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.68 0.68 0.02</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.68 0.68 0.02</size></box></geometry>
+          <material><ambient>0.60 0.80 1.00 0.25</ambient><diffuse>0.70 0.85 1.00 0.25</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+          <transparency>0.75</transparency>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

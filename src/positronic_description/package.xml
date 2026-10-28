@@ -4,7 +4,7 @@
   <name>positronic_description</name>
   <version>0.0.0</version>
   <description>URDF and meshes of the myCobot 280 Jetson Nano arm.</description>
-  <maintainer email="174157931+neivaeu@users.noreply.github.com">Pedro Neiva</maintainer>
+  <maintainer email="felipe.suassuna@seame.pt">Positronic</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
