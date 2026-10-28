@@ -100,13 +100,16 @@ from the base to the flange: the model must follow and turn the same way. A mirr
 sign error in the driver or in the URDF. In a second terminal, same `ROS_DOMAIN_ID`:
 
 ```bash
-ros2 run positronic_bringup joint_states_delay.py
+ros2 run positronic_bringup joint_states_delay.py --duration 300 --out log/delay
 ```
 
 Each line is one second: messages received, average and maximum delay in ms, from the header
-stamp of each message to its arrival here. The number is only valid if both machines have NTP
-active and synchronised: `timedatectl` on the laptop and `ssh nano timedatectl`. Start the
-measurement once everything is running, and keep it for a few minutes.
+stamp of each message to its arrival here. After `--duration` seconds (or Ctrl+C) it prints the
+summary of the run: messages, average, worst delay and when, how many were above `--limit-ms`
+(100 by default, the #24 criterion), and PASS or FAIL. `--out` keeps `delays.csv`, one line per
+message, and `summary.txt`. The number is only valid if both machines have NTP active and
+synchronised: `timedatectl` on the laptop and `ssh nano timedatectl`. Start the measurement once
+everything is running.
 
 Expected: two `robot_state_publisher` nodes publish `/tf` for the same links (the driver's and
 the mirror's). RViz warns and tolerates it. Without the driver, the same launch can be fed by

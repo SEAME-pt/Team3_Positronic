@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2026 Positronic
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -12,13 +14,13 @@
 #
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-"""Check the maths of joint_states_delay.py: the delay of one message and the line per second."""
+"""Check the maths of joint_states_delay.py: one message, the line per second, the summary."""
 
 import importlib.util
 import os
@@ -55,3 +57,41 @@ def test_summary_of_nothing_is_none():
     """No message in the second: nothing to average."""
     module = load_script()
     assert module.summary([]) is None
+
+
+def test_final_summary_passes_when_every_delay_is_within_the_limit():
+    """Three messages under 100 ms: PASS, zero above the limit, the worst named with its time."""
+    module = load_script()
+    lines, passed = module.final_summary([(0.0, 4.0), (1.0, 30.0), (2.0, 5.0)], 100.0)
+    assert passed
+    assert lines[0] == '3 msgs in 2 s'
+    assert lines[1] == 'avg 13.0 ms  max 30.0 ms at 1.0 s'
+    assert lines[2] == '0 msgs above 100 ms'
+    assert lines[-1] == 'PASS: limit 100 ms'
+
+
+def test_final_summary_fails_and_lists_the_late_messages():
+    """Two messages above the limit: FAIL, counted and listed with their time."""
+    module = load_script()
+    samples = [(0.0, 5.0), (15.2, 103.0), (16.1, 117.9), (20.0, 6.0)]
+    lines, passed = module.final_summary(samples, 100.0)
+    assert not passed
+    assert lines[2] == '2 msgs above 100 ms'
+    assert lines[3] == 'first: 103.0 ms at 15.2 s, 117.9 ms at 16.1 s'
+    assert lines[-1] == 'FAIL: limit 100 ms'
+
+
+def test_final_summary_of_nothing_fails():
+    """No message at all is not a pass: nothing was measured."""
+    module = load_script()
+    lines, passed = module.final_summary([], 100.0)
+    assert not passed
+    assert lines == ['no messages received']
+
+
+def test_write_results_makes_the_csv_and_the_summary(tmp_path):
+    """delays.csv has a header and one line per message, summary.txt the lines given."""
+    module = load_script()
+    module.write_results(str(tmp_path), [(0.0, 4.0), (0.02, 5.5)], ['3 msgs', 'PASS'])
+    assert (tmp_path / 'delays.csv').read_text() == 'seconds,delay_ms\n0.000,4.000\n0.020,5.500\n'
+    assert (tmp_path / 'summary.txt').read_text() == '3 msgs\nPASS\n'
