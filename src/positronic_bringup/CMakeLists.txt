@@ -12,6 +12,6 @@ if(BUILD_TESTING)
 endif()
 
 # Copy the folders to install/.
-install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config worlds DESTINATION share/${PROJECT_NAME})
 
 ament_package()

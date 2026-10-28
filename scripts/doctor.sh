@@ -49,6 +49,28 @@ else
   printf '  [skip]   %-22s %s\n' "display" "DISPLAY not set, GUI apps will not open"
 fi
 
+# GPU: Gazebo's renderer needs OpenGL 3.3 core. glxinfo ships in the image (mesa-utils).
+if [ -n "${DISPLAY:-}" ] && command -v glxinfo > /dev/null; then
+  gl=$(glxinfo -B 2> /dev/null)
+  renderer=$(echo "$gl" | sed -n 's/^OpenGL renderer string: //p')
+  core=$(echo "$gl" | sed -n 's/^OpenGL core profile version string: \([0-9]*\.[0-9]*\).*/\1/p')
+  compat=$(echo "$gl" | sed -n 's/^OpenGL version string: \([0-9]*\.[0-9]*\).*/\1/p')
+  if [ -z "$renderer" ]; then
+    printf '  \033[31m[fail]\033[0m %-22s %s\n' "OpenGL" "no OpenGL context on ${DISPLAY} (run it from make shell, not over ssh)"
+    failed=1
+  elif [ -z "$core" ]; then
+    printf '  \033[31m[fail]\033[0m %-22s %s\n' "OpenGL" "no core profile (${renderer}, OpenGL ${compat:-?}), Gazebo will crash. Set GPU=sw in .env"
+    failed=1
+  elif ! awk -v v="$core" 'BEGIN { exit !(v >= 3.3) }'; then
+    printf '  \033[31m[fail]\033[0m %-22s %s\n' "OpenGL" "core ${core} < 3.3, Gazebo will crash. Set GPU=sw in .env"
+    failed=1
+  elif [[ "$renderer" == *llvmpipe* ]] && [ "${LIBGL_ALWAYS_SOFTWARE:-}" != "1" ]; then
+    printf '  \033[33m[warn]\033[0m %-22s %s\n' "OpenGL" "software rendering (${renderer}), Gazebo will be slow. Set GPU=dri or GPU=nvidia in .env"
+  else
+    printf '  \033[32m[ok]\033[0m   %-22s %s\n' "OpenGL" "${renderer} (core ${core})"
+  fi
+fi
+
 if [ -n "${ARM_IP:-}" ]; then
   check "arm ${ARM_IP}:${ARM_PORT:-22}" python3 -c "
 import socket
