@@ -24,7 +24,8 @@
 #   driver.launch.py). Expand it with xacro (default arguments and backend:=fake) and check
 #   that: the robot keeps all links and joints of the positronic_description URDF (the name is
 #   positronic, as in the Gazebo xacro); the <ros2_control> block uses
-#   positronic_hardware/RobotSystem; the backend, serial_port and baud_rate parameters carry
+#   positronic_hardware/RobotSystem; the backend, port and baud parameters (the names the
+#   plugin reads in on_init, #22) carry
 #   the xacro arguments; the joints of the
 #   block are exactly the six revolute joints of the URDF, in URDF order; and every joint has
 #   position and velocity state interfaces and no command interface (read-only until #32).
@@ -87,13 +88,13 @@ def test_uses_the_positronic_plugin():
 def test_defaults_select_the_real_arm():
     """Check the default parameters: the serial backend on the Jetson UART."""
     assert hardware_params(expand()) == {
-        'backend': 'serial', 'serial_port': '/dev/ttyTHS1', 'baud_rate': '1000000'}
+        'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000'}
 
 
 def test_arguments_reach_the_plugin():
     """Check that the xacro arguments become the plugin parameters."""
-    params = hardware_params(expand(backend='fake', serial_port='/dev/null', baud_rate='115200'))
-    assert params == {'backend': 'fake', 'serial_port': '/dev/null', 'baud_rate': '115200'}
+    params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200'))
+    assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200'}
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():

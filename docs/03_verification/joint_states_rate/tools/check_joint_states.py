@@ -194,7 +194,7 @@ def evaluate(samples, rate_hz, limits, min_duration_s=600.0, rate_tolerance=0.05
 
 def _reference_criterion(samples, joint_order, reference_deg, tolerance_deg):
     """Compare the mean of the first samples, in degrees, with angles read by pymycobot."""
-    # Skip the start pose published before the first serial reply: it is not a measurement.
+    # Skip an all-zero placeholder pose at the start, should the driver ever publish one.
     first = samples[leading_zero_samples(samples):][:50]
     errors = []
     for name, expected in zip(joint_order, reference_deg):
@@ -250,8 +250,8 @@ def report_lines(criteria, header_stats, leading_zeros, rate_hz):
         f'max {header_stats.max_ms:.1f} ms (controller manager stamps, nominal '
         f'{1000.0 / rate_hz:.1f} ms)')
     if leading_zeros:
-        lines.append(f'warn  start      {leading_zeros} leading messages are all zeros: the '
-                     'start pose published before the first serial reply')
+        lines.append(f'warn  start      {leading_zeros} leading messages are all zeros: a '
+                     'placeholder pose, which #22 should not publish (report it there)')
     verdict = all(c.passed for c in criteria)
     lines.append(f'\nOVERALL: {"PASS" if verdict else "FAIL"}')
     return lines

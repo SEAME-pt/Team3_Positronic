@@ -18,8 +18,9 @@ backend, records 10 minutes, and checks the recording against the acceptance cri
 
 ## Before you start
 
-- **The plugin reads the backend parameters.** `backend`, `serial_port` and `baud_rate` in
-  `on_init`, the names used by `positronic_description/urdf/positronic_real.urdf.xacro`.
+- **#22 is merged** (PR #88). The plugin reads `backend`, `port` and `baud` in `on_init`, the
+  names `positronic_description/urdf/positronic_real.urdf.xacro` passes, and rejects any other
+  name.
 - **The rate.** #20 measured `get_angles` alone at 101 Hz on average (one call up to 21 ms) but
   did not fix a read rate. The working value is 50 Hz, explained in
   `positronic_bringup/config/jetson_controllers.yaml`. Pass another one with
@@ -31,8 +32,9 @@ From the issue: arm powered, no motion commands, bench clear.
 
 - The launch is read-only: the plugin has no command interface, so no controller can move the
   arm. Do not start any other controller or script that sends `send_angles` during the run.
-- One process on `/dev/ttyTHS1` at a time. Close any `pymycobot` session, capture script or
-  other container that opens the port. (The boot service container does not open it.)
+- One process on `/dev/ttyTHS1` at a time. The driver locks the port (`TIOCEXCL`): while it
+  runs, `pymycobot` or a second driver cannot open it. That is why step 2 reads the reference
+  angles before the launch. (The boot service container does not open the port.)
 - If the arm is powered off, `get_angles` gets no reply. `power_on` locks the servos where they
   are: hold the arm while you send it.
 
@@ -102,17 +104,22 @@ document, not the bag.
 - `periods` fails but `info header` is steady: the control loop kept time and the messages were
   late on the way (DDS, CPU load from recording). Fails with a slow header too: the control loop
   itself stalled (look at `read()` and the serial thread).
-- `warn start`: the first messages were all zeros. That is `SerialArm`'s start pose, published
-  before the first serial reply (see the limitations below).
+- `warn start`: the first messages were all zeros. Since #22 this should not happen: the plugin
+  reports NaN until the arm's first reply and does not activate without it. If it shows up, the
+  driver published a placeholder pose; report it in #22.
+- The launch stops with `The arm did not answer within 1000 ms`: activation waits up to 1 s for
+  the first reply. The arm is off, on another port, or another process holds the port.
 
-## Known limitations (to discuss in #22)
+## Known limitations (from #22)
 
 - **Publish rate is not sample rate.** The broadcaster publishes once per control cycle, from
   the latest sample of the serial thread. The thread polls on its own clock: one `get_angles`
   round trip (about 11 ms in the 2026-10-16 capture) plus `SerialArm::POLL_PERIOD` (10 ms), so
   roughly 45 to 50 new samples per second. With `update_rate` above that, `/joint_states` keeps
   its rate but repeats values, and `ros2 topic hz` cannot see it. The #23 criteria measure the
-  publish rate; making the poll period follow `update_rate` belongs to #22.
-- **Start pose before the first reply.** `SerialArm` returns all zeros until the first reply,
-  and the plugin publishes them as a real pose for a few cycles. Waiting for the first sample
-  before `on_activate` succeeds would fix it in #22.
+  publish rate.
+- **Velocity uses the control period as dt.** Above the sample rate, a repeated sample reads as
+  zero velocity for that cycle, so the velocity is underestimated. #23 does not check velocity.
+- **A silent link is not detected.** If the arm stops answering after activation, the last pose
+  keeps being published. A frozen value during the run (all positions identical for many
+  seconds while the arm is moved by hand) points to this.

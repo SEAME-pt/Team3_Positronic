@@ -32,8 +32,8 @@ ROS_DOMAIN_ID would publish every transform twice.
 
 Launch arguments:
   backend:=serial|fake        fake stands still, to try the launch without the arm
-  serial_port:=/dev/ttyTHS1   the arm's UART
-  baud_rate:=1000000          the arm's firmware rate
+  port:=/dev/ttyTHS1          the arm's UART
+  baud:=1000000               the arm's firmware rate (115200 or 1000000)
   update_rate:=50             Hz, of the control loop and of /joint_states
 """
 
@@ -49,12 +49,12 @@ def generate_launch_description():
     backend = DeclareLaunchArgument(
         'backend', default_value='serial',
         description='serial: the real arm. fake: a standing arm, no serial port.')
-    serial_port = DeclareLaunchArgument(
-        'serial_port', default_value='/dev/ttyTHS1',
+    port = DeclareLaunchArgument(
+        'port', default_value='/dev/ttyTHS1',
         description='Serial port of the arm.')
-    baud_rate = DeclareLaunchArgument(
-        'baud_rate', default_value='1000000',
-        description='Baud rate of the arm serial link.')
+    baud = DeclareLaunchArgument(
+        'baud', default_value='1000000',
+        description='Baud rate of the arm serial link: 115200 or 1000000.')
     # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
     # without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -72,8 +72,8 @@ def generate_launch_description():
                 FindPackageShare('positronic_description'), 'urdf', 'positronic_real.urdf.xacro',
             ]),
             ' backend:=', LaunchConfiguration('backend'),
-            ' serial_port:=', LaunchConfiguration('serial_port'),
-            ' baud_rate:=', LaunchConfiguration('baud_rate'),
+            ' port:=', LaunchConfiguration('port'),
+            ' baud:=', LaunchConfiguration('baud'),
         ]),
         value_type=str)
 
@@ -108,8 +108,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         backend,
-        serial_port,
-        baud_rate,
+        port,
+        baud,
         update_rate,
         robot_state_publisher,
         control_node,
