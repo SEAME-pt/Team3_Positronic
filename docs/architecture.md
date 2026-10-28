@@ -60,7 +60,7 @@ QoS will filled for the topics once we have working nodes. Can be checked using 
 
 ## 6. Draft timing budget
 
-All numbers are **low-latency, soft-deadline** targets. Evidence is in `docs/evidence/serial_link.md`.
+All numbers are **low-latency, soft-deadline** targets. Evidence is in `docs/03_verification/serial_measurement/docs/serial_link.md`.
 
 ### Per loop
 
