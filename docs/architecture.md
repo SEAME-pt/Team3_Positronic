@@ -66,7 +66,7 @@ All numbers are **low-latency, soft-deadline** targets. Evidence is in `docs/evi
 
 | Loop | Owner | Rate / period | Budget | Evidence |
 |---|---|---|---|---|
-| Setpoint generation | B | 30 Hz / 33 ms | undefined | Got starting point based on the `serial_link.md` findings. Starting point, prone to changes |
+| Trajectory sampling (JointTrajectoryController in controller_manager) | A | update_rate of the controller_manager | undefined | MoveIt (B) sends the whole trajectory once. The controller samples it; the serial write in write() is the 30 Hz stream below |
 | Driver write tick | A | 30 Hz / 33 ms | write call <= 11 ms at p99; lateness p99 < 0.6 ms | measured, write-only (fresh mode 1, 5 runs): write p50 about 9 ms, p99 10.6 to 10.8 ms, max 19 to 24 ms, lateness p99 < 0.6 ms, 0 stalls in 18,005 writes. With reads in the stream the write rate was lower (see port budget) |
 | Driver read tick | A | 2 Hz / 500 ms (on read + write) | 20 to 70 ms when not stalled | measured, interleaved with 30 Hz writes: 48 of 137 reads stalled (35%), the rest took about 20 to 70 ms. Read alone: p50 9.3 ms, p99 16 ms, no stalls |
 | Link health | A | every serial call | A call over 450 ms is a stall. It is seen only when the call returns, 0.5 to 1.5 s after it started | measured: no call took 100 to 450 ms (4 interleaved runs, and the write runs in serial_link.md). Stalls took 0.52 to 1.08 s in the interleaved runs, up to 1.5 s in write-only runs |
