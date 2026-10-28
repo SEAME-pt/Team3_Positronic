@@ -67,6 +67,9 @@ public:
   /// loop. Before the first reply arrives it returns START_POSE, never NaN.
   [[nodiscard]] JointPositions read_angles() const override;
 
+  /// True once the thread has decoded a first reply from the arm.
+  [[nodiscard]] bool has_sample() const override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
@@ -77,6 +80,7 @@ private:
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   mutable realtime_tools::RealtimeBuffer<JointPositions> latest_{START_POSE};
   std::atomic<bool> stop_{false};
+  std::atomic<bool> has_sample_{false};
   std::thread thread_;
 };
 
