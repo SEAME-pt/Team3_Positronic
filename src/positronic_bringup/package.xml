@@ -28,6 +28,7 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <!-- test_robot_description.py: expands the real arm xacro. -->
+  <!-- test_joint_states_delay.py and test_joint_states_check.py. -->
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>python3-pytest</test_depend>

@@ -91,9 +91,17 @@ Do it in this order: the driver locks the port, so `pymycobot` cannot read once 
 ```bash
 export ROS_DOMAIN_ID=17            # the Jetson container uses 17 (Makefile)
 ros2 topic hz /joint_states        # 50 Hz expected
-ros2 topic echo --once /joint_states   # six URDF names, positions = reference in radians
 ros2 launch positronic_bringup mirror.launch.py
 ```
+
+The radians check, with the six angles the Jetson printed:
+
+```bash
+ros2 run positronic_bringup joint_states_check.py --reference-deg "16.87,-16.17,25.48,-10.45,1.23,0.26"
+```
+
+One line per joint, published and reference in degrees and the difference, then PASS or FAIL
+against 0.5 deg. A joint that moved after the reference was taken shows up here as a FAIL.
 
 RViz opens with the model in the pose of the real arm. Move the joints by hand, one at a time
 from the base to the flange: the model must follow and turn the same way. A mirrored joint is a
