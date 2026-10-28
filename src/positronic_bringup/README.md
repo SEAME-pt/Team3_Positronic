@@ -34,11 +34,17 @@ source ../Positronic_host/install/setup.bash
 ros2 launch positronic_bringup gazebo.launch.py
 ```
 
-Gazebo opens with the arm standing in an empty world. The launch ends when you close Gazebo.
-In a second terminal, after `source install/setup.bash`:
+Gazebo opens with the arm standing on the bench of `worlds/workcell.sdf`. The launch ends when
+you close Gazebo. `world:=workcell_pick.sdf` loads the same bench with a cube on a pedestal and a
+fixed camera, for `docs/03_verification/gazebo_pick`. The wrist camera of the URDF is bridged to
+`/wrist_camera/image_raw` and `/wrist_camera/camera_info` (`ros2 run rqt_image_view
+rqt_image_view` shows it). The five finger joints of the gripper follow `gripper_controller`:
+they are listed in `positronic_gazebo.urdf.xacro` with no command interface, which is what makes
+`gz_ros2_control` drive them from the URDF mimic tags. In a second terminal, after
+`source install/setup.bash`:
 
 ```bash
-ros2 control list_controllers      # both must say "active"
+ros2 control list_controllers      # the three must say "active"
 ```
 
 A 3-point trajectory, 9 s, through the action the MoveIt side will use:

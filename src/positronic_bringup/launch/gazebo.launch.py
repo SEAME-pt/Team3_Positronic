@@ -26,14 +26,16 @@ Gazebo, robot_state_publisher, the /clock bridge and the spawn start together:
 the spawn waits for Gazebo and for robot_description by itself. The two
 controller spawners are chained after the spawn exits: joint_state_broadcaster
 first, then arm_controller. The /clock bridge makes ROS 2 follow the
-simulation time.
+simulation time, and the same bridge carries the wrist camera image to
+/wrist_camera/image_raw. The world argument picks a file from worlds/.
 """
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
+from launch.actions import SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -45,10 +47,14 @@ def generate_launch_description():
         'GZ_SIM_RESOURCE_PATH',
         PathJoinSubstitution([FindPackageShare('positronic_description'), '..']))
 
-    # Workcell world from this package, by full path. -r runs it from the start.
-    # Closing Gazebo ends the launch.
+    # A world from this package's worlds/ folder. workcell.sdf is the bench and the walls;
+    # workcell_pick.sdf adds a cube on a pedestal and a fixed camera, for the pick verification.
+    world_arg = DeclareLaunchArgument(
+        'world', default_value='workcell.sdf',
+        description='World file in positronic_bringup/worlds.')
+    # Full path. -r runs it from the start. Closing Gazebo ends the launch.
     world = PathJoinSubstitution(
-        [FindPackageShare('positronic_bringup'), 'worlds', 'workcell.sdf'])
+        [FindPackageShare('positronic_bringup'), 'worlds', LaunchConfiguration('world')])
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('ros_gz_sim'), 'launch', 'gz_sim.launch.py'])),
@@ -75,12 +81,14 @@ def generate_launch_description():
         output='both',
         parameters=[{'robot_description': robot_description, 'use_sim_time': True}])
 
-    # Simulation time from Gazebo to ROS 2.
-    clock_bridge = Node(
+    # Gazebo to ROS 2: the simulation time, and the image of the wrist camera of the URDF.
+    bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         output='both',
-        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'])
+        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+                   '/wrist_camera/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
+                   '/wrist_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'])
 
     # Reads robot_description and creates the arm in Gazebo, on top of the
     # 0.75 m bench of workcell.sdf.
@@ -109,10 +117,11 @@ def generate_launch_description():
         arguments=['arm_controller', '--param-file', controllers_yaml])
 
     return LaunchDescription([
+        world_arg,
         resource_path,
         gazebo,
         robot_state_publisher,
-        clock_bridge,
+        bridge,
         spawn_arm,
         # The controller_manager only exists after the spawn, so chain the spawners.
         RegisterEventHandler(
