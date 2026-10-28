@@ -1,0 +1,68 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /MotionPlanning1
+        - /RobotModel1
+        - /TF1
+      Splitter Ratio: 0.5
+    Tree Height: 700
+  - Class: rviz_common/Selection
+    Name: Selection
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 20
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Marker Scale: 0.3
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Enabled: true
+      Move Group Namespace: ""
+      MoveIt_Allow_External_Program: true
+      Planned Path:
+        Loop Animation: false
+        State Display Time: 0.05 s
+        Trajectory Topic: /display_planned_path
+      Planning Request:
+        Planning Group: arm
+      Scene Geometry:
+        Scene Alpha: 0.25
+        Scene Color: 170; 210; 255
+      Scene Robot:
+        Robot Alpha: 0.7
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 2.0
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.2
+      Name: Current View
+      Pitch: 0.4
+      Yaw: 0.6
+Window Geometry:
+  Height: 1000
+  Width: 1500

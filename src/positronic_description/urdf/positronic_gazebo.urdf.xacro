@@ -10,7 +10,7 @@
   <xacro:arg name="controllers_file" default=""/>
 
   <!-- Links, joints and meshes of the arm. -->
-  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
+  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we command position, we read position. -->
   <xacro:macro name="arm_joint" params="name">
@@ -31,6 +31,11 @@
     <xacro:arm_joint name="joint5_to_joint4"/>
     <xacro:arm_joint name="joint6_to_joint5"/>
     <xacro:arm_joint name="joint6output_to_joint6"/>
+    <joint name="gripper_controller">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
   </ros2_control>
 
   <!-- Gazebo loads this plugin with the model. It starts the controller_manager with this yaml. -->
