@@ -35,7 +35,7 @@ Use these terms exactly, in docs, code comments and reviews.
 ```
 
 Rules:
-- Block C acts as a quality control for all blocks. Doesn't talk directly with the arm.
+- Block C acts as a quality control for all blocks. It measures the arm (#20) but ships no code that talks to it.
 - Each layer talks only to the layer directly below it, through ROS interfaces.
 - Silence does not stop the arm (measured): if commands stop mid-motion, the arm finishes the move to the last commanded target.
 - Only L2 touches the serial port.
