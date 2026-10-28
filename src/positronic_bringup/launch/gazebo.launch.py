@@ -45,11 +45,14 @@ def generate_launch_description():
         'GZ_SIM_RESOURCE_PATH',
         PathJoinSubstitution([FindPackageShare('positronic_description'), '..']))
 
-    # Empty world, -r runs it from the start. Closing Gazebo ends the launch.
+    # Workcell world from this package, by full path. -r runs it from the start.
+    # Closing Gazebo ends the launch.
+    world = PathJoinSubstitution(
+        [FindPackageShare('positronic_bringup'), 'worlds', 'workcell.sdf'])
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('ros_gz_sim'), 'launch', 'gz_sim.launch.py'])),
-        launch_arguments={'gz_args': '-r empty.sdf', 'on_exit_shutdown': 'true'}.items())
+        launch_arguments={'gz_args': ['-r ', world], 'on_exit_shutdown': 'true'}.items())
 
     controllers_yaml = PathJoinSubstitution(
         [FindPackageShare('positronic_bringup'), 'config', 'ros2_controllers.yaml'])
@@ -70,7 +73,7 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='both',
-        parameters=[{'robot_description': robot_description, 'use_sim_time': True}])
+        parameters=[{'robot_description': robot_description, 'use_sim_time': True}]) #Debug 'publish_frequency': 30.0
 
     # Simulation time from Gazebo to ROS 2.
     clock_bridge = Node(
@@ -79,18 +82,25 @@ def generate_launch_description():
         output='both',
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'])
 
-    # Reads robot_description and creates the arm in Gazebo.
+    # Reads robot_description and creates the arm in Gazebo, on top of the
+    # 0.75 m bench of workcell.sdf.
     spawn_arm = Node(
         package='ros_gz_sim',
         executable='create',
         output='both',
-        arguments=['-topic', 'robot_description', '-name', 'positronic'])
+        arguments=['-topic', 'robot_description', '-name', 'positronic', '-z', '0.75'])
 
     joint_state_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
         output='both',
         arguments=['joint_state_broadcaster'])
+
+    gripper_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='both',
+        arguments=['gripper_action_controller', '--param-file', controllers_yaml])
 
     arm_controller = Node(
         package='controller_manager',
@@ -109,4 +119,6 @@ def generate_launch_description():
             OnProcessExit(target_action=spawn_arm, on_exit=[joint_state_broadcaster])),
         RegisterEventHandler(
             OnProcessExit(target_action=joint_state_broadcaster, on_exit=[arm_controller])),
+        RegisterEventHandler(
+            OnProcessExit(target_action=arm_controller, on_exit=[gripper_controller])),
     ])

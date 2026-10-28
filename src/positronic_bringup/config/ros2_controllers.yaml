@@ -9,6 +9,8 @@ controller_manager:
       type: joint_state_broadcaster/JointStateBroadcaster
     arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
+    gripper_action_controller:
+      type: position_controllers/GripperActionController
 
 # Name used by MoveIt and the real arm: /arm_controller/follow_joint_trajectory
 arm_controller:
@@ -25,3 +27,7 @@ arm_controller:
     # Position only: the arm firmware gives no velocity (get_servo_speeds would cost a second serial read).
     state_interfaces:
       - position
+
+gripper_action_controller:
+  ros__parameters:
+    joint: gripper_controller

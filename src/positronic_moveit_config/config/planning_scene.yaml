@@ -1,0 +1,28 @@
+frame_id: g_base
+
+objects:
+  - id: bench
+    type: box
+    size: [0.70, 0.70, 0.04]
+    pose: { x: 0.00, y: 0.00, z: -0.025, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+
+  - id: wall_front
+    type: box
+    size: [0.02, 0.68, 0.60]
+    pose: { x: 0.33, y: 0.00, z: 0.30, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  - id: wall_back
+    type: box
+    size: [0.02, 0.68, 0.60]
+    pose: { x: -0.33, y: 0.00, z: 0.30, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  - id: wall_left
+    type: box
+    size: [0.64, 0.02, 0.60]
+    pose: { x: 0.00, y: 0.33, z: 0.30, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  - id: wall_right
+    type: box
+    size: [0.64, 0.02, 0.60]
+    pose: { x: 0.00, y: -0.33, z: 0.30, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  - id: roof
+    type: box
+    size: [0.68, 0.68, 0.02]
+    pose: { x: 0.00, y: 0.00, z: 0.61, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
