@@ -73,7 +73,8 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='both',
-        parameters=[{'robot_description': robot_description, 'use_sim_time': True}]) #Debug 'publish_frequency': 30.0
+        parameters=[{'robot_description': robot_description, 'use_sim_time': True}])
+    # Debug 'publish_frequency': 30.0
 
     # Simulation time from Gazebo to ROS 2.
     clock_bridge = Node(
