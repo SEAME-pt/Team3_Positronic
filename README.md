@@ -24,7 +24,7 @@ sudo usermod -aG docker $USER      # then log out and back in
 ## Daily use
 
 ```bash
-make image           # build the dev image (first time: 10-20 min)
+make image           # build the dev image (first time: a few minutes up to 20)
 make doctor          # check the environment
 make shell           # shell in the container, repo mounted at /ws
 make build           # colcon build
@@ -35,7 +35,9 @@ make format          # format src/ (clang-format, then ROS uncrustify), changes 
 make help            # all targets
 ```
 
-`ARM_IP=<jetson ip> make doctor` also checks that the Jetson is reachable.
+Per-machine settings (the GPU mode, the Jetson's IP) live in `.env`: `cp .env.example .env`, then edit it
+(see [docs/build.md](docs/build.md), "GPU for Gazebo and RViz"). With `ARM_IP` set, `make doctor` also checks
+that the Jetson is reachable.
 
 ## Errors and warnings in your editor (dev container)
 

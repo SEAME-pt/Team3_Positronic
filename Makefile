@@ -1,9 +1,34 @@
+-include .env
+
+# GPU for Gazebo and RViz in the dev container: dri, nvidia or sw. Empty means no GPU override.
+# Set it in .env (see .env.example); each value is a file in docker/gpu/.
+# One-off override: "make GPU=sw shell". Not "GPU=sw make shell". A variable in .env beats the environment.
+GPU ?=
+# Make keeps trailing spaces in values ("GPU=sw " in .env would be "sw "). override: also
+# strips a value given on the command line, which a plain assignment can't change.
+override GPU := $(strip $(GPU))
+
 COMPOSE ?= docker compose
 # Inside a container (the dev container's terminal) run commands directly;
 # on the host, run them in a throwaway dev container.
 ifneq ($(wildcard /.dockerenv),)
   RUN :=
 else
+  ifneq ($(GPU),)
+    ifeq ($(wildcard docker/gpu/$(GPU).yaml),)
+      $(error GPU=$(GPU) is not valid: use one of $(basename $(notdir $(wildcard docker/gpu/*.yaml))))
+    endif
+    COMPOSE += -f compose.yaml -f docker/gpu/$(GPU).yaml
+    ifeq ($(GPU),dri)
+      # The container's user must be in the host's video and render groups to open /dev/dri.
+      # Numbers, not names: the image has no "render" group, and the number differs per machine.
+      export VIDEO_GID  := $(shell stat -c %g /dev/dri/card* 2>/dev/null | head -n 1)
+      export RENDER_GID := $(shell stat -c %g /dev/dri/renderD* 2>/dev/null | head -n 1)
+      ifeq ($(RENDER_GID),)
+        $(error GPU=dri but this machine has no /dev/dri/renderD*; try GPU=sw)
+      endif
+    endif
+  endif
   RUN := $(COMPOSE) run --rm dev
 endif
 
@@ -22,7 +47,7 @@ ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI
 .PHONY: help image shell build test format format-check tidy doctor clean fclean
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+	@grep -h -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
 image: ## Build the dev image
 	$(COMPOSE) build
@@ -59,24 +84,32 @@ fclean: clean ## Full clean: remove this project's containers, images and volume
 # ---------- Jetson (one shared machine, user er) ----------
 NANO          ?= nano
 NANO_DIR      ?= positronic/$(USER)
-NANO_IMAGE    := positronic-dev:nano
+# Also written in docker/jetson/positronic-driver.service, change both together.
+NANO_IMAGE    := positronic-runtime:nano
+# The packages the Jetson builds, plus whatever they depend on (colcon --packages-up-to).
+# MoveIt, Gazebo and RViz run on laptops only, so a package that needs them to build stays out
+# of this list. CI builds exactly this list in the runtime image (make nano-packages).
+NANO_PACKAGES := positronic_hardware positronic_bringup
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
 NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) -v \$$HOME/$(NANO_DIR):/ws
 
-.PHONY: nano-image nano-sync nano-build nano-shell nano-service
+.PHONY: nano-image nano-sync nano-build nano-shell nano-service nano-packages
 
-nano-image: ## Build the Jetson image ON the Jetson (once per Dockerfile change)
+nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once per Dockerfile change
 	rsync -a --delete docker/ $(NANO):positronic-docker/
-	ssh $(NANO) 'docker build -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
+	ssh $(NANO) 'docker build --target runtime -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
 
 nano-sync: ## Copy this repo to ~/positronic/<you> on the Jetson
 	ssh $(NANO) mkdir -p $(NANO_DIR)
 	rsync -a --delete --exclude .git --exclude build --exclude install --exclude log ./ $(NANO):$(NANO_DIR)/
 
-nano-build: nano-sync ## Sync, then colcon build on the Jetson
-	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2'"
+nano-build: nano-sync ## Sync, then colcon build NANO_PACKAGES on the Jetson
+	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2 --packages-up-to $(NANO_PACKAGES)'"
+
+nano-packages: ## Print the packages the Jetson builds (CI reads this)
+	@echo $(NANO_PACKAGES)
 
 nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
 	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"

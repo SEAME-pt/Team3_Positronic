@@ -227,7 +227,7 @@ After the sprint review, the Scrum Master:
 
 ### 2.10 Decisions: ADRs
 
-Every technical decision gets an **ADR** (Architecture Decision Record) in `docs/decisions/NNNN-short-title.md`, merged through a PR:
+Every technical decision gets an **ADR** (Architecture Decision Record) in `docs/02_architecture/adr/NNNN-short-title.md`, merged through a PR:
 
 ```markdown
 # NNNN. Title
