@@ -46,9 +46,13 @@ trap 'kill -TERM "${HZ_PID}" 2> /dev/null || true' EXIT
 # recorder in its own process group with SIGINT at its default, so kill -INT reaches it the same
 # way Ctrl+C does; without it a background job ignores SIGINT. We then wait for it to finish
 # writing, however long that takes, instead of killing it.
+#
+# Own process group means background: if the recorder touched the terminal it would be stopped
+# (SIGTTIN/SIGTTOU) before recording anything. Its keyboard controls (SPACE to pause) do that,
+# so they are disabled and stdin comes from /dev/null.
 set -m
-ros2 bag record --output "${OUT_DIR}/bag" --topics "${TOPIC}" \
-  > "${OUT_DIR}/bag_record.log" 2>&1 &
+ros2 bag record --output "${OUT_DIR}/bag" --topics "${TOPIC}" --disable-keyboard-controls \
+  < /dev/null > "${OUT_DIR}/bag_record.log" 2>&1 &
 BAG_PID=$!
 set +m
 
@@ -56,6 +60,19 @@ stop_bag() {
   kill -INT "${BAG_PID}" 2> /dev/null || true
   wait "${BAG_PID}" 2> /dev/null || true
 }
+
+# Fail in seconds, not after 10 minutes: the recorder creates the bag folder as it starts.
+for _ in $(seq 1 10); do
+  [ -d "${OUT_DIR}/bag" ] && break
+  sleep 1
+done
+if [ ! -d "${OUT_DIR}/bag" ]; then
+  echo "ERROR: ros2 bag did not start recording within 10 s. Its log:" >&2
+  cat "${OUT_DIR}/bag_record.log" >&2 || true
+  kill -KILL "${BAG_PID}" 2> /dev/null || true
+  exit 1
+fi
+echo "Bag started in ${OUT_DIR}/bag. Recording until $(date -d "+${DURATION_S} seconds" +%H:%M:%S)."
 
 # A Ctrl+C on the script goes to the script's group, not the recorder's own group, so forward it
 # and still close the bag cleanly before leaving.
