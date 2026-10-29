@@ -153,7 +153,10 @@
   </joint>
   <joint name="joint6output_to_gripper_base" type="fixed">
     <parent link="joint6_flange"/><child link="gripper_base"/>
-    <origin xyz="0 0 0.0505" rpy="1.5708 0 0"/>
+    <!-- Mounted as on the real arm (checked 2026-10-28): turned 180 deg on the flange, with the
+         camera module at 90 deg from the finger line. The sign is to be confirmed with the
+         gripper mounted and joint 6 at zero. -->
+    <origin xyz="0 0 0.0505" rpy="1.5708 0 3.1416"/>
   </joint>
   <link name="gripper_base">
     <visual>
@@ -295,7 +298,7 @@
   </joint>
   <joint name="joint6output_to_camera_flange" type="fixed">
     <parent link="joint6_flange"/><child link="camera_flange"/>
-    <origin xyz="0 0 0.01" rpy="1.5708 0 0"/>
+    <origin xyz="0 0 0.01" rpy="1.5708 0 -1.5708"/>
   </joint>
   <link name="camera_flange">
     <visual>
@@ -314,7 +317,8 @@
   <link name="camera_link"/>
   <joint name="camera_flange_to_camera_link" type="fixed">
     <parent link="camera_flange"/><child link="camera_link"/>
-    <origin xyz="0.0415 0.0083 0.0000" rpy="0 0 1.5708"/>
+    <!-- The roll about the optical axis puts the fingers at the bottom of the image. -->
+    <origin xyz="0.0415 0.0083 0.0000" rpy="1.5708 0 1.5708"/>
   </joint>
   <gazebo reference="camera_link">
     <sensor name="wrist_camera" type="camera">
