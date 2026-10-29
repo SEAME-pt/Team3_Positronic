@@ -41,7 +41,7 @@ Launch arguments:
   backend:=serial|fake        fake stands still, to try the launch without the arm
   port:=/dev/ttyTHS1          the arm's UART
   baud:=1000000               the arm's firmware rate (115200 or 1000000)
-  update_rate:=50             Hz, of the control loop and of /joint_states
+  update_rate:=30             Hz, of the control loop and of /joint_states
 """
 
 from launch import LaunchDescription
@@ -65,7 +65,7 @@ def generate_launch_description():
     # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
     # without editing the yaml.
     update_rate = DeclareLaunchArgument(
-        'update_rate', default_value='50',
+        'update_rate', default_value='30',
         description='Hz of the control loop, and so of /joint_states.')
 
     controllers_yaml = PathJoinSubstitution(
