@@ -67,8 +67,7 @@ launch log is in `~/.ros/log/<date>/launch.log`, one line per process, with time
 The Jetson driver publishes `/joint_states` (#23); `mirror.launch.py` only draws it on a laptop.
 Evidence of the run on the real arm: `docs/03_verification/rviz_mirror/`.
 
-**On the Jetson** (from the laptop, with the `nano` alias of `docs/build.md`; the Jetson needs a
-copy of the repo that contains the driver launch of #23):
+**On the Jetson** (from the laptop, with the `nano` alias of `docs/build.md`):
 
 ```bash
 make nano-build        # sync this repo to the Jetson and build it there
