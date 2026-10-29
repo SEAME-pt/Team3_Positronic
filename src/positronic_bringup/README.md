@@ -109,7 +109,9 @@ summary of the run: messages, average, worst delay and when, how many were above
 (100 by default, the #24 criterion), and PASS or FAIL. `--out` keeps `delays.csv`, one line per
 message, and `summary.txt`. The number is only valid if both machines have NTP active and
 synchronised: `timedatectl` on the laptop and `ssh nano timedatectl`. Start the measurement once
-everything is running.
+everything is running. Over wifi the model follows, but the delay depends on the day: the
+laboratory wifi goes from a few ms to hundreds of ms of ping, and a 2 s burst above 100 ms is
+enough to fail the criterion. Measure over a cable.
 
 Expected: two `robot_state_publisher` nodes publish `/tf` for the same links (the driver's and
 the mirror's). RViz warns and tolerates it. Without the driver, the same launch can be fed by

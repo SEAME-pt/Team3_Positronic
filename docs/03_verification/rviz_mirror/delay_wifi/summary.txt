@@ -1,0 +1,5 @@
+14987 msgs in 300 s
+avg 5.5 ms  max 202.3 ms at 68.4 s
+17 msgs above 100 ms
+first: 108.8 ms at 66.9 s, 110.7 ms at 67.1 s, 123.9 ms at 67.8 s, 104.1 ms at 67.8 s, 118.3 ms at 68.0 s
+FAIL: limit 100 ms
