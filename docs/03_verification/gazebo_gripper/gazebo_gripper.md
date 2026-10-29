@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | Date | 2026-10-29 |
-| Machine | laptop without a GPU, software rendering, `ROS_DOMAIN_ID=66` |
+| Machine | laptop without a GPU, software rendering, `ROS_DOMAIN_ID=18` |
 | Launch | `gazebo.launch.py` with the three controllers, then `move_group.launch.py` |
 | Object | a 2.5 cm cube on a pedestal in front of the arm, in a test world kept outside this PR |
 
