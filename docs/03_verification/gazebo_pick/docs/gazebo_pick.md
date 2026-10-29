@@ -34,6 +34,28 @@ closing, frame 5 shows it held with the pedestal gone from view.
 | MoveIt plans and executes against the planning scene | every move prints `error_code 1` |
 | The cube was lifted | `cube: z 0.8425 -> ... rise ... m` in `pick.log`, read from the Gazebo pose topic |
 
+## Run of 2026-10-29
+
+`make verify V=gazebo_pick` on a laptop without a GPU, software rendering, real-time factor about
+0.2. `figures/pick.log`:
+
+```text
+gripper -> +0.10: at +0.090
+pre-grasp (0.17, 0.0, 0.2525): error_code 1
+grasp (0.17400000000000002, 0.0, 0.1575): straight path 100%
+grasp: executed, error_code 1
+gripper -> -0.60: blocked on the object
+lift (0.17400000000000002, 0.0, 0.2925): straight path 88%
+lift: executed, error_code 1
+cube: z 0.842 -> 0.957 m, rise 0.114 m, needed 0.05
+PASS
+```
+
+Frame 3, at the cube before closing, and frame 5, lifted:
+
+![at the cube](figures/3_at_cube.png)
+![lifted](figures/5_lifted.png)
+
 ## Numbers behind the heights
 
 Measured on the collision meshes of the gripper (2026-10-28): the palm is 3 cm below the
