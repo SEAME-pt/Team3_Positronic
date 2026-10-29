@@ -1,9 +1,0 @@
-gripper -> +0.10: at +0.090
-pre-grasp (0.17, 0.0, 0.2525): error_code 1
-grasp (0.17400000000000002, 0.0, 0.1575): straight path 100%
-grasp: executed, error_code 1
-gripper -> -0.60: blocked on the object
-lift (0.17400000000000002, 0.0, 0.2925): straight path 88%
-lift: executed, error_code 1
-cube: z 0.842 -> 0.957 m, rise 0.114 m, needed 0.05
-PASS

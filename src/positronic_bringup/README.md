@@ -35,8 +35,7 @@ ros2 launch positronic_bringup gazebo.launch.py
 ```
 
 Gazebo opens with the arm standing on the bench of `worlds/workcell.sdf`. The launch ends when
-you close Gazebo. `world:=workcell_pick.sdf` loads the same bench with a cube on a pedestal and a
-fixed camera, for `docs/03_verification/gazebo_pick`. The wrist camera of the URDF is bridged to
+you close Gazebo. `world:=<file>` loads another world from `worlds/`. The wrist camera of the URDF is bridged to
 `/wrist_camera/image_raw` and `/wrist_camera/camera_info` (`ros2 run rqt_image_view
 rqt_image_view` shows it). The five finger joints of the gripper follow `gripper_controller`:
 they are listed in `positronic_gazebo.urdf.xacro` with no command interface, which is what makes

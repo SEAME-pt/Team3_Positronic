@@ -47,8 +47,8 @@ def generate_launch_description():
         'GZ_SIM_RESOURCE_PATH',
         PathJoinSubstitution([FindPackageShare('positronic_description'), '..']))
 
-    # A world from this package's worlds/ folder. workcell.sdf is the bench and the walls;
-    # workcell_pick.sdf adds a cube on a pedestal and a fixed camera, for the pick verification.
+    # A world from this package's worlds/ folder. workcell.sdf is the bench and the walls; a
+    # world with objects for a test goes next to it and is picked here.
     world_arg = DeclareLaunchArgument(
         'world', default_value='workcell.sdf',
         description='World file in positronic_bringup/worlds.')
