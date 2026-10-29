@@ -1,0 +1,16 @@
+# Controllers of the real arm on the Jetson (#23). Read by ros2_control_node in
+# driver.launch.py. Separate from ros2_controllers.yaml (Gazebo) because the real driver is
+# read-only until #32: it exports no command interface, so arm_controller cannot load here.
+controller_manager:
+  ros__parameters:
+    # Hz. Also the /joint_states publish rate, since joint_state_broadcaster publishes once
+    # per update.
+    #
+    # #20 measured get_angles alone at 101 Hz on average, but one call takes up to 21 ms
+    # (p99 16 ms) and #20 does not fix a read rate. SerialArm polls with a read (~10 ms) plus
+    # a 10 ms sleep, so a fresh sample arrives about every 20 ms: 50 Hz. Publishing faster
+    # would only repeat the same sample. At 50 Hz the #23 limit (no period over 2x) is 40 ms,
+    # above the slowest read #20 recorded. Confirm with the 10 minute run before closing #23.
+    update_rate: 30
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster

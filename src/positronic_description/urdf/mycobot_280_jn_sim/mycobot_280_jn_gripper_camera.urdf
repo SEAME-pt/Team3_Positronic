@@ -1,0 +1,345 @@
+<?xml version="1.0"?>
+<robot name="mycobot_280_jn">
+  <link name="world"/>
+  <joint name="world_to_g_base" type="fixed"><parent link="world"/><child link="g_base"/><origin xyz="0 0 0" rpy="0 0 0"/></joint>
+
+  <link name="g_base">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/g_base.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/g_base.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.000004 0.000000 0.016000" rpy="0 0 0"/>
+      <mass value="0.18415"/>
+      <inertia ixx="3.5748e-04" ixy="5.8017e-10" ixz="1.5028e-14" iyy="1.9952e-04" iyz="-4.0912e-09" izz="5.2559e-04"/>
+    </inertial>
+  </link>
+  <joint name="g_base_to_joint1" type="fixed"><parent link="g_base"/><child link="joint1"/><origin xyz="0 0 0.0320" rpy="0 0 0"/></joint>
+
+  <link name="joint1">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint1.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint1.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.000007 -0.000080 0.049738" rpy="0 0 0"/>
+      <mass value="0.50875"/>
+      <inertia ixx="1.2317e-03" ixy="6.9182e-09" ixz="-6.2406e-08" iyy="9.2410e-04" iyz="1.1339e-06" izz="1.1863e-03"/>
+    </inertial>
+  </link>
+  <link name="joint2">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint2.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint2.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.000000 -0.006642 -0.021543" rpy="0 0 0"/>
+      <mass value="0.06376"/>
+      <inertia ixx="4.6518e-05" ixy="-1.4217e-10" ixz="4.0220e-11" iyy="4.1988e-05" iyz="5.2079e-06" izz="2.3962e-05"/>
+    </inertial>
+  </link>
+  <link name="joint3">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint3.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint3.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.054329 -0.000001 0.055329" rpy="0 0 0"/>
+      <mass value="0.11283"/>
+      <inertia ixx="4.0982e-05" ixy="-4.4556e-09" ixz="-7.0957e-07" iyy="2.1152e-04" iyz="-8.7142e-10" izz="2.0504e-04"/>
+    </inertial>
+  </link>
+  <link name="joint4">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint4.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint4.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.045854 0.000000 0.007555" rpy="0 0 0"/>
+      <mass value="0.08998"/>
+      <inertia ixx="3.0322e-05" ixy="2.4186e-09" ixz="-2.9578e-06" iyy="1.3482e-04" iyz="1.3086e-09" izz="1.2647e-04"/>
+    </inertial>
+  </link>
+  <link name="joint5">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint5.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint5.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.000001 -0.009519 -0.008481" rpy="0 0 0"/>
+      <mass value="0.02887"/>
+      <inertia ixx="1.1107e-05" ixy="2.2157e-10" ixz="1.0327e-10" iyy="8.0087e-06" iyz="1.5831e-06" izz="8.7282e-06"/>
+    </inertial>
+  </link>
+  <link name="joint6">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint6.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint6.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.000000 0.005619 -0.009142" rpy="0 0 0"/>
+      <mass value="0.03611"/>
+      <inertia ixx="1.6575e-05" ixy="1.3007e-11" ixz="9.1115e-11" iyy="1.1852e-05" iyz="-8.2298e-07" izz="1.2374e-05"/>
+    </inertial>
+  </link>
+  <link name="joint6_flange">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/joint6_flange.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/joint6_flange.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.000000 -0.000000 -0.005150" rpy="0 0 0"/>
+      <mass value="0.00556"/>
+      <inertia ixx="5.9851e-07" ixy="-5.1008e-24" ixz="1.4442e-24" iyy="5.9851e-07" iyz="-7.4388e-16" izz="1.0234e-06"/>
+    </inertial>
+  </link>
+  <joint name="joint2_to_joint1" type="revolute">
+    <parent link="joint1"/><child link="joint2"/>
+    <origin xyz="0 0 0.15756" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-2.9321" upper="2.9321" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint3_to_joint2" type="revolute">
+    <parent link="joint2"/><child link="joint3"/>
+    <origin xyz="0 0 -0.001" rpy="0 1.5708 -1.5708"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-2.4434" upper="2.4434" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint4_to_joint3" type="revolute">
+    <parent link="joint3"/><child link="joint4"/>
+    <origin xyz="-0.1104 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-2.6179" upper="2.6179" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint5_to_joint4" type="revolute">
+    <parent link="joint4"/><child link="joint5"/>
+    <origin xyz="-0.096 0 0.06462" rpy="0 0 -1.5708"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-2.6179" upper="2.6179" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint6_to_joint5" type="revolute">
+    <parent link="joint5"/><child link="joint6"/>
+    <origin xyz="0 -0.07318 0" rpy="1.5708 -1.5708 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-2.7052" upper="2.7925" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint6output_to_joint6" type="revolute">
+    <parent link="joint6"/><child link="joint6_flange"/>
+    <origin xyz="0 0.0456 0" rpy="-1.5708 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-3.14159" upper="3.14159" velocity="2.618"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="joint6output_to_gripper_base" type="fixed">
+    <parent link="joint6_flange"/><child link="gripper_base"/>
+    <origin xyz="0 0 0.0505" rpy="1.5708 0 0"/>
+  </joint>
+  <link name="gripper_base">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_base.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_base.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.001001 -0.003635 0.008093" rpy="0 0 0"/>
+      <mass value="0.07782"/>
+      <inertia ixx="3.0829e-05" ixy="5.8945e-08" ixz="1.4872e-06" iyy="3.0356e-05" iyz="-2.3616e-07" izz="3.6504e-05"/>
+    </inertial>
+  </link>
+  <link name="gripper_left1">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_left1.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_left1.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.008214 0.028640 -0.008200" rpy="0 0 0"/>
+      <mass value="0.00900"/>
+      <inertia ixx="2.1380e-06" ixy="-4.4640e-07" ixz="-5.0431e-18" iyy="5.4470e-07" iyz="1.1387e-17" izz="2.1781e-06"/>
+    </inertial>
+  </link>
+  <link name="gripper_left2">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_left2.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_left2.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.014480 0.007475 -0.008200" rpy="0 0 0"/>
+      <mass value="0.00420"/>
+      <inertia ixx="2.8523e-07" ixy="2.0839e-07" ixz="3.8170e-22" iyy="5.3324e-07" iyz="-1.9085e-22" izz="5.3908e-07"/>
+    </inertial>
+  </link>
+  <link name="gripper_left3">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_left3.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_left3.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.007273 0.003393 -0.000700" rpy="0 0 0"/>
+      <mass value="0.00288"/>
+      <inertia ixx="2.0033e-07" ixy="1.2707e-07" ixz="3.3597e-22" iyy="3.5146e-07" iyz="-2.0178e-22" izz="5.3980e-07"/>
+    </inertial>
+  </link>
+  <link name="gripper_right1">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_right1.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_right1.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.009429 0.029012 -0.008200" rpy="0 0 0"/>
+      <mass value="0.00900"/>
+      <inertia ixx="2.1380e-06" ixy="4.4639e-07" ixz="-5.0440e-18" iyy="5.4470e-07" iyz="-1.1388e-17" izz="2.1781e-06"/>
+    </inertial>
+  </link>
+  <link name="gripper_right2">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_right2.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_right2.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.013373 0.007661 -0.008200" rpy="0 0 0"/>
+      <mass value="0.00420"/>
+      <inertia ixx="2.9105e-07" ixy="-2.1175e-07" ixz="-4.4531e-22" iyy="5.2741e-07" iyz="3.1809e-23" izz="5.3908e-07"/>
+    </inertial>
+  </link>
+  <link name="gripper_right3">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/gripper_right3.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/gripper_right3.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.006227 0.003481 -0.000700" rpy="0 0 0"/>
+      <mass value="0.00288"/>
+      <inertia ixx="2.0380e-07" ixy="-1.2918e-07" ixz="-2.1471e-22" iyy="3.4785e-07" iyz="-1.6600e-22" izz="5.3966e-07"/>
+    </inertial>
+  </link>
+  <joint name="gripper_controller" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_left3"/>
+    <origin xyz="-0.012 0.005 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.74" upper="0.15" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_left2" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_left2"/>
+    <origin xyz="-0.005 0.027 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.8" upper="0.5" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <mimic joint="gripper_controller" multiplier="1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_left3_to_gripper_left1" type="revolute">
+    <parent link="gripper_left3"/><child link="gripper_left1"/>
+    <origin xyz="-0.027 0.016 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.5" upper="0.8" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_right3" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_right3"/>
+    <origin xyz="0.012 0.005 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.15" upper="0.8" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_right2" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_right2"/>
+    <origin xyz="0.005 0.027 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.5" upper="0.8" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_right3_to_gripper_right1" type="revolute">
+    <parent link="gripper_right3"/><child link="gripper_right1"/>
+    <origin xyz="0.027 0.016 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-0.8" upper="0.5" velocity="1.0"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <mimic joint="gripper_controller" multiplier="1.0" offset="0"/>
+  </joint>
+  <joint name="joint6output_to_camera_flange" type="fixed">
+    <parent link="joint6_flange"/><child link="camera_flange"/>
+    <origin xyz="0 0 0.01" rpy="1.5708 0 0"/>
+  </joint>
+  <link name="camera_flange">
+    <visual>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/visual/camera_flange.dae"/></geometry>
+    </visual>
+    <collision>
+      <geometry><mesh filename="package://positronic_description/urdf/mycobot_280_jn_sim/meshes/collision/camera_flange.stl"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.023130 0.000000 -0.000136" rpy="0 0 0"/>
+      <mass value="0.03000"/>
+      <inertia ixx="3.1836e-06" ixy="2.6569e-11" ixz="-3.1215e-09" iyy="1.7767e-05" iyz="4.1651e-11" izz="1.5849e-05"/>
+    </inertial>
+  </link>
+
+  <link name="camera_link"/>
+  <joint name="camera_flange_to_camera_link" type="fixed">
+    <parent link="camera_flange"/><child link="camera_link"/>
+    <origin xyz="0.0415 0.0083 0.0000" rpy="0 0 1.5708"/>
+  </joint>
+  <gazebo reference="camera_link">
+    <sensor name="wrist_camera" type="camera">
+      <always_on>1</always_on><update_rate>30</update_rate><visualize>true</visualize>
+      <topic>wrist_camera/image_raw</topic>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.02</near><far>5.0</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="joint2"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="joint3"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="joint4"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="joint5"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="joint6"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="joint6_flange"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_base"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_left1"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_left2"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_left3"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_right1"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_right2"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="gripper_right3"><turnGravityOff>true</turnGravityOff></gazebo>
+  <gazebo reference="camera_flange"><turnGravityOff>true</turnGravityOff></gazebo>
+</robot>

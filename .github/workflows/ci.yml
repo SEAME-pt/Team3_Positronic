@@ -10,28 +10,92 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  # ---------- Python: lint & formatting ----------
-  style-python:
-    name: Python (lint & format)
-    runs-on: ubuntu-22.04
+  CI:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
+      RUN_DEV: docker compose run --rm -T dev
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.8"
-
-      - name: Install tools
+      - name: Read the runner's uid and gid
+        id: ids
         run: |
-          python -m pip install --upgrade pip
-          pip install ruff black
+          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
 
-      - name: Ruff (lint)
-        run: ruff check .
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Black (format check)
-        run: black --check .
+      # The "ci" target of docker/Dockerfile: build and lint tools plus MoveIt, no Gazebo or GUI.
+      # Tagged positronic-dev:jazzy because that is the image compose.yaml runs, so
+      # `docker compose run` finds it and does not rebuild the full dev image.
+      - name: Build the CI image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          target: ci
+          load: true
+          tags: positronic-dev:jazzy
+          build-args: |
+            ROS_DISTRO=jazzy
+            USER_UID=${{ steps.ids.outputs.uid }}
+            USER_GID=${{ steps.ids.outputs.gid }}
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,mode=max,scope=image
 
-      - name: Compile check (syntax only)
-        run: python -m compileall -q .
+      # ament_uncrustify, cpplint, cppcheck, flake8, pep257, copyright (scripts/lint.sh)
+      - name: Format check
+        run: make RUN="$RUN_DEV" format-check
+
+      - name: Build
+        run: make RUN="$RUN_DEV" build
+
+      # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint)
+      - name: Test
+        run: make RUN="$RUN_DEV" test
+
+      # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
+      # layers with the image above, it costs little. No cache-to: writing to the same scope
+      # would replace the ci image's cache.
+      - name: Build the Jetson image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          target: runtime
+          load: true
+          tags: positronic-runtime:ci
+          build-args: |
+            ROS_DISTRO=jazzy
+            USER_UID=${{ steps.ids.outputs.uid }}
+            USER_GID=${{ steps.ids.outputs.gid }}
+          cache-from: type=gha,scope=image
+
+      # Same build as `make nano-build`: the Jetson's packages (NANO_PACKAGES in the Makefile) in
+      # the runtime image. If one of them needs something only in tools or sim (MoveIt, Gazebo,
+      # clang tools), it fails here, not on the Jetson. Outputs go to /tmp so they don't mix with
+      # the build/ of the steps above.
+      # Limit: CI is amd64 and the Jetson arm64, so an arm64-only problem still shows up there.
+      - name: Build the Jetson packages in the Jetson image
+        run: |
+          packages=$(make -s nano-packages)
+          echo "NANO_PACKAGES: $packages"
+          docker run --rm -v "$PWD:/ws" positronic-runtime:ci bash -c "
+            source /opt/ros/jazzy/setup.bash &&
+            colcon --log-base /tmp/log build --symlink-install \
+              --build-base /tmp/build --install-base /tmp/install \
+              --packages-up-to $packages"
+
+      - name: Keep the logs when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colcon-logs
+          path: |
+            log
+            build/*/test_results
+          if-no-files-found: ignore

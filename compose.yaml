@@ -5,6 +5,7 @@ services:
     image: positronic-dev:${ROS_DISTRO:-jazzy}
     build:
       context: ./docker
+      target: dev # notebooks get everything: CI and the Jetson use other targets (docker/Dockerfile)
       args:
         ROS_DISTRO: ${ROS_DISTRO:-jazzy}
         USER_UID: ${USER_UID:-1000}
@@ -17,8 +18,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       DISPLAY: ${DISPLAY:-}
-      # Same ID on every machine (see docker/jetson/positronic-driver.service).
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-17}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-17} # Same ID on every machine (see docker/jetson/positronic-driver.service).
       ARM_IP: ${ARM_IP:-}
       ARM_PORT: ${ARM_PORT:-22}
     stdin_open: true

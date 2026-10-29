@@ -2,6 +2,10 @@
 # Source of truth: this file in the repo. `make nano-service` installs it to
 # /etc/systemd/system/ on the Jetson. Never edit the installed copy.
 #
+# The image is positronic-runtime:nano: the `runtime` target of docker/Dockerfile (ros2_control,
+# pymycobot, no MoveIt/Gazebo/RViz). Build it on the Jetson with `make nano-image` BEFORE
+# installing this unit, or the service fails to start (it stops retrying after 5 attempts).
+#
 # For now the container runs a placeholder that only keeps it alive, so ROS 2 is reachable
 # and the serial port is mapped. The driver's launch command replaces it when the driver
 # exists (#21-#23); the driver must then come up inactive (lifecycle) after boot.
@@ -21,7 +25,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 # Remove a container left behind by a power cut ("-" = don't fail if there is none).
-ExecStartPre=-/bin/sh -c '/usr/bin/docker rm -f positronic-driver 2>/deh/null || true'
+ExecStartPre=-/bin/sh -c '/usr/bin/docker rm -f positronic-driver 2>/dev/null || true'
 # Runs in the foreground (no -d) so systemd supervises the real process.
 # --rm and no --restart: systemd is the only supervisor.
 # --init: forwards SIGTERM to the process, so `docker stop` ends it at once.
@@ -29,11 +33,11 @@ ExecStartPre=-/bin/sh -c '/usr/bin/docker rm -f positronic-driver 2>/deh/null ||
 # ROS_DOMAIN_ID must be the same on every machine that talks to the arm, or they can't see
 # each other. 17 is also set in the Makefile (ROS_DOMAIN_ID ?= 17), compose.yaml and
 # .devcontainer/devcontainer.json: change all four together. It's repeated here because
-# systemd can't read the Makefile.
+# systemd can't read the Makefile. Same for the image name (NANO_IMAGE in Makefile).
 ExecStart=/usr/bin/docker run --rm --init --name positronic-driver \
   --network host --ipc host -e ROS_DOMAIN_ID=17 \
   --device /dev/ttyTHS1 \
-  positronic-dev:nano \
+  positronic-runtime:nano \
   bash -c 'source /opt/ros/jazzy/setup.bash && exec sleep infinity'
 ExecStop=/usr/bin/docker stop -t 10 positronic-driver
 Restart=on-failure

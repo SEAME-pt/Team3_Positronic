@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<!--
+  Arm model for the real myCobot 280 on the Jetson (#23). Includes the plain URDF of this
+  package and adds the <ros2_control> tag that loads our hardware plugin.
+
+  Differs from positronic_gazebo.urdf.xacro on purpose:
+  - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
+  - each joint has position AND velocity state interfaces, which the plugin requires;
+  - no command interface: the driver is read-only until #32 and refuses to load with one.
+
+  The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud.
+  It rejects any other name, so a typo here stops the driver instead of being ignored.
+
+  The joints are listed in protocol order, J1 (base) first, J6 (flange) last: the plugin maps
+  the six angles of get_angles to the joints in this order.
+-->
+<robot name="positronic" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- "serial" talks to the arm; "fake" stands still, to try the launch without the arm. -->
+  <xacro:arg name="backend" default="serial"/>
+  <!-- The arm's UART on the Jetson, at the rate of the firmware. The plugin accepts only
+       115200 or 1000000 baud. -->
+  <xacro:arg name="port" default="/dev/ttyTHS1"/>
+  <xacro:arg name="baud" default="1000000"/>
+
+  <!-- Links, joints and meshes of the arm. -->
+  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
+
+  <!-- One joint as seen by ros2_control: we read position and velocity, we command nothing. -->
+  <xacro:macro name="real_arm_joint" params="name">
+    <joint name="${name}">
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </xacro:macro>
+
+  <ros2_control name="positronic_arm" type="system">
+    <hardware>
+      <plugin>positronic_hardware/RobotSystem</plugin>
+      <param name="backend">$(arg backend)</param>
+      <param name="port">$(arg port)</param>
+      <param name="baud">$(arg baud)</param>
+    </hardware>
+    <xacro:real_arm_joint name="joint2_to_joint1"/>
+    <xacro:real_arm_joint name="joint3_to_joint2"/>
+    <xacro:real_arm_joint name="joint4_to_joint3"/>
+    <xacro:real_arm_joint name="joint5_to_joint4"/>
+    <xacro:real_arm_joint name="joint6_to_joint5"/>
+    <xacro:real_arm_joint name="joint6output_to_joint6"/>
+  </ros2_control>
+
+</robot>
