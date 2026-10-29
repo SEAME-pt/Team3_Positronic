@@ -5,7 +5,7 @@
 # camera and a fixed camera show it in two windows. PASS when the cube was lifted.
 #
 # From the workspace root, inside the dev container, after make build:
-#   make verify V=gazebo_pick      (or: bash docs/03_verification/gazebo_pick/run.sh)
+#   make verify V=gazebo_pick      (or: bash docs/03_verification/gazebo_pick/tools/run.sh)
 # Logs and the camera frames of each step go to log/gazebo_pick/<date_time>/.
 set -eo pipefail   # no -u: the ROS setup.bash reads variables that may be unset
 

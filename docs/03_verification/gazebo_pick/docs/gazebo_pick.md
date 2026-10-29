@@ -5,10 +5,12 @@ the URDF. It checks, in one run, what the simulation stack must do before any pi
 work: the gripper fingers close together, MoveIt plans and executes, the wrist camera image
 reaches ROS 2, and a straight descent and lift do not push the object away.
 
+Same layout as `serial_measurement`: this document in `docs/`, the scripts in `tools/`.
+
 | File | What it is |
 |---|---|
-| `run.sh` | Starts Gazebo with `workcell_pick.sdf`, the controllers, `move_group` with the planning scene, a window per camera, runs `pick.py` and prints PASS or FAIL. |
-| `pick.py` | Opens the gripper, moves above the cube, goes straight down, closes, goes straight up. Saves one wrist camera frame per step. Exit code 0 when the cube rose at least 5 cm. |
+| `tools/run.sh` | Starts Gazebo with `workcell_pick.sdf`, the controllers, `move_group` with the planning scene, a window per camera, runs `pick.py` and prints PASS or FAIL. |
+| `tools/pick.py` | Opens the gripper, moves above the cube, goes straight down, closes, goes straight up. Saves one wrist camera frame per step. Exit code 0 when the cube rose at least 5 cm. |
 
 ## Run
 
