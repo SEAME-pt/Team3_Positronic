@@ -16,7 +16,7 @@ driver defaults to 30 Hz.
 | Reference (pymycobot) | PASS worst 0.35 deg | PASS worst 0.00 deg |
 
 **Why 30 Hz.** #20 found 30 Hz writes clean and 50 Hz writes prone to stalls; the read alone was
-(section 6 of `docs/03_verification/serial_measurement/docs/serial_link.md`). Both rates were run
+clean at 101 Hz (section 6 of `docs/03_verification/serial_measurement/docs/serial_link.md`). Both rates were run
 here for 10 minutes. At 30 Hz no period exceeded 2x nominal. At 50 Hz the first 9.5 minutes were
 clean, then the control loop stalled in a burst over the last minute (up to 616 ms). The stalls
 show on the controller-manager stamps too (max 604 ms), so the loop itself was starved, not the
