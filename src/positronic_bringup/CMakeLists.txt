@@ -10,12 +10,10 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 
-  # Expands the real arm xacro and checks its <ros2_control> block against the URDF (#23).
-  # The maths of the delay and check scripts, without ROS running.
-  # The maths of the delay script, without ROS running.
   find_package(ament_cmake_pytest REQUIRED)
+  # Expands the real arm xacro and checks its <ros2_control> block against the URDF (#23).
   ament_add_pytest_test(test_robot_description test/test_robot_description.py)
-  # The maths of the delay script, without ROS running.
+  # The maths of the delay script, without ROS running (#24).
   ament_add_pytest_test(test_joint_states_delay test/test_joint_states_delay.py)
 endif()
 
