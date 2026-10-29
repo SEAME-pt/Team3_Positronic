@@ -51,8 +51,7 @@ Reproducible from the bag with standard ROS 2 tools, and with the checker in
 |---|---|
 | Operator | Leandro Gertrudes |
 | Arm | myCobot 280 Jetson Nano |
-| Commit | <git rev-parse --short HEAD on the laptop that ran make nano-build> |
-| Image | positronic-dev:nano, built <date> |
+| Image | positronic-dev:nano|
 
 Safety: arm powered, no motion commands, bench clear, nothing else on `/dev/ttyTHS1`. The driver
 exports no command interface, so no controller can move the arm.
