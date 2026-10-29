@@ -20,7 +20,9 @@ From the repository root, after `make build`:
 make verify V=gazebo_pick
 ```
 
-About three minutes without a GPU. Two windows open, the wrist camera and a fixed camera in
+With the real arm on the network, run it on a domain of its own, `ROS_DOMAIN_ID=66 make verify
+V=gazebo_pick`: on the shared domain 17 the controller checks reach the Jetson's
+controller_manager and the run fails before it starts. About three minutes without a GPU. Two windows open, the wrist camera and a fixed camera in
 front of the bench, plus Gazebo. Logs and the frames `1_open.png` to `5_lifted.png` go to
 `log/gazebo_pick/<date_time>/`. Frame 3 shows the cube between the two finger pads before
 closing, frame 5 shows it held with the pedestal gone from view.
