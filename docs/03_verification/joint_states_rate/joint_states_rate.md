@@ -40,10 +40,8 @@ The recording and checking were done with a throwaway script kept with the run, 
 | | |
 |---|---|
 | Date | 2026-10-28 18:09 (Jetson clock) |
-| Operator | <name> |
+| Operator | Leandro Gertrudes |
 | Arm | myCobot 280 Jetson Nano |
-| Commit | <git rev-parse --short HEAD on the laptop that ran make nano-build> |
-| Image | positronic-dev:nano, built <date> |
 | Launch | `ros2 launch positronic_bringup driver.launch.py update_rate:=30` |
 | Nominal rate | 30 Hz (see the note above) |
 | Duration | 630.1 s recorded (18905 messages) |
