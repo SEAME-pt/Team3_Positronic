@@ -107,10 +107,10 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
   return "<joint name=\"" + name + "\">" + std::string{interfaces} + "</joint>";
 }
 
-/// A valid joint: position and velocity state interfaces.
+/// A valid joint: position and velocity state interfaces, position command interface.
 std::string good_joint(const std::string & name)
 {
-  return joint_block(name, std::string{POSITION} + std::string{VELOCITY});
+  return joint_block(name, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
 }
 
 /// All six joints valid, except joint `index`, which gets `interfaces` instead.
@@ -282,11 +282,21 @@ TEST_F(LoadRobotSystem, InitRejectsJointWithoutVelocityState)
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, InitRejectsCommandInterface)
+TEST_F(LoadRobotSystem, InitRejectsJointWithoutCommandInterface)
 {
-  // J1 asks to be commanded: refused until #32, so no controller believes it moves the arm.
-  load(urdf_with(
-    joints_with_one_bad(0, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+  // J1 cannot be commanded: a controller could never move it, so the driver refuses to load.
+  load(urdf_with(joints_with_one_bad(0, std::string{POSITION} + std::string{VELOCITY})));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
+{
+  // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
+  constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
+  load(urdf_with(joints_with_one_bad(
+      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);

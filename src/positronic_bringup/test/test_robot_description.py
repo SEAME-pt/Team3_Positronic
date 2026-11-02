@@ -28,7 +28,7 @@
 #   plugin reads in on_init, #22) carry
 #   the xacro arguments; the joints of the
 #   block are exactly the six revolute joints of the URDF, in URDF order; and every joint has
-#   position and velocity state interfaces and no command interface (read-only until #32).
+#   position and velocity state interfaces and a position command interface.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -106,9 +106,10 @@ def test_joints_are_the_urdf_revolute_joints_in_order():
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_every_joint_is_read_only(backend):
-    """Check that each joint has position and velocity states and no command interface."""
+def test_every_joint_is_commanded_in_position(backend):
+    """Check that each joint has position and velocity states and a position command."""
     for joint in expand(backend=backend).findall('ros2_control/joint'):
         states = [state.get('name') for state in joint.findall('state_interface')]
         assert states == ['position', 'velocity'], joint.get('name')
-        assert joint.findall('command_interface') == [], joint.get('name')
+        commands = [command.get('name') for command in joint.findall('command_interface')]
+        assert commands == ['position'], joint.get('name')

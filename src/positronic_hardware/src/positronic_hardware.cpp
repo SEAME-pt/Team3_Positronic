@@ -113,10 +113,13 @@ CallbackReturn RobotSystem::on_init(
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
-    // Read-only driver until #32: no controller may believe it moves the arm.
-    if (!joint.command_interfaces.empty()) {
+    // The arm only takes angles (send_angles), so position is the one command we can honour.
+    // A velocity or effort command interface would be claimed by a controller and never sent.
+    if (joint.command_interfaces.size() != 1 ||
+      joint.command_interfaces.front().name != hardware_interface::HW_IF_POSITION)
+    {
       RCLCPP_ERROR(
-        get_logger(), "Joint '%s' must have no command interface: this driver is read-only.",
+        get_logger(), "Joint '%s' must have exactly one command interface: 'position'.",
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
@@ -214,18 +217,20 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // A fresh history: the first read() after (re)configure has no earlier sample to difference.
   velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
 
-  // Look the handles up once, here, so read() builds no string. This throws if a name is
-  // missing, which is fine outside the control loop.
+  // Look the handles up once, here, so read() and write() build no string. This throws if a
+  // name is missing, which is fine outside the control loop.
   try {
     for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
       const std::string & name{info_.joints.at(i).name};
+      handles_.at(i).command =
+        get_command_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).position =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
   } catch (const std::exception & error) {
-    RCLCPP_ERROR(get_logger(), "Cannot find a state interface: %s", error.what());
+    RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
   }
 
@@ -252,7 +257,8 @@ CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & /*previo
 CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Allow motion": every command starts at the measured position, so the first thing a
-  // controller sees is "stay where you are". There are no command interfaces until #32.
+  // controller sees is "stay where you are" and write() sends nothing new until a controller
+  // writes.
   // Never activate on a placeholder pose: wait for the arm to answer. Sleeping is fine here,
   // outside the control loop.
   const auto deadline{std::chrono::steady_clock::now() + FIRST_SAMPLE_TIMEOUT};
@@ -282,7 +288,14 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
 
 return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  // Read-only driver (#22): nothing is sent, so the arm cannot move. Commands come in #32.
+  JointPositions commands{};
+  for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
+    // wait_until_get = false: never block on a controller that is writing the handle.
+    if (!get_command(handles_.at(i).command, commands.at(i), false)) {
+      return return_type::OK;  // A handle was busy: keep the last command, try next tick.
+    }
+  }
+  arm_->write_angles(commands);
   return return_type::OK;
 }
 
