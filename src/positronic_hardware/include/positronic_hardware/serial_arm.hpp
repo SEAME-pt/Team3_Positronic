@@ -67,6 +67,10 @@ public:
   /// loop. Before the first reply arrives it returns START_POSE, never NaN.
   [[nodiscard]] JointPositions read_angles() const override;
 
+  /// The target pose the thread sends next, in radians. Non-blocking; safe from the control loop:
+  /// it only stores the newest command, the poll thread sends it over the port on its next turn.
+  void write_angles(const JointPositions & angles) override;
+
   /// True once the thread has decoded a first reply from the arm.
   [[nodiscard]] bool has_sample() const override;
 
@@ -79,8 +83,12 @@ private:
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   mutable realtime_tools::RealtimeBuffer<JointPositions> latest_{START_POSE};
+  // The newest command from write_angles(). The control loop writes it, the poll thread reads it.
+  realtime_tools::RealtimeBuffer<JointPositions> command_{START_POSE};
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
+  // True once write_angles() stored a first command. The thread sends nothing before that.
+  std::atomic<bool> has_command_{false};
   std::thread thread_;
 };
 

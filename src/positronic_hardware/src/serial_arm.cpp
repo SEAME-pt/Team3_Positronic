@@ -173,6 +173,15 @@ JointPositions SerialArm::read_angles() const
   return *latest_.readFromRT();
 }
 
+void SerialArm::write_angles(const JointPositions & angles)
+{
+  // Only stores the command. The poll thread picks it up on its next turn and sends it over the
+  // port, so the control loop never waits for the serial link here.
+  command_.writeFromNonRT(angles);
+  // Set after the write, so whoever sees true also finds the command in the buffer.
+  has_command_.store(true);
+}
+
 bool SerialArm::has_sample() const
 {
   return has_sample_.load();

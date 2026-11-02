@@ -41,6 +41,12 @@ public:
     return angles_;
   }
 
+  /// Where the joints will be.
+  void write_angles(const JointPositions & angles) override
+  {
+    angles_ = angles;
+  }
+
   /// The fake pose is known from the start.
   [[nodiscard]] bool has_sample() const override
   {
