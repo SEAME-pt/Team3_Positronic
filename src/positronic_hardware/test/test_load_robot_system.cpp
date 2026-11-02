@@ -210,6 +210,19 @@ protected:
     return loaned.get_optional();
   }
 
+  /// One controller-manager cycle of write(), 10 ms long.
+  hardware_interface::return_type write_once()
+  {
+    return resource_manager_->write(clock_.now(), rclcpp::Duration::from_seconds(0.01)).result;
+  }
+
+  /// Writes `value` to `joint`/position the way a controller does.
+  bool command(const std::string & joint, double value)
+  {
+    auto loaned{resource_manager_->claim_command_interface(joint + "/position")};
+    return loaned.set_value(value);
+  }
+
   rclcpp::Clock clock_;
   std::unique_ptr<hardware_interface::ResourceManager> resource_manager_;
   bool loaded_{false};
@@ -391,6 +404,28 @@ TEST_F(LoadRobotSystem, ActivatesAndReadStillWorks)
 
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(read_once(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+
+  // A controller asks J1 for 0.25 rad. The fake arm gets there at once, so the next read()
+  // reports it: the whole path from command interface to backend and back.
+  ASSERT_TRUE(command(JOINTS.at(0), 0.25));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  EXPECT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.25);
+  // The other joints were commanded "stay" by on_activate, so they still report START_POSE.
+  EXPECT_DOUBLE_EQ(
+    state(JOINTS.at(1), "position").value_or(std::nan("")),
+    positronic_hardware::FakeArm::START_POSE.at(1));
 }
 
 TEST_F(LoadRobotSystem, ConfigureFailsWhenTheSerialPortIsMissing)
