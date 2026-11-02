@@ -20,6 +20,16 @@
     </joint>
   </xacro:macro>
 
+  <!-- One finger joint as seen by ros2_control: state only. The URDF gives it a mimic tag on
+       gripper_controller, and ros2_control only registers that tag for joints listed here.
+       Registered, gz_ros2_control drives the finger; left out, the Gazebo physics engine
+       ignores the mimic tag and the finger hangs loose. -->
+  <xacro:macro name="finger_joint" params="name">
+    <joint name="${name}">
+      <state_interface name="position"/>
+    </joint>
+  </xacro:macro>
+
   <!-- The hardware plugin is the Gazebo one. On the real arm only this block changes. -->
   <ros2_control name="positronic_arm" type="system">
     <hardware>
@@ -36,6 +46,11 @@
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
+    <xacro:finger_joint name="gripper_base_to_gripper_left2"/>
+    <xacro:finger_joint name="gripper_left3_to_gripper_left1"/>
+    <xacro:finger_joint name="gripper_base_to_gripper_right3"/>
+    <xacro:finger_joint name="gripper_base_to_gripper_right2"/>
+    <xacro:finger_joint name="gripper_right3_to_gripper_right1"/>
   </ros2_control>
 
   <!-- Gazebo loads this plugin with the model. It starts the controller_manager with this yaml. -->

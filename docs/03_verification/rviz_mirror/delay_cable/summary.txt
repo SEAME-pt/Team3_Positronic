@@ -1,0 +1,4 @@
+15000 msgs in 300 s
+avg 16.7 ms  max 71.7 ms at 1.1 s
+0 msgs above 100 ms
+PASS: limit 100 ms
