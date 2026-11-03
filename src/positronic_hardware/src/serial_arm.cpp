@@ -27,13 +27,13 @@
 
 #include <array>
 #include <cerrno>
-#include <cstring>
+#include <cstddef>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
-#include <cstddef>
-#include <iterator>
 
 #include "positronic_hardware/reply_assembler.hpp"
 #include "positronic_protocol/encode.hpp"
@@ -66,24 +66,25 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
 
   fd_ = ::open(port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd_ < 0) {
-    throw std::runtime_error{"Cannot open " + port + ": " + std::strerror(errno)};
+    throw std::system_error{errno, std::system_category(), "Cannot open " + port};
   }
 
   // Exclusive access: while we hold the port, a second open() (another driver, a terminal
   // left open on it) fails with EBUSY instead of stealing half of the replies.
   if (::ioctl(fd_, TIOCEXCL) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"Cannot lock " + port + " for exclusive use: " + message};
+    throw std::system_error{
+            error, std::system_category(), "Cannot lock " + port + " for exclusive use"};
   }
 
   termios tty{};
   if (::tcgetattr(fd_, &tty) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"tcgetattr failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "tcgetattr failed on " + port};
   }
 
   ::cfmakeraw(&tty);  // 8N1, no echo, no line processing: raw bytes in and out.
@@ -95,10 +96,10 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   tty.c_cc[VTIME] = 1;  // after at most 0.1 s, so the thread can check stop_.
 
   if (::tcsetattr(fd_, TCSANOW, &tty) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"tcsetattr failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "tcsetattr failed on " + port};
   }
 
   // open() used O_NONBLOCK so it would not block waiting for carrier. Clear it now that the
@@ -107,10 +108,10 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   // it up only on the next cycle. Cleared, read() waits up to VTIME (0.1 s) for the bytes.
   const int flags{::fcntl(fd_, F_GETFL, 0)};
   if (flags < 0 || ::fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"fcntl failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "fcntl failed on " + port};
   }
 }
 

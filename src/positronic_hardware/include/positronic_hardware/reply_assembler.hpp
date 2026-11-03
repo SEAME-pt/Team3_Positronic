@@ -23,9 +23,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <vector>
-#include <iterator>
 
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_protocol/decode.hpp"
