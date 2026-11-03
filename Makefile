@@ -43,8 +43,11 @@ export USER_UID USER_GID
 # Let's the container's user open windows (like RViz) on your desktop.
 ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
+# The driver packages: the ones that talk to the arm. A warning here fails the build (CI runs this).
+TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol)/
+
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy doctor clean fclean
+.PHONY: help image shell build test format format-check tidy tidy-strict doctor clean fclean
 
 help: ## Show this help
 	@grep -h -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -70,6 +73,9 @@ format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep2
 
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
+
+tidy-strict: ## clang-tidy on the driver packages, any warning is an error (needs make build first)
+	$(RUN) bash -c 'run-clang-tidy -quiet -p build -warnings-as-errors="*" "$(TIDY_STRICT_FILES)"'
 
 doctor: ## Check the environment
 	$(ALLOW_X)
