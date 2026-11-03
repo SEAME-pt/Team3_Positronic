@@ -33,12 +33,12 @@ inline constexpr std::size_t NUM_JOINTS{6};
 /// Six joint angles in radians, J1 (base) to J6 (flange).
 using JointPositions = std::array<double, NUM_JOINTS>;
 
-/// Where the driver reads the joint angles from.
+/// Where the driver reads the joint angles from and sends the targets to.
 ///
-/// One method: "where are the joints now, in radians?". The plugin (read()) never knows
-/// whether the answer came from the real serial port or from a stand-in; it only calls
-/// read_angles(). This is the seam that lets the fake arm and the real arm be swapped by a
-/// parameter, and the control loop stay the same.
+/// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
+/// only calls read_angles() and has_sample(), write() only calls write_angles(). This is the
+/// seam that lets the fake arm and the real arm be swapped by a parameter, and the control
+/// loop stay the same.
 ///
 /// Contract for read_angles():
 /// - It is called from the ros2_control read() loop, so it must NOT block and must NOT touch

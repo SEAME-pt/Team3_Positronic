@@ -28,7 +28,8 @@ namespace positronic_hardware
 
 /// A pretend arm, so the driver runs without the robot. It never touches the serial port.
 ///
-/// It stands still in a fixed pose. SerialArm answers the same question from the serial port.
+/// It starts in START_POSE and is at every target as soon as write_angles() gets it, with no
+/// motion in between. SerialArm does the same over the serial port.
 class FakeArm : public ArmBackend
 {
 public:
