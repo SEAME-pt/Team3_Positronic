@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>positronic_mission</name>
+  <version>0.0.0</version>
+  <description>
+    Misson Node:
+      Purpose is to be able to send to send a pose to Moveit. If it's validated, the ream arm or sim arm moves.
+      If the arm is not idle or the movement is impossible. Report an error.
+      Send a heartbeat to a suppervisor at every 10Hz.
+  </description>
+  <maintainer email="vloureir@student.42porto.com">vloureir</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>positronic_interfaces</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
