@@ -99,9 +99,9 @@ Meetings today: Sprint 2 planning
 - Blocked: nothing.
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Apresentação do review do sprint
+- Today: Estudar a issue 47
+- Blocked: nothing
 
 **Rui**, block A
 - Done: finish measuring the latency and prepare sprint  01 revuew to presented the controllers and mirror slides, pick video and linve RViz mirror of the real arm
@@ -132,34 +132,34 @@ Scrum Master:
 Meetings today: none
 
 **Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: estudou a parte de arquitetura de nodes e como funciona ros2
+- Today: começou a issue 38 e terminar hoje
+- Blocked: nothing
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Fez os slides e apresentou o planning da semana
+- Today: inciar a issue 34#
+- Blocked: issue 32
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: começou a estudar a issue 47
+- Today: continuar a estudar aissue 47
+- Blocked: nothing
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: review da aprsentação e viu como o read estava feito
+- Today: escrever o write para funcionar com o fake backend
+- Blocked: nothing
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: estudou sobre action
+- Today: planejou o life cycle e implementou a primeira parte
+- Blocked: nothing
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: escolheu as issues que ia trabalhar, fez um planejamento de estudo para a issue e começou a estudar e participou da apresentação do planning
+- Today: segue estudando as issues e revisitando documentações e discutindo arquitetura geral dos projetos
+- Blocked: nothing
 
 Challenges:
 - 
