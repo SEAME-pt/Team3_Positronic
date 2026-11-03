@@ -59,6 +59,9 @@ jobs:
       - name: Test
         run: make RUN="$RUN_DEV" test
 
+      - name: Static analysis (clang-tidy)
+        run: make RUN="$RUN_DEV" tidy-strict
+
       # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
       # layers with the image above, it costs little. No cache-to: writing to the same scope
       # would replace the ci image's cache.
