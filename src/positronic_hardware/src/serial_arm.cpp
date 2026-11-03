@@ -32,6 +32,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <cstddef>
+#include <iterator>
 
 #include "positronic_hardware/reply_assembler.hpp"
 #include "positronic_protocol/encode.hpp"
@@ -126,7 +128,8 @@ bool PosixSerialPort::write(const std::uint8_t * data, std::size_t count)
 {
   std::size_t written{0};
   while (written < count) {
-    const ssize_t n{::write(fd_, data + written, count - written)};
+    const std::uint8_t * const next_byte{std::next(data, static_cast<std::ptrdiff_t>(written))};
+    const ssize_t n{::write(fd_, next_byte, count - written)};
     if (n < 0) {
       if (errno == EINTR || errno == EAGAIN) {
         continue;

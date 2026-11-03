@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <iterator>
 
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_protocol/decode.hpp"
@@ -59,7 +60,7 @@ public:
   /// the freshest angles, not a backlog.
   std::optional<JointPositions> push(const std::uint8_t * data, std::size_t count)
   {
-    buffer_.insert(buffer_.end(), data, data + count);
+    buffer_.insert(buffer_.end(), data, std::next(data, static_cast<std::ptrdiff_t>(count)));
 
     std::optional<JointPositions> latest{};
     while (true) {
@@ -94,7 +95,7 @@ private:
     buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(drop));
   }
 
-  std::vector<std::uint8_t> buffer_{};
+  std::vector<std::uint8_t> buffer_;
 };
 
 }  // namespace positronic_hardware
