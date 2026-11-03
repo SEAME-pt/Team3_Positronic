@@ -23,16 +23,37 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_hardware/serial_transport.hpp"
+#include "positronic_protocol/types.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 
 namespace positronic_hardware
 {
+
+/// The two timings of a serial-thread turn that sends a command. The defaults are the measured
+/// values; the plugin lets the URDF override them (moving_period_ms, send_settle_ms) so a sweep
+/// on the arm needs no rebuild. A namespace-level struct so it can be a default argument.
+struct SerialTiming
+{
+  /// One turn while the arm moves: a get_angles and a send_angles. The arm answers in 8 ms
+  /// (20 ms worst seen), a send_angles costs under 1 ms and the settle 30 ms, so 50 ms leaves
+  /// 11 ms of slack and the next get_angles comes 42 ms after the send. 50 held five 2-minute
+  /// runs with zero stalls; 40 had one stall in five (the arm still busy 31 ms after a send).
+  /// A worst-case reply overruns the turn by 1 ms and the next turn starts at once.
+  std::chrono::milliseconds moving_period{50};
+
+  /// How long the thread waits after a send_angles before the next get_angles. Measured on
+  /// the arm with turns just above the settle: 30 ms gave 0 stalls in 4464 requests, 25 ms
+  /// gave 43, 20 ms gave 110 and once froze the arm for 20 s.
+  std::chrono::milliseconds send_settle{30};
+};
 
 /// The real arm behind the ArmBackend interface (#22).
 ///
@@ -44,17 +65,28 @@ namespace positronic_hardware
 class SerialArm : public ArmBackend
 {
 public:
-  /// How often the thread polls the arm for angles. The link is 1 Mbaud and a reply is ~17 bytes
-  /// plus servo-bus noise; tune against the measured get_angles rate (#20). 100 Hz is a safe
-  /// starting point that keeps the state fresh without flooding the bus.
+  using Timing = SerialTiming;
+
+  /// One turn of the thread while the arm stands still: a get_angles and nothing else. The link
+  /// is 1 Mbaud and a reply is ~17 bytes plus servo-bus noise; 100 Hz keeps the pose fresh
+  /// without flooding the bus (#20: 10 minutes of reads at this rate, no stall).
   static constexpr std::chrono::milliseconds POLL_PERIOD{10};
+
+  /// Speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on hardware).
+  static constexpr std::uint8_t SEND_SPEED{30};
+
+  /// How long a turn waits for the get_angles reply. A reply takes ~8 ms and arrives in a dozen
+  /// small chunks behind servo-bus chatter, so the turn reads until the frame completes, not a
+  /// fixed number of chunks. Nothing else goes on the wire before that: a send_angles that
+  /// follows a get_angles request before its reply is dropped by the arm.
+  static constexpr std::chrono::milliseconds REPLY_TIMEOUT{50};
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
-  SerialArm(const std::string & port, int baud_rate);
+  SerialArm(const std::string & port, int baud_rate, Timing timing = {});
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
-  explicit SerialArm(std::unique_ptr<SerialTransport> transport);
+  explicit SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing = {});
 
   ~SerialArm() override;
 
@@ -79,7 +111,11 @@ private:
 
   void poll_loop();
 
+  /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
+  static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
+
   std::unique_ptr<SerialTransport> transport_;
+  const Timing timing_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   mutable realtime_tools::RealtimeBuffer<JointPositions> latest_{START_POSE};
