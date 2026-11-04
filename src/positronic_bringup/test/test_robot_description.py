@@ -28,7 +28,7 @@
 #   plugin reads in on_init, #22) carry
 #   the xacro arguments; the joints of the
 #   block are exactly the six revolute joints of the URDF, in URDF order; and every joint has
-#   position and velocity state interfaces and no command interface (read-only until #32).
+#   position and velocity state interfaces and a position command interface.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -88,13 +88,16 @@ def test_uses_the_positronic_plugin():
 def test_defaults_select_the_real_arm():
     """Check the default parameters: the serial backend on the Jetson UART."""
     assert hardware_params(expand()) == {
-        'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000'}
+        'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000',
+        'moving_period_ms': '50', 'send_settle_ms': '30'}
 
 
 def test_arguments_reach_the_plugin():
     """Check that the xacro arguments become the plugin parameters."""
-    params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200'))
-    assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200'}
+    params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200',
+                                    moving_period_ms='40', send_settle_ms='25'))
+    assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200',
+                      'moving_period_ms': '40', 'send_settle_ms': '25'}
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():
@@ -106,9 +109,10 @@ def test_joints_are_the_urdf_revolute_joints_in_order():
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_every_joint_is_read_only(backend):
-    """Check that each joint has position and velocity states and no command interface."""
+def test_every_joint_is_commanded_in_position(backend):
+    """Check that each joint has position and velocity states and a position command."""
     for joint in expand(backend=backend).findall('ros2_control/joint'):
         states = [state.get('name') for state in joint.findall('state_interface')]
         assert states == ['position', 'velocity'], joint.get('name')
-        assert joint.findall('command_interface') == [], joint.get('name')
+        commands = [command.get('name') for command in joint.findall('command_interface')]
+        assert commands == ['position'], joint.get('name')

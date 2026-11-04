@@ -33,12 +33,12 @@ inline constexpr std::size_t NUM_JOINTS{6};
 /// Six joint angles in radians, J1 (base) to J6 (flange).
 using JointPositions = std::array<double, NUM_JOINTS>;
 
-/// Where the driver reads the joint angles from.
+/// Where the driver reads the joint angles from and sends the targets to.
 ///
-/// One method: "where are the joints now, in radians?". The plugin (read()) never knows
-/// whether the answer came from the real serial port or from a stand-in; it only calls
-/// read_angles(). This is the seam that lets the fake arm and the real arm be swapped by a
-/// parameter, and the control loop stay the same.
+/// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
+/// only calls read_angles() and has_sample(), write() only calls write_angles(). This is the
+/// seam that lets the fake arm and the real arm be swapped by a parameter, and the control
+/// loop stay the same.
 ///
 /// Contract for read_angles():
 /// - It is called from the ros2_control read() loop, so it must NOT block and must NOT touch
@@ -60,6 +60,12 @@ public:
 
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
+
+  /// The target joint angles, in radians. Safe from the control loop: the implementation only
+  /// stores the newest command and never waits for the serial port here. A newer call
+  /// replaces the previous command before it was sent. The plugin calls this only while
+  /// active, so an implementation does not need to check that itself.
+  virtual void write_angles(const JointPositions & angles) = 0;
 
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control
   /// loop. Until then the plugin reports "unknown" (NaN) instead of the placeholder pose.

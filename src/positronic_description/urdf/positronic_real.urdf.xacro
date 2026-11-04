@@ -6,9 +6,10 @@
   Differs from positronic_gazebo.urdf.xacro on purpose:
   - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
   - each joint has position AND velocity state interfaces, which the plugin requires;
-  - no command interface: the driver is read-only until #32 and refuses to load with one.
+  - each joint has exactly one command interface, position, which the plugin requires (#32).
 
-  The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud.
+  The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
+  moving_period_ms, send_settle_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
 
   The joints are listed in protocol order, J1 (base) first, J6 (flange) last: the plugin maps
@@ -22,13 +23,19 @@
        115200 or 1000000 baud. -->
   <xacro:arg name="port" default="/dev/ttyTHS1"/>
   <xacro:arg name="baud" default="1000000"/>
+  <!-- Timings of the serial thread when it sends commands (#32), in ms: the length of a turn
+       that sends, and the pause after a send before the next get_angles. Measured on the arm:
+       it stalls when asked within 25 ms of a send_angles, 30 ms gave 0 stalls. -->
+  <xacro:arg name="moving_period_ms" default="50"/>
+  <xacro:arg name="send_settle_ms" default="30"/>
 
   <!-- Links, joints and meshes of the arm. -->
   <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
 
-  <!-- One joint as seen by ros2_control: we read position and velocity, we command nothing. -->
+  <!-- One joint as seen by ros2_control: we read position and velocity, we command position. -->
   <xacro:macro name="real_arm_joint" params="name">
     <joint name="${name}">
+      <command_interface name="position"/>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
@@ -40,6 +47,8 @@
       <param name="backend">$(arg backend)</param>
       <param name="port">$(arg port)</param>
       <param name="baud">$(arg baud)</param>
+      <param name="moving_period_ms">$(arg moving_period_ms)</param>
+      <param name="send_settle_ms">$(arg send_settle_ms)</param>
     </hardware>
     <xacro:real_arm_joint name="joint2_to_joint1"/>
     <xacro:real_arm_joint name="joint3_to_joint2"/>
