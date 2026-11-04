@@ -85,7 +85,7 @@ Each daily below can also be split into `docs/standups/YYYY-MM-DD.md` if we keep
 
 ### 2026-11-02 (Mon) · day 1 of 10
 
-Scrum Master: 
+Scrum Master: Leandro gertrudes
 Meetings today: Sprint 2 planning
 
 **Felipe**, block A
@@ -128,7 +128,7 @@ Decisions:
 
 ### 2026-11-03 (Tue) · day 2 of 10
 
-Scrum Master: 
+Scrum Master: Leandro gertrudes
 Meetings today: none
 
 **Felipe**, block A
@@ -171,8 +171,8 @@ Decisions:
 
 ### 2026-11-04 (Wed) · day 3 of 10
 
-Scrum Master: 
-Meetings today: none
+Scrum Master: Leandro Gertrudes
+Meetings today: Standup up with facilators
 
 **Felipe**, block A
 - Done: 
@@ -180,9 +180,9 @@ Meetings today: none
 - Blocked: 
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Começou a implementar a issue 34, fazendo o seu header
+- Today: planejar e continuar estudando para a issue 34
+- Blocked: issue 32
 
 **Pedro**, block A
 - Done: 
@@ -190,19 +190,19 @@ Meetings today: none
 - Blocked: 
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Added write_angles to the arm backend: the interface, the fake arm and the SerialArm header (#32). Closed #94, joint 6 zero was 45 degrees of. opned #97 for the camera mount in S3 and approved #96
+- Today: Start Writing the SerialArm side that sends the commands to the arm(#32)
+- Blocked: Nothing
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: implentou o lifecycle mode
+- Today: implementar action servidor
+- Blocked: nothing
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: estudou as issues e revisitando documentações e discutiu arquitetura geral dos projetos
+- Today: revisão de PR`s escreveu um file para fazer a trajetoria do braço real e da simulação e vai estudar um script para essa implementação.
+- Blocked: Entender Python
 
 Challenges:
 - 
@@ -233,9 +233,9 @@ Meetings today: none
 - Blocked: 
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Wrote the SerialArm side that sends the commands to the arm, with its tests (#32)
+- Today: Connect write() in the plugin to the backend and pass the serial timings from the URDF and the launch.
+- Blocked: Nothing
 
 **Vinicius**, block B
 - Done: 
@@ -389,7 +389,7 @@ Decisions:
 ### 2026-11-11 (Wed) · day 8 of 10
 
 Scrum Master: 
-Meetings today: none
+Meetings today: Standup with facilators.
 
 **Felipe**, block A
 - Done: 
