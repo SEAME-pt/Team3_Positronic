@@ -101,6 +101,10 @@ it to check before pushing.
 **`make tidy`**: runs clang-tidy (static analysis, rules in `.clang-tidy`) on our code. Needs
 `make build` first. Warnings don't fail the command; read them and fix what's real.
 
+**`make tidy-strict`**: the same, but only on the packages that talk to the arm or command it
+(`positronic_hardware`, `positronic_protocol`, `positronic_mission`), and every warning is an error.
+CI runs it, so run it before you push changes there. Needs `make build` first.
+
 **`make doctor`**: checks the environment: ROS, tools, write access to the repo, ROS 2 messaging.
 With `ARM_IP=<jetson ip>` it also checks the Jetson is reachable. Run it first when something is
 broken.
