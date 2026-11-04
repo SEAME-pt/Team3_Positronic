@@ -30,7 +30,7 @@ make shell           # shell in the container, repo mounted at /ws
 make build           # colcon build
 make test            # colcon test (unit tests + linters)
 make tidy            # clang-tidy on src/ with our .clang-tidy (run make build first)
-make tidy-strict     # clang-tidy on the driver packages, warnings are errors (CI runs this)
+make tidy-strict     # clang-tidy on hardware, protocol and mission, warnings are errors (CI runs this)
 make format-check    # ROS lint on src/ (uncrustify, cpplint, cppcheck, copyright...), changes nothing
 make format          # format src/ (clang-format, then ROS uncrustify), changes your files
 make help            # all targets

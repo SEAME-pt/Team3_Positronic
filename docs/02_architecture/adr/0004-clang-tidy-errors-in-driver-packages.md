@@ -1,4 +1,4 @@
-# 0004. clang-tidy warnings are errors in the driver packages
+# 0004. clang-tidy warnings are errors in the packages that move the arm
 
 2026-11-03, proposed, Felipe Suassuna (issue #38).
 
@@ -11,8 +11,10 @@ code that moves the arm and has to be defended in the oral review.
 ## Decision
 
 - CI runs `make tidy-strict` after the build and the tests. It runs `run-clang-tidy` on
-  `positronic_hardware` and `positronic_protocol` with `-warnings-as-errors="*"`, so any warning
-  fails the PR.
+  `positronic_hardware`, `positronic_protocol` and `positronic_mission` with
+  `-warnings-as-errors="*"`, so any warning fails the PR.
+- `positronic_mission` is included because it commands the arm and publishes the heartbeat that the
+  safety supervisor watches (#43, #45). Its author agreed. `positronic_interfaces` has no C++.
 - The rule lives on the command line (the Makefile), not in `.clang-tidy`, so `make tidy` stays a
   soft check everywhere else.
 - The full run is kept on every PR. Measured: 72 s of wall time for all of `src/` in the dev VM.
@@ -32,7 +34,7 @@ code that moves the arm and has to be defended in the oral review.
 
 ## Consequences
 
-- A PR touching the driver cannot merge with a clang-tidy warning. A wrong warning needs a
+- A PR touching these packages cannot merge with a clang-tidy warning. A wrong warning needs a
   `// NOLINT(check)` with a reason.
 - CI takes longer by the duration of the tidy step.
 - A new C++ package is not strict until it is added to `TIDY_STRICT_FILES`.

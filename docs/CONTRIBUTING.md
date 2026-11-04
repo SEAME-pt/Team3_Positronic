@@ -458,7 +458,7 @@ Never name a constant or enum value after a common macro (`ERROR`, `OK`, `TRUE`,
 
 **The rule:**
 - A PR adds **no new clang-tidy or cppcheck warnings** in the files it touches.
-- In the driver packages (`positronic_hardware`, `positronic_protocol`) CI enforces it: `make tidy-strict` fails on any clang-tidy warning (ADR 0004).
+- In `positronic_hardware`, `positronic_protocol` and `positronic_mission` CI enforces it: `make tidy-strict` fails on any clang-tidy warning (ADR 0004).
 - If a warning is truly wrong, silence that one line with `// NOLINT(check-name)` and explain why in the PR.
 - Reviewers check this.
 

@@ -29,32 +29,31 @@ class MissionNode : public rclcpp_lifecycle::LifecycleNode
 public:
   MissionNode()
   : LifecycleNode("mission_node"),
-    _publisher(nullptr),
-    _timer(nullptr),
-    _state(7)
+    publisher_(nullptr),
+    timer_(nullptr)
   {
     RCLCPP_INFO(get_logger(), "IN constructor");
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  CallbackReturn on_configure(const rclcpp_lifecycle::State & /*state*/) override
   {
     auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
     RCLCPP_INFO(get_logger(), "IN on_configure");
     // Create everything here
-    _publisher = create_publisher<Heartbeat>("/mission/heartbeat", qos);
+    publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
 
-    _timer = create_wall_timer(100ms, std::bind(&MissionNode::heartBeat, this));
-    _timer->cancel();
+    timer_ = create_wall_timer(100ms, [this]{heart_beat();});
+    timer_->cancel();
 
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State & /*state*/) override
   {
     RCLCPP_INFO(get_logger(), "IN on_cleanup");
-    _publisher = nullptr;
-    _timer = nullptr;
+    publisher_ = nullptr;
+    timer_ = nullptr;
 
     return CallbackReturn::SUCCESS;
   }
@@ -64,7 +63,7 @@ public:
     RCLCPP_INFO(get_logger(), "IN on_activate");
     LifecycleNode::on_activate(state);
 
-    _timer->reset();
+    timer_->reset();
 
     return CallbackReturn::SUCCESS;
   }
@@ -73,23 +72,23 @@ public:
   {
     RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
-    _timer->cancel();
+    timer_->cancel();
     LifecycleNode::on_deactivate(state);
 
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /*state*/) override
   {
     RCLCPP_INFO(get_logger(), "IN on_shutdown");
     // _timer.reset() also works!
-    _publisher = nullptr;
-    _timer = nullptr;
+    publisher_ = nullptr;
+    timer_ = nullptr;
 
     return CallbackReturn::SUCCESS;
   }
 
-  void heartBeat()
+  void heart_beat()
   {
     auto msg = Heartbeat();
     msg.stamp = now();
@@ -98,7 +97,7 @@ public:
     msg.state = Heartbeat::STATE_IDLE;
     msg.node_name = get_name();
 
-    _publisher->publish(msg);
+    publisher_->publish(msg);
   }
 
 private:
@@ -111,10 +110,10 @@ private:
             timer to track 10Hz
             state
     */
-  rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr _publisher;
+  rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_;
 
-  rclcpp::TimerBase::SharedPtr _timer;
-  uint8_t _state;
+  rclcpp::TimerBase::SharedPtr timer_;
+  // uint8_t state_{7};
 };
 
 int main(int argc, char ** argv)

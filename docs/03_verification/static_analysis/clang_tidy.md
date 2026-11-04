@@ -1,13 +1,13 @@
 # clang-tidy in CI (#38)
 
-Static analysis on the driver packages. A warning there fails CI.
+Static analysis on the packages that talk to the arm or command it. A warning there fails CI.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `make tidy` | clang-tidy on all of `src/`. Warnings are printed, nothing fails. Use it while you work. |
-| `make tidy-strict` | The same tool on the driver packages only (`TIDY_STRICT_FILES` in the Makefile), with `-warnings-as-errors="*"`. CI runs it after the build. |
+| `make tidy-strict` | The same tool on the strict packages only (`TIDY_STRICT_FILES` in the Makefile), with `-warnings-as-errors="*"`. CI runs it after the build. |
 
 Both need `make build` first: clang-tidy reads `build/compile_commands.json` to get the include
 paths and flags of each file. To check one file while you work:
@@ -18,13 +18,17 @@ in `make test`.
 
 ## Which packages are strict
 
-`positronic_hardware` and `positronic_protocol`: the code that talks to the arm. The other
-packages have no C++ yet. When a new C++ package should be strict (the safety supervisor, for
-example), add it to `TIDY_STRICT_FILES`.
+- `positronic_hardware` and `positronic_protocol`: the code that talks to the arm.
+- `positronic_mission`: the node that commands the arm and publishes the heartbeat the safety
+  supervisor watches. Added on 2026-11-04, agreed with its author, with a baseline of 0 warnings.
+
+`positronic_interfaces` only has message definitions, so there is no C++ to check. When a new C++
+package should be strict (the safety supervisor, for example), add it to `TIDY_STRICT_FILES`.
 
 ## Baseline (dev, 2026-11-03, before the fixes)
 
-13 warnings in the driver packages, all in `positronic_hardware`. `positronic_protocol` had none.
+13 warnings in `positronic_hardware` and `positronic_protocol`, all in `positronic_hardware`.
+`positronic_protocol` had none.
 
 | Check | Count | Where | Fix |
 |---|---|---|---|
@@ -34,7 +38,7 @@ example), add it to `TIDY_STRICT_FILES`.
 | `readability-redundant-member-init` | 2 | `reply_assembler.hpp`, `test_serial_arm.cpp` | drop the `{}` |
 | `cppcoreguidelines-special-member-functions` | 1 | `PosixSerialPort` | delete copy and move (it owns a file descriptor) |
 
-Fixed in PR #96. The baseline in the driver packages is now **0 warnings**.
+Fixed in PR #96. The baseline in the strict packages is now **0 warnings**.
 
 The "N warnings generated" lines in the output come from system and ROS headers. clang-tidy
 suppresses them (`HeaderFilterRegex` in `.clang-tidy` keeps only ours). They are not ours to fix.
