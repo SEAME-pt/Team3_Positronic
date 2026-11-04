@@ -10,7 +10,7 @@
     Folders: msg/ for topics, srv/ for services, action/ for actions.
   </description>
   <maintainer email="vloureir@student.42porto.com">vloureir</maintainer>
-  <license>Apache-2.0</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
