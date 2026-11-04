@@ -40,10 +40,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -75,9 +77,20 @@ public:
   {
   }
 
-  bool write(const std::uint8_t * /*data*/, std::size_t /*count*/) override
+  bool write(const std::uint8_t * data, std::size_t count) override
   {
-    return true;  // the request is accepted; the reply is scripted below.
+    // The request is accepted; the reply is scripted below. Every frame is kept so a test can
+    // check what the thread put on the wire.
+    const std::lock_guard<std::mutex> lock{mutex_};
+    written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
+    return true;
+  }
+
+  /// Every frame written so far, oldest first.
+  std::vector<std::vector<std::uint8_t>> written()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return written_;
   }
 
   std::size_t read(std::uint8_t * dst, std::size_t max) override
@@ -95,9 +108,40 @@ public:
 
 private:
   std::vector<std::vector<std::uint8_t>> bursts_;
+  std::vector<std::vector<std::uint8_t>> written_;
   std::size_t index_{0};
   std::mutex mutex_;
 };
+
+/// The send_angles frames among `frames`: `FE FE 0F 22` + 12 bytes of angles + speed + `FA`.
+std::vector<std::vector<std::uint8_t>> send_angles_frames(
+  const std::vector<std::vector<std::uint8_t>> & frames)
+{
+  std::vector<std::vector<std::uint8_t>> found{};
+  for (const auto & frame : frames) {
+    if (frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
+      frame[3] == 0x22)
+    {
+      found.push_back(frame);
+    }
+  }
+  return found;
+}
+
+/// Waits until the thread has written `count` send_angles frames, or the timeout elapses.
+std::vector<std::vector<std::uint8_t>> wait_for_sends(
+  ReplayTransport & transport, std::size_t count)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto sends{send_angles_frames(transport.written())};
+    if (sends.size() >= count) {
+      return sends;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  return send_angles_frames(transport.written());
+}
 
 /// Parses a space-separated hex string ("ff fe 0a") into bytes. Test-only.
 std::vector<std::uint8_t> parse_hex(std::string_view hex)
@@ -178,6 +222,53 @@ TEST(SerialArm, DecodesRecordedReply)
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     EXPECT_NEAR(pose.at(i), expected.at(i), 1e-9) << i;
   }
+}
+
+TEST(SerialArm, SendsNothingBeforeTheFirstCommand)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  const SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+
+  // Only get_angles requests went out: no controller asked for anything yet.
+  EXPECT_TRUE(send_angles_frames(port.written()).empty());
+  EXPECT_FALSE(port.written().empty());
+}
+
+TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+
+  // J1 = 0.1 rad = 572.96 -> 573 centidegrees = 0x023D big-endian; the other joints 0.
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  const auto sends{wait_for_sends(port, 1)};
+  ASSERT_EQ(sends.size(), 1u);
+  const std::vector<std::uint8_t> expected{0xFE, 0xFE, 0x0F, 0x22, 0x02, 0x3D, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, SerialArm::SEND_SPEED, 0xFA};
+  EXPECT_EQ(sends.front(), expected);
+
+  // The same command is not sent again: the arm already has it.
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 1u);
+
+  // A new command goes out once more.
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  EXPECT_EQ(wait_for_sends(port, 2).size(), 2u);
+}
+
+TEST(SerialArm, SkipsACommandItCannotEncode)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+
+  arm.write_angles(JointPositions{std::nan(""), 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_TRUE(send_angles_frames(port.written()).empty());
 }
 
 TEST(SerialArm, StopsCleanly)

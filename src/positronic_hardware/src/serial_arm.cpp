@@ -38,6 +38,7 @@
 #include "positronic_hardware/reply_assembler.hpp"
 #include "positronic_protocol/encode.hpp"
 #include "positronic_protocol/types.hpp"
+#include "positronic_protocol/units.hpp"
 
 namespace positronic_hardware
 {
@@ -151,13 +152,13 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(const std::string & port, int baud_rate)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate)}
+SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing}
 {
 }
 
-SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport)
-: transport_{std::move(transport)}
+SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing)
+: transport_{std::move(transport)}, timing_{timing}
 {
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
@@ -191,38 +192,80 @@ bool SerialArm::has_sample() const
   return has_sample_.load();
 }
 
+std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
+{
+  const std::optional<positronic_protocol::JointAngles> angles{
+    positronic_protocol::to_centidegrees(target)};
+  if (!angles.has_value()) {
+    return std::nullopt;
+  }
+  return positronic_protocol::encode_send_angles(angles.value(), SEND_SPEED);
+}
+
 void SerialArm::poll_loop()
 {
   ReplyAssembler assembler{};
   std::array<std::uint8_t, 256> chunk{};
 
   const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
+  // The last target that went out, so an unchanged command is not sent again: a send_angles
+  // keeps the arm busy for the settle, and while it stands still the port is better spent on
+  // fresh poses.
+  std::optional<JointPositions> last_sent{};
 
   while (!stop_.load()) {
-    // Ask for the angles. A failed write is transient (unplugged cable, busy port): skip this
-    // round, keep the last known pose, try again next tick. No request went out, so there is
-    // no reply to wait for.
-    if (!transport_->write(request.bytes.data(), request.size)) {
-      std::this_thread::sleep_for(POLL_PERIOD);
-      continue;
+    // The deadline is set before the work, so a slow reply does not drift the period.
+    const auto turn_start{std::chrono::steady_clock::now()};
+    bool sent{false};
+
+    // Ask for the angles. A failed write is transient (busy port): skip this round, keep the
+    // last known pose, try again next turn.
+    bool replied{false};
+    if (transport_->write(request.bytes.data(), request.size)) {
+      // Read until the reply completes or REPLY_TIMEOUT passes. The reply comes in many small
+      // chunks behind servo-bus chatter, so a fixed number of reads is not enough, and the
+      // request and its reply must be over before anything else is written: the arm drops a
+      // send_angles that arrives while it is still answering a get_angles.
+      const auto reply_deadline{turn_start + REPLY_TIMEOUT};
+      while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
+        const std::size_t got{transport_->read(chunk.data(), chunk.size())};
+        if (got == 0) {
+          // A real port blocks up to VTIME before returning 0; a test transport returns at
+          // once, so yield instead of spinning.
+          std::this_thread::sleep_for(std::chrono::milliseconds{1});
+          continue;
+        }
+        if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
+          latest_.writeFromNonRT(pose.value());
+          // Set after the write, so whoever sees true also finds the real pose in the buffer.
+          has_sample_.store(true);
+          replied = true;
+        }
+      }
     }
 
-    // Drain whatever is there and feed the assembler. One get_angles reply usually arrives over
-    // a few reads, so we keep reading until the port goes quiet or a reply completes.
-    for (int reads{0}; reads < 8 && !stop_.load(); ++reads) {
-      const std::size_t got{transport_->read(chunk.data(), chunk.size())};
-      if (got == 0) {
-        break;
-      }
-      if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
-        latest_.writeFromNonRT(pose.value());
-        // Set after the write, so whoever sees true also finds the real pose in the buffer.
-        has_sample_.store(true);
-        break;
+    // The arm answered, so its input is free: send the newest command now, if it is new.
+    // A turn without a reply sends nothing, the command waits in command_ for the next.
+    if (replied && has_command_.load()) {
+      const JointPositions target{*command_.readFromRT()};
+      if (!last_sent.has_value() || target != last_sent.value()) {
+        // NaN or out of range: nothing we can put on the wire, keep the previous target.
+        const std::optional<positronic_protocol::Frame> frame{encode_command(target)};
+        if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
+          last_sent = target;
+          sent = true;
+          // The arm passes the command to the servos and ignores the port meanwhile: a
+          // get_angles inside this window stalls, so the next turn must not start before it.
+          std::this_thread::sleep_for(timing_.send_settle);
+        }
       }
     }
 
-    std::this_thread::sleep_for(POLL_PERIOD);
+    std::chrono::milliseconds period{POLL_PERIOD};
+    if (sent) {
+      period = timing_.moving_period;
+    }
+    std::this_thread::sleep_until(turn_start + period);
   }
 }
 

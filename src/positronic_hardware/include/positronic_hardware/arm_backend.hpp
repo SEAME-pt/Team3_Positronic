@@ -61,10 +61,10 @@ public:
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
 
-  /// The target joint angles, in radians. Non-blocking, safe from the control loop: the
-  /// implementation only stores the newest command, it never touches the serial port here.
-  /// A newer call replaces the previous command before it was sent. The plugin calls this only
-  /// while active, so an implementation does not need to check that itself.
+  /// The target joint angles, in radians. Safe from the control loop: the implementation only
+  /// stores the newest command and never waits for the serial port here. A newer call
+  /// replaces the previous command before it was sent. The plugin calls this only while
+  /// active, so an implementation does not need to check that itself.
   virtual void write_angles(const JointPositions & angles) = 0;
 
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control

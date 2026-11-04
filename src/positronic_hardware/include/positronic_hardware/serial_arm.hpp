@@ -99,8 +99,9 @@ public:
   /// loop. Before the first reply arrives it returns START_POSE, never NaN.
   [[nodiscard]] JointPositions read_angles() const override;
 
-  /// The target pose the thread sends next, in radians. Non-blocking; safe from the control loop:
-  /// it only stores the newest command, the poll thread sends it over the port on its next turn.
+  /// The target pose the thread sends next, in radians. Safe from the control loop: it only
+  /// stores the newest command, the poll thread sends it over the port on its next turn. It can
+  /// wait 0.5 ms, once in a long while, when it meets the poll thread swapping the buffer.
   void write_angles(const JointPositions & angles) override;
 
   /// True once the thread has decoded a first reply from the arm.
