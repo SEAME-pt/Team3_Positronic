@@ -96,7 +96,7 @@ public:
 private:
   std::vector<std::vector<std::uint8_t>> bursts_;
   std::size_t index_{0};
-  std::mutex mutex_{};
+  std::mutex mutex_;
 };
 
 /// Parses a space-separated hex string ("ff fe 0a") into bytes. Test-only.
@@ -161,7 +161,7 @@ TEST(SerialArm, StartsAtStartPoseBeforeAnyReply)
 {
   // A transport that never answers: read_angles() must give the start pose, never NaN.
   const std::vector<std::vector<std::uint8_t>> no_reply{};
-  SerialArm arm{std::make_unique<ReplayTransport>(no_reply)};
+  const SerialArm arm{std::make_unique<ReplayTransport>(no_reply)};
   EXPECT_FALSE(arm.has_sample());  // so the plugin knows this pose is not a measurement
   const JointPositions pose{arm.read_angles()};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
@@ -171,7 +171,7 @@ TEST(SerialArm, StartsAtStartPoseBeforeAnyReply)
 
 TEST(SerialArm, DecodesRecordedReply)
 {
-  SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
+  const SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
   const JointPositions pose{wait_for_reply(arm)};
   EXPECT_TRUE(arm.has_sample());
   const JointPositions expected{expected_pose()};
@@ -185,7 +185,7 @@ TEST(SerialArm, StopsCleanly)
   // The destructor must stop the thread and return promptly, even mid-stream.
   const auto start{std::chrono::steady_clock::now()};
   {
-    SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
+    const SerialArm arm{std::make_unique<ReplayTransport>(recorded_bursts())};
     std::this_thread::sleep_for(std::chrono::milliseconds{20});
   }
   const auto elapsed{std::chrono::steady_clock::now() - start};

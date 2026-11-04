@@ -60,6 +60,12 @@ public:
   PosixSerialPort(const std::string & port, int baud_rate);
   ~PosixSerialPort() override;
 
+  // Owns a file descriptor: a copy would close it twice, so copying is forbidden.
+  PosixSerialPort(const PosixSerialPort &) = delete;
+  PosixSerialPort & operator=(const PosixSerialPort &) = delete;
+  PosixSerialPort(PosixSerialPort &&) = delete;
+  PosixSerialPort & operator=(PosixSerialPort &&) = delete;
+
   bool write(const std::uint8_t * data, std::size_t count) override;
   std::size_t read(std::uint8_t * dst, std::size_t max) override;
 
