@@ -175,9 +175,9 @@ Scrum Master: Leandro Gertrudes
 Meetings today: Standup up with facilators
 
 **Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: arrumou os warnings, fez a issue 38#
+- Today: começar a issue 45 
+- Blocked: nothing.
 
 **Leandro**, block B
 - Done: Começou a implementar a issue 34, fazendo o seu header
@@ -185,9 +185,9 @@ Meetings today: Standup up with facilators
 - Blocked: issue 32
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Está a ver a 47
+- Today: HIL da 47
+- Blocked: Muito trabalho.
 
 **Rui**, block A
 - Done: Added write_angles to the arm backend: the interface, the fake arm and the SerialArm header (#32). Closed #94, joint 6 zero was 45 degrees of. opned #97 for the camera mount in S3 and approved #96
