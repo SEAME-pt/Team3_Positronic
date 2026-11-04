@@ -26,12 +26,12 @@ include_directories(
 add_executable(mission_node src/mission_node.cpp)
 ament_target_dependencies(mission_node ${dependencies})
 
-install (
+install(
   DIRECTORY include/
   DESTINATION include
 )
 
-install (
+install(
   TARGETS mission_node
   DESTINATION lib/${PROJECT_NAME}
 )

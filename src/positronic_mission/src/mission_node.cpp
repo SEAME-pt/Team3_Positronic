@@ -45,7 +45,7 @@ public:
     _timer = create_wall_timer(100ms, std::bind(&MissionNode::heartBeat, this));
     _timer->cancel();
 
-    return  CallbackReturn::SUCCESS;
+    return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
@@ -54,7 +54,7 @@ public:
     _publisher = nullptr;
     _timer = nullptr;
 
-    return  CallbackReturn::SUCCESS;
+    return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override
@@ -64,7 +64,7 @@ public:
 
     _timer->reset();
 
-    return  CallbackReturn::SUCCESS;
+    return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override
@@ -74,7 +74,7 @@ public:
     _timer->cancel();
     LifecycleNode::on_deactivate(state);
 
-    return  CallbackReturn::SUCCESS;
+    return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override
@@ -84,7 +84,7 @@ public:
     _publisher = nullptr;
     _timer = nullptr;
 
-    return  CallbackReturn::SUCCESS;
+    return CallbackReturn::SUCCESS;
   }
 
   void heartBeat()
@@ -121,7 +121,7 @@ int main(int argc, char ** argv)
   auto mission_node = std::make_shared<MissionNode>();
   rclcpp::spin(mission_node->get_node_base_interface());
   rclcpp::shutdown();
-  return  0;
+  return 0;
 }
 
 /*
