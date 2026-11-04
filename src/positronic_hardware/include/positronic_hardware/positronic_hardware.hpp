@@ -80,6 +80,7 @@ private:
     std::string port{"/dev/ttyTHS1"};
     int baud{1000000};
     double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
+    SerialArm::Timing timing{};
   };
 
   /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown

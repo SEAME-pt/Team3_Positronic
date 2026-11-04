@@ -88,13 +88,16 @@ def test_uses_the_positronic_plugin():
 def test_defaults_select_the_real_arm():
     """Check the default parameters: the serial backend on the Jetson UART."""
     assert hardware_params(expand()) == {
-        'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000'}
+        'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000',
+        'moving_period_ms': '50', 'send_settle_ms': '30'}
 
 
 def test_arguments_reach_the_plugin():
     """Check that the xacro arguments become the plugin parameters."""
-    params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200'))
-    assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200'}
+    params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200',
+                                    moving_period_ms='40', send_settle_ms='25'))
+    assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200',
+                      'moving_period_ms': '40', 'send_settle_ms': '25'}
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():

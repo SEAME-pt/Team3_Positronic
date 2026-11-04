@@ -319,7 +319,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
 {
   load(urdf_with(
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
-                         param("baud", "115200") + param("velocity_filter_alpha", "0.5")));
+                         param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
+                         param("moving_period_ms", "40") + param("send_settle_ms", "25")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -338,6 +339,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"velocity_filter_alpha", "1.5"},   // above 1
     {"velocity_filter_alpha", "fast"},  // not a number
     {"velocity_filter_alpha", "nan"},   // from_chars reads it, the range check must not
+    {"moving_period_ms", "10"},         // below the arm's own busy time
+    {"moving_period_ms", "66.5"},       // whole ms only
+    {"send_settle_ms", "250"},          // longer than the #35 timeout
+    {"send_settle_ms", "slow"},         // not a number
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);

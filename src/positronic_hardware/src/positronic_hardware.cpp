@@ -63,8 +63,8 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
 constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 
 /// The <param> names the <hardware> tag may use. Anything else is a typo.
-constexpr std::array<std::string_view, 4> KNOWN_PARAMETERS{
-  "backend", "port", "baud", "velocity_filter_alpha"};
+constexpr std::array<std::string_view, 6> KNOWN_PARAMETERS{
+  "backend", "port", "baud", "velocity_filter_alpha", "moving_period_ms", "send_settle_ms"};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(
@@ -86,6 +86,27 @@ std::optional<Number> parse_number(const std::string & text)
     return std::nullopt;
   }
   return value;
+}
+
+/// Reads `name` into `out` when the URDF sets it: a whole number of ms in [min, max]. True
+/// when the parameter is absent or valid, false with the error logged otherwise.
+bool read_milliseconds(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
+  const std::string & name, int min, int max, std::chrono::milliseconds & out)
+{
+  const std::string * text{find_parameter(parameters, name)};
+  if (text == nullptr) {
+    return true;
+  }
+  const std::optional<int> value{parse_number<int>(*text)};
+  if (!value.has_value() || *value < min || *value > max) {
+    RCLCPP_ERROR(
+      logger, "Parameter '%s' is '%s'; use a whole number in [%d, %d].", name.c_str(),
+      text->c_str(), min, max);
+    return false;
+  }
+  out = std::chrono::milliseconds{*value};
+  return true;
 }
 }  // namespace
 
@@ -139,7 +160,8 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     {
       RCLCPP_ERROR(
         get_logger(),
-        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha.",
+        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha, "
+        "moving_period_ms, send_settle_ms.",
         key.c_str());
       return false;
     }
@@ -192,11 +214,24 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     config.velocity_filter_alpha = value;
   }
 
+  // The two timings of the serial thread (#32), in ms. The bounds only keep out nonsense: a
+  // period below the arm's own busy time, or a settle longer than the #35 timeout.
+  if (!read_milliseconds(
+      get_logger(), parameters, "moving_period_ms", 20, 500, config.timing.moving_period) ||
+    !read_milliseconds(
+      get_logger(), parameters, "send_settle_ms", 0, 200, config.timing.send_settle))
+  {
+    return false;
+  }
+
   config_ = config;
   RCLCPP_INFO(
-    get_logger(), "Backend '%s', port %s at %d baud, velocity filter alpha %.3f.",
+    get_logger(),
+    "Backend '%s', port %s at %d baud, velocity filter alpha %.3f, moving period %d ms, "
+    "send settle %d ms.",
     config_.backend == Backend::SERIAL ? "serial" : "fake", config_.port.c_str(), config_.baud,
-    config_.velocity_filter_alpha);
+    config_.velocity_filter_alpha, static_cast<int>(config_.timing.moving_period.count()),
+    static_cast<int>(config_.timing.send_settle.count()));
   return true;
 }
 
@@ -206,7 +241,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // the port cannot be opened. Allocating and throwing are fine here, outside the control loop.
   try {
     if (config_.backend == Backend::SERIAL) {
-      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud);
+      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing);
     } else {
       arm_ = std::make_unique<FakeArm>();
     }
