@@ -108,6 +108,28 @@ bool read_milliseconds(
   out = std::chrono::milliseconds{*value};
   return true;
 }
+
+/// The two timings of the serial thread (#32), from the URDF when set. The bounds only keep out
+/// nonsense: a period below the arm's own busy time, or a settle longer than the #35 timeout.
+bool read_timing(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
+  SerialArm::Timing & out)
+{
+  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+    !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
+  {
+    return false;
+  }
+  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
+  // only stretch every turn by itself and hide the value under test in a sweep.
+  if (out.send_settle >= out.moving_period) {
+    RCLCPP_ERROR(
+      logger, "send_settle_ms (%d) must be below moving_period_ms (%d).",
+      static_cast<int>(out.send_settle.count()), static_cast<int>(out.moving_period.count()));
+    return false;
+  }
+  return true;
+}
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -214,22 +236,7 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     config.velocity_filter_alpha = value;
   }
 
-  // The two timings of the serial thread (#32), in ms. The bounds only keep out nonsense: a
-  // period below the arm's own busy time, or a settle longer than the #35 timeout.
-  if (!read_milliseconds(
-      get_logger(), parameters, "moving_period_ms", 20, 500, config.timing.moving_period) ||
-    !read_milliseconds(
-      get_logger(), parameters, "send_settle_ms", 0, 200, config.timing.send_settle))
-  {
-    return false;
-  }
-  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
-  // only stretch every turn by itself and hide the value under test in a sweep.
-  if (config.timing.send_settle >= config.timing.moving_period) {
-    RCLCPP_ERROR(
-      get_logger(), "send_settle_ms (%d) must be below moving_period_ms (%d).",
-      static_cast<int>(config.timing.send_settle.count()),
-      static_cast<int>(config.timing.moving_period.count()));
+  if (!read_timing(get_logger(), parameters, config.timing)) {
     return false;
   }
 
