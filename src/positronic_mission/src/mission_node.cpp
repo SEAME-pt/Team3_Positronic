@@ -38,9 +38,11 @@ public:
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
   {
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+
     RCLCPP_INFO(get_logger(), "IN on_configure");
     // Create everything here
-    _publisher = create_publisher<Heartbeat>("/mission/heartbeat", 10);
+    _publisher = create_publisher<Heartbeat>("/mission/heartbeat", qos);
 
     _timer = create_wall_timer(100ms, std::bind(&MissionNode::heartBeat, this));
     _timer->cancel();
