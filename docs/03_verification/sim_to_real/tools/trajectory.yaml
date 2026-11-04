@@ -1,0 +1,40 @@
+# The one trajectory both worlds run (#37). Used unchanged in Gazebo and on the real arm.
+#
+# Units: positions in radians (REP 103), time_from_start in seconds since the goal starts.
+# Joint order: the arm_controller joints in positronic_bringup/config/ros2_controllers.yaml.
+#
+# Rules this file follows (Sprint 02 guide, #37):
+# - starts and ends at the home pose; 4 points in between; every joint moves at least once
+# - moves of 20 to 30 deg (0.349 to 0.524 rad), so every point is far more than 10 deg
+#   inside the URDF limits (the tightest arm limit is joint3_to_joint2, +-2.4434 rad)
+# - 30 % speed: URDF velocity 2.618 rad/s -> 0.785 rad/s. Peak of a segment that starts and
+#   stops at rest is about 1.9 x |dtheta| / dt. Largest move here: 0.5236 rad in 4 s
+#   -> 1.9 x 0.5236 / 4 = 0.249 rad/s, about 32 % of the 30 % limit.
+
+joint_names:
+  - joint2_to_joint1
+  - joint3_to_joint2
+  - joint4_to_joint3
+  - joint5_to_joint4
+  - joint6_to_joint5
+  - joint6output_to_joint6
+
+# Sent first as a short goal so both worlds start from the same pose.
+home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+points:
+  # joint1 +25 deg, joint2 +20 deg
+  - positions: [0.4363, 0.3491, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 4.0
+  # joint3 -25 deg, joint4 +20 deg
+  - positions: [0.4363, 0.3491, -0.4363, 0.3491, 0.0, 0.0]
+    time_from_start: 8.0
+  # joint1 and joint2 back to 0, joint5 +30 deg
+  - positions: [0.0, 0.0, -0.4363, 0.3491, 0.5236, 0.0]
+    time_from_start: 12.0
+  # joint6 -30 deg
+  - positions: [0.0, 0.0, -0.4363, 0.3491, 0.5236, -0.5236]
+    time_from_start: 16.0
+  # everything back to home
+  - positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 20.0
