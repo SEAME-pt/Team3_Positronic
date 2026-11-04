@@ -1,6 +1,7 @@
 // #include "./include/mission_node.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -14,7 +15,7 @@ using Heartbeat = positronic_interfaces::msg::Heartbeat;
 class MissionNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
-    MissionNode() : LifecycleNode("mission_node"), _publisher(nullptr), _timer(nullptr)
+    MissionNode() : LifecycleNode("mission_node"), _publisher(nullptr), _timer(nullptr), _state(7)
     {
         RCLCPP_INFO(get_logger(), "IN constructor");
     }
@@ -75,6 +76,8 @@ public:
     {
         auto msg = Heartbeat();
         msg.stamp = now();
+
+        // Will need a new variable for it later. And to update it
         msg.state = Heartbeat::STATE_IDLE;
         msg.node_name = get_name();
 
@@ -89,10 +92,12 @@ private:
             publisher 10Hz
             subscriber /joint_states
             timer to track 10Hz
+            state
     */
     rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr _publisher;
 
     rclcpp::TimerBase::SharedPtr _timer;
+    uint8_t _state;
 };
 
 
@@ -104,3 +109,11 @@ int main(int argc, char **argv)
     rclcpp::shutdown();
     return (0);
 }
+
+/*
+    Three places that use state:
+
+    handle_goal reads it to decide whether to accept (idle) or reject
+    the execution code and the cancel/stop code write it as the arm moves between states
+    heartBeat() reads it to fill msg.state
+*/
