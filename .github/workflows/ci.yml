@@ -59,6 +59,8 @@ jobs:
       - name: Test
         run: make RUN="$RUN_DEV" test
 
+      # clang-tidy on the driver packages (TIDY_STRICT_FILES in the Makefile): any warning fails.
+      # Needs the Build step above, which writes build/compile_commands.json
       - name: Static analysis (clang-tidy)
         run: make RUN="$RUN_DEV" tidy-strict
 
