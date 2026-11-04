@@ -356,6 +356,17 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
   }
 }
 
+TEST_F(LoadRobotSystem, InitRejectsASettleThatFillsTheTurn)
+{
+  // Both in range on their own, but the settle leaves no room for the reply in the turn.
+  load(urdf_with(
+    all_good_joints(),
+    std::string{FAKE_BACKEND} + param("moving_period_ms", "30") + param("send_settle_ms", "30")));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
 {
   load(urdf_with(all_good_joints()));

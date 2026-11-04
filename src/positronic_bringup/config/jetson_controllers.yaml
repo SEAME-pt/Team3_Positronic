@@ -8,10 +8,11 @@ controller_manager:
     # per update.
     #
     # The serial thread of SerialArm asks for a pose every 10 ms while no new command comes,
-    # and runs 50 ms turns while it sends them (moving_period_ms, #32). At 30 Hz an update
-    # finds a fresh pose when the arm stands still, and when it moves the newest command
-    # reaches the arm at most 20 times a second: the ones in between are replaced, not queued.
-    # A higher rate would only repeat poses and replace more commands.
+    # and runs turns of moving_period_ms (50 by default, #32) while it sends them. At 30 Hz an
+    # update finds a fresh pose when the arm stands still, and when it moves the newest command
+    # reaches the arm at most 1000 / moving_period_ms times a second, 20 with the default: the
+    # ones in between are replaced, not queued. A higher rate would only repeat poses and
+    # replace more commands.
     update_rate: 30
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

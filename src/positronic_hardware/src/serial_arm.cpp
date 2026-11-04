@@ -183,8 +183,6 @@ void SerialArm::write_angles(const JointPositions & angles)
   // Only stores the command. The poll thread picks it up on its next turn and sends it over the
   // port, so the control loop never waits for the serial link here.
   command_.writeFromNonRT(angles);
-  // Set after the write, so whoever sees true also finds the command in the buffer.
-  has_command_.store(true);
 }
 
 bool SerialArm::has_sample() const
@@ -246,11 +244,13 @@ void SerialArm::poll_loop()
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
     // A turn without a reply sends nothing, the command waits in command_ for the next.
-    if (replied && has_command_.load()) {
-      const JointPositions target{*command_.readFromRT()};
-      if (!last_sent.has_value() || target != last_sent.value()) {
+    // nullopt means no command yet, or a read that lost the race with write_angles() before
+    // the first one: both send nothing, the next turn reads again.
+    if (replied) {
+      const std::optional<JointPositions> target{*command_.readFromRT()};
+      if (target.has_value() && target != last_sent) {
         // NaN or out of range: nothing we can put on the wire, keep the previous target.
-        const std::optional<positronic_protocol::Frame> frame{encode_command(target)};
+        const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
         if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
           last_sent = target;
           sent = true;

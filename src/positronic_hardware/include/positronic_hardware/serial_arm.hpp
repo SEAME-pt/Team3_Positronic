@@ -121,11 +121,11 @@ private:
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   mutable realtime_tools::RealtimeBuffer<JointPositions> latest_{START_POSE};
   // The newest command from write_angles(). The control loop writes it, the poll thread reads it.
-  realtime_tools::RealtimeBuffer<JointPositions> command_{START_POSE};
+  // nullopt until the first command: a readFromRT() that meets a write in progress keeps its old
+  // box, and before the first swap that box must hold "no target", never a pose.
+  realtime_tools::RealtimeBuffer<std::optional<JointPositions>> command_{std::nullopt};
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
-  // True once write_angles() stored a first command. The thread sends nothing before that.
-  std::atomic<bool> has_command_{false};
   std::thread thread_;
 };
 

@@ -223,6 +223,15 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
   {
     return false;
   }
+  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
+  // only stretch every turn by itself and hide the value under test in a sweep.
+  if (config.timing.send_settle >= config.timing.moving_period) {
+    RCLCPP_ERROR(
+      get_logger(), "send_settle_ms (%d) must be below moving_period_ms (%d).",
+      static_cast<int>(config.timing.send_settle.count()),
+      static_cast<int>(config.timing.moving_period.count()));
+    return false;
+  }
 
   config_ = config;
   RCLCPP_INFO(
