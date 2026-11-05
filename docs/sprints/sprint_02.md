@@ -218,29 +218,29 @@ Scrum Master:
 Meetings today: none
 
 **Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: começou a issue 45 e fez PR review da issue 32
+- Today: Avançar na issue 45 e estudar a arquitetura do ROS2
+- Blocked: entender a arquitetura do ROS2
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Participou da reunião com os facilitadores e avançou na issue 34.
+- Today: Terminar a issue 34 e se preparar para o PR de amanhã
+- Blocked: Nothing
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: fazendo a issue 47
+- Today: continuar trabalhando na issue 47
+- Blocked: falha na comunicação do braço
 
 **Rui**, block A
-- Done: Wrote the SerialArm side that sends the commands to the arm, with its tests (#32)
-- Today: Connect write() in the plugin to the backend and pass the serial timings from the URDF and the launch.
+- Done: Connected write() in the plugin to the beckend, with the serial timings rad from the URDF and the launch. PR #101 merged after the review fixes(part 1 of #32)
+- Today: #36 study the lifecycle of the hardware component and what deactivate and activate must do on the arm, then start the implementation Agree the interface with Felipe (#35, #45).
 - Blocked: Nothing
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: estudou sobre action
+- Today: implementando o action
+- Blocked: nothing
 
 **Wallace**, block B
 - Done: 
