@@ -80,15 +80,18 @@ private:
     std::string port{"/dev/ttyTHS1"};
     int baud{1000000};
     double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
+    SerialArm::Timing timing{};
   };
 
   /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown
   /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
   bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
 
-  /// The state interfaces of one joint, looked up once so read() needs no string.
+  /// The interfaces of one joint, looked up once so read() and write() build no string: two
+  /// states the plugin fills, one command the controller fills and the plugin sends.
   struct JointHandles
   {
+    hardware_interface::CommandInterface::SharedPtr command;
     hardware_interface::StateInterface::SharedPtr position;
     hardware_interface::StateInterface::SharedPtr velocity;
   };

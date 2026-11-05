@@ -107,10 +107,10 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
   return "<joint name=\"" + name + "\">" + std::string{interfaces} + "</joint>";
 }
 
-/// A valid joint: position and velocity state interfaces.
+/// A valid joint: position and velocity state interfaces, position command interface.
 std::string good_joint(const std::string & name)
 {
-  return joint_block(name, std::string{POSITION} + std::string{VELOCITY});
+  return joint_block(name, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
 }
 
 /// All six joints valid, except joint `index`, which gets `interfaces` instead.
@@ -210,6 +210,19 @@ protected:
     return loaned.get_optional();
   }
 
+  /// One controller-manager cycle of write(), 10 ms long.
+  hardware_interface::return_type write_once()
+  {
+    return resource_manager_->write(clock_.now(), rclcpp::Duration::from_seconds(0.01)).result;
+  }
+
+  /// Writes `value` to `joint`/position the way a controller does.
+  bool command(const std::string & joint, double value)
+  {
+    auto loaned{resource_manager_->claim_command_interface(joint + "/position")};
+    return loaned.set_value(value);
+  }
+
   rclcpp::Clock clock_;
   std::unique_ptr<hardware_interface::ResourceManager> resource_manager_;
   bool loaded_{false};
@@ -282,11 +295,21 @@ TEST_F(LoadRobotSystem, InitRejectsJointWithoutVelocityState)
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, InitRejectsCommandInterface)
+TEST_F(LoadRobotSystem, InitRejectsJointWithoutCommandInterface)
 {
-  // J1 asks to be commanded: refused until #32, so no controller believes it moves the arm.
-  load(urdf_with(
-    joints_with_one_bad(0, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+  // J1 cannot be commanded: a controller could never move it, so the driver refuses to load.
+  load(urdf_with(joints_with_one_bad(0, std::string{POSITION} + std::string{VELOCITY})));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
+{
+  // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
+  constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
+  load(urdf_with(joints_with_one_bad(
+      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -296,7 +319,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
 {
   load(urdf_with(
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
-                         param("baud", "115200") + param("velocity_filter_alpha", "0.5")));
+                         param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
+                         param("moving_period_ms", "40") + param("send_settle_ms", "25")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -315,6 +339,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"velocity_filter_alpha", "1.5"},   // above 1
     {"velocity_filter_alpha", "fast"},  // not a number
     {"velocity_filter_alpha", "nan"},   // from_chars reads it, the range check must not
+    {"moving_period_ms", "10"},         // below the arm's own busy time
+    {"moving_period_ms", "66.5"},       // whole ms only
+    {"send_settle_ms", "250"},          // longer than the #35 timeout
+    {"send_settle_ms", "slow"},         // not a number
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -326,6 +354,17 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     EXPECT_FALSE(loaded_);
     EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
   }
+}
+
+TEST_F(LoadRobotSystem, InitRejectsASettleThatFillsTheTurn)
+{
+  // Both in range on their own, but the settle leaves no room for the reply in the turn.
+  load(urdf_with(
+    all_good_joints(),
+    std::string{FAKE_BACKEND} + param("moving_period_ms", "30") + param("send_settle_ms", "30")));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
@@ -381,6 +420,28 @@ TEST_F(LoadRobotSystem, ActivatesAndReadStillWorks)
 
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(read_once(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+
+  // A controller asks J1 for 0.25 rad. The fake arm gets there at once, so the next read()
+  // reports it: the whole path from command interface to backend and back.
+  ASSERT_TRUE(command(JOINTS.at(0), 0.25));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  EXPECT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.25);
+  // The other joints were commanded "stay" by on_activate, so they still report START_POSE.
+  EXPECT_DOUBLE_EQ(
+    state(JOINTS.at(1), "position").value_or(std::nan("")),
+    positronic_hardware::FakeArm::START_POSE.at(1));
 }
 
 TEST_F(LoadRobotSystem, ConfigureFailsWhenTheSerialPortIsMissing)

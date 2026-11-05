@@ -63,8 +63,8 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
 constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 
 /// The <param> names the <hardware> tag may use. Anything else is a typo.
-constexpr std::array<std::string_view, 4> KNOWN_PARAMETERS{
-  "backend", "port", "baud", "velocity_filter_alpha"};
+constexpr std::array<std::string_view, 6> KNOWN_PARAMETERS{
+  "backend", "port", "baud", "velocity_filter_alpha", "moving_period_ms", "send_settle_ms"};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(
@@ -86,6 +86,49 @@ std::optional<Number> parse_number(const std::string & text)
     return std::nullopt;
   }
   return value;
+}
+
+/// Reads `name` into `out` when the URDF sets it: a whole number of ms in [min, max]. True
+/// when the parameter is absent or valid, false with the error logged otherwise.
+bool read_milliseconds(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
+  const std::string & name, int min, int max, std::chrono::milliseconds & out)
+{
+  const std::string * text{find_parameter(parameters, name)};
+  if (text == nullptr) {
+    return true;
+  }
+  const std::optional<int> value{parse_number<int>(*text)};
+  if (!value.has_value() || *value < min || *value > max) {
+    RCLCPP_ERROR(
+      logger, "Parameter '%s' is '%s'; use a whole number in [%d, %d].", name.c_str(),
+      text->c_str(), min, max);
+    return false;
+  }
+  out = std::chrono::milliseconds{*value};
+  return true;
+}
+
+/// The two timings of the serial thread (#32), from the URDF when set. The bounds only keep out
+/// nonsense: a period below the arm's own busy time, or a settle longer than the #35 timeout.
+bool read_timing(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
+  SerialArm::Timing & out)
+{
+  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+    !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
+  {
+    return false;
+  }
+  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
+  // only stretch every turn by itself and hide the value under test in a sweep.
+  if (out.send_settle >= out.moving_period) {
+    RCLCPP_ERROR(
+      logger, "send_settle_ms (%d) must be below moving_period_ms (%d).",
+      static_cast<int>(out.send_settle.count()), static_cast<int>(out.moving_period.count()));
+    return false;
+  }
+  return true;
 }
 }  // namespace
 
@@ -113,10 +156,13 @@ CallbackReturn RobotSystem::on_init(
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
-    // Read-only driver until #32: no controller may believe it moves the arm.
-    if (!joint.command_interfaces.empty()) {
+    // The arm only takes angles (send_angles), so position is the one command we can honour.
+    // A velocity or effort command interface would be claimed by a controller and never sent.
+    if (joint.command_interfaces.size() != 1 ||
+      joint.command_interfaces.front().name != hardware_interface::HW_IF_POSITION)
+    {
       RCLCPP_ERROR(
-        get_logger(), "Joint '%s' must have no command interface: this driver is read-only.",
+        get_logger(), "Joint '%s' must have exactly one command interface: 'position'.",
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
@@ -136,7 +182,8 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     {
       RCLCPP_ERROR(
         get_logger(),
-        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha.",
+        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha, "
+        "moving_period_ms, send_settle_ms.",
         key.c_str());
       return false;
     }
@@ -189,11 +236,18 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     config.velocity_filter_alpha = value;
   }
 
+  if (!read_timing(get_logger(), parameters, config.timing)) {
+    return false;
+  }
+
   config_ = config;
   RCLCPP_INFO(
-    get_logger(), "Backend '%s', port %s at %d baud, velocity filter alpha %.3f.",
+    get_logger(),
+    "Backend '%s', port %s at %d baud, velocity filter alpha %.3f, moving period %d ms, "
+    "send settle %d ms.",
     config_.backend == Backend::SERIAL ? "serial" : "fake", config_.port.c_str(), config_.baud,
-    config_.velocity_filter_alpha);
+    config_.velocity_filter_alpha, static_cast<int>(config_.timing.moving_period.count()),
+    static_cast<int>(config_.timing.send_settle.count()));
   return true;
 }
 
@@ -203,7 +257,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // the port cannot be opened. Allocating and throwing are fine here, outside the control loop.
   try {
     if (config_.backend == Backend::SERIAL) {
-      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud);
+      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing);
     } else {
       arm_ = std::make_unique<FakeArm>();
     }
@@ -214,18 +268,20 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // A fresh history: the first read() after (re)configure has no earlier sample to difference.
   velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
 
-  // Look the handles up once, here, so read() builds no string. This throws if a name is
-  // missing, which is fine outside the control loop.
+  // Look the handles up once, here, so read() and write() build no string. This throws if a
+  // name is missing, which is fine outside the control loop.
   try {
     for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
       const std::string & name{info_.joints.at(i).name};
+      handles_.at(i).command =
+        get_command_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).position =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
   } catch (const std::exception & error) {
-    RCLCPP_ERROR(get_logger(), "Cannot find a state interface: %s", error.what());
+    RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
   }
 
@@ -252,7 +308,8 @@ CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & /*previo
 CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Allow motion": every command starts at the measured position, so the first thing a
-  // controller sees is "stay where you are". There are no command interfaces until #32.
+  // controller sees is "stay where you are" and write() sends nothing new until a controller
+  // writes.
   // Never activate on a placeholder pose: wait for the arm to answer. Sleeping is fine here,
   // outside the control loop.
   const auto deadline{std::chrono::steady_clock::now() + FIRST_SAMPLE_TIMEOUT};
@@ -282,7 +339,14 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
 
 return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  // Read-only driver (#22): nothing is sent, so the arm cannot move. Commands come in #32.
+  JointPositions commands{};
+  for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
+    // wait_until_get = false: never block on a controller that is writing the handle.
+    if (!get_command(handles_.at(i).command, commands.at(i), false)) {
+      return return_type::OK;  // A handle was busy: keep the last command, try next tick.
+    }
+  }
+  arm_->write_angles(commands);
   return return_type::OK;
 }
 
