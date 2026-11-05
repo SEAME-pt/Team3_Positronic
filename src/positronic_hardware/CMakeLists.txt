@@ -13,6 +13,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp_lifecycle
   positronic_protocol
   realtime_tools
+  urdf
 )
 
 find_package(ament_cmake REQUIRED)
@@ -37,6 +38,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   rclcpp_lifecycle::rclcpp_lifecycle
   positronic_protocol::positronic_protocol
   realtime_tools::realtime_tools
+  urdf::urdf
 )
 
 # Registers positronic_hardware.xml with hardware_interface, so the
