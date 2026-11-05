@@ -9,10 +9,13 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Heartbeat.msg"
-  DEPENDENCIES builtin_interfaces
+  "action/GoToPose.action"
+  DEPENDENCIES builtin_interfaces geometry_msgs lifecycle_msgs
 )
 
 if(BUILD_TESTING)
