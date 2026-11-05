@@ -80,6 +80,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_velocity_estimator test/test_velocity_estimator.cpp)
   target_include_directories(test_velocity_estimator PRIVATE include)
 
+  # Pure-logic unit test for the joint limit check (#34): no ROS, no arm, header-only.
+  ament_add_gtest(test_joint_limit_check test/test_joint_limit_check.cpp)
+  target_include_directories(test_joint_limit_check PRIVATE include)
+
   # Links the library rather than compiling src/serial_arm.cpp a second time.
   ament_add_gtest(test_serial_arm test/test_serial_arm.cpp)
   target_link_libraries(test_serial_arm ${PROJECT_NAME})
