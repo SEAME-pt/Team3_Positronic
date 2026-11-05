@@ -122,11 +122,23 @@ public:
 
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  enum class Request : std::uint8_t
+  {
+    NONE,
+    HALT,
+    POWER_ON
+  };
+  /// The stop or power_on frame for `request`, or nullopt for NONE.
+  static std::optional<positronic_protocol::Frame> encode_request(Request request);
+  /// Sends the pending request, if any, at the start of a turn. True when it was a stop.
+  bool send_pending_request();
 
   void poll_loop();
 
   /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
   static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
+
+  bool request_and_wait(Request request);
 
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
@@ -139,7 +151,6 @@ private:
   realtime_tools::RealtimeBuffer<std::optional<JointPositions>> command_{std::nullopt};
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
-  enum class Request : std::uint8_t { NONE, HALT, POWER_ON };
   // The frame the thread sends at the start of its next turn, before the get_angles. halt() and
   // power_on() set it from a lifecycle transition; the thread puts it back to NONE once the
   // frame is on the wire, and that is what the callers wait for.
