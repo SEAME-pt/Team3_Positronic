@@ -243,9 +243,9 @@ Meetings today: none
 - Blocked: nothing
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: revisão de PR`s escreveu um file para fazer a trajetoria do braço real e da simulação e vai estudar um script para essa implementação.
+- Today: continuar escrevendo o script que carrega uma file que tem a trajetoria do braço, faz os checks e envia essa trajetoria para o braço ou para a simulação.
+- Blocked: Entender Python.
 
 Challenges:
 - 
