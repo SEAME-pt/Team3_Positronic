@@ -10,13 +10,17 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(positronic_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 set(dependencies
   rclcpp
   std_msgs
   rclcpp_lifecycle
+  rclcpp_action
   positronic_interfaces
+  geometry_msgs
 )
 
 include_directories(

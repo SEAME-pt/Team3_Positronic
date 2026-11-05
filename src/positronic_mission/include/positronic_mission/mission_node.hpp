@@ -28,5 +28,45 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+
+namespace positronic_mission
+{
+using namespace std::chrono_literals;
+using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+using positronic_interfaces::msg::Heartbeat;
+
+class MissionNode : public rclcpp_lifecycle::LifecycleNode
+{
+public:
+    MissionNode();
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State & /* state */) override;
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State & /* state */) override;
+  CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /* state */) override;
+
+private:
+    void heart_beat();
+
+    /*
+          Need:
+              action server
+              action client
+              publisher 10Hz
+              subscriber /joint_states
+              timer to track 10Hz
+              state
+      */
+    rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_;
+
+    rclcpp::TimerBase::SharedPtr timer_;
+    // uint8_t state_;
+
+
+
+};
+} //namespace positronic_mission
 
 #endif  // POSITRONIC_MISSION__MISSION_NODE_HPP_"

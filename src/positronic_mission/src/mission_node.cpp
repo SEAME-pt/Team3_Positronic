@@ -20,77 +20,69 @@
 
 #include "positronic_mission/mission_node.hpp"
 
-using namespace std::chrono_literals;
-using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
-using Heartbeat = positronic_interfaces::msg::Heartbeat;
-
-class MissionNode : public rclcpp_lifecycle::LifecycleNode
+positronic_mission::MissionNode::MissionNode()
+    : LifecycleNode("mission_node"),
+    publisher_(nullptr),
+    timer_(nullptr)
 {
-public:
-  MissionNode()
-  : LifecycleNode("mission_node"),
-    _publisher(nullptr),
-    _timer(nullptr),
-    _state(7)
-  {
     RCLCPP_INFO(get_logger(), "IN constructor");
-  }
+}
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
-  {
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(const rclcpp_lifecycle::State & /* state */)
+{
     auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
     RCLCPP_INFO(get_logger(), "IN on_configure");
     // Create everything here
-    _publisher = create_publisher<Heartbeat>("/mission/heartbeat", qos);
+    publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
 
-    _timer = create_wall_timer(100ms, std::bind(&MissionNode::heartBeat, this));
-    _timer->cancel();
+    timer_ = create_wall_timer(100ms, [this]{heart_beat();});
+    timer_->cancel();
 
     return CallbackReturn::SUCCESS;
-  }
+}
 
-  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
-  {
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(const rclcpp_lifecycle::State & /* state */)
+{
     RCLCPP_INFO(get_logger(), "IN on_cleanup");
-    _publisher = nullptr;
-    _timer = nullptr;
+    publisher_ = nullptr;
+    timer_ = nullptr;
 
     return CallbackReturn::SUCCESS;
-  }
+}
 
-  CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override
-  {
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(const rclcpp_lifecycle::State & state)
+{
     RCLCPP_INFO(get_logger(), "IN on_activate");
     LifecycleNode::on_activate(state);
 
-    _timer->reset();
+    timer_->reset();
 
     return CallbackReturn::SUCCESS;
-  }
+}
 
-  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override
-  {
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivate(const rclcpp_lifecycle::State & state)
+{
     RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
-    _timer->cancel();
+    timer_->cancel();
     LifecycleNode::on_deactivate(state);
 
     return CallbackReturn::SUCCESS;
-  }
+}
 
-  CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override
-  {
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(const rclcpp_lifecycle::State & /* state */)
+{
     RCLCPP_INFO(get_logger(), "IN on_shutdown");
-    // _timer.reset() also works!
-    _publisher = nullptr;
-    _timer = nullptr;
+    // timer_.reset() also works!
+    publisher_ = nullptr;
+    timer_ = nullptr;
 
     return CallbackReturn::SUCCESS;
-  }
+}
 
-  void heartBeat()
-  {
+void positronic_mission::MissionNode::heart_beat()
+{
     auto msg = Heartbeat();
     msg.stamp = now();
 
@@ -98,29 +90,13 @@ public:
     msg.state = Heartbeat::STATE_IDLE;
     msg.node_name = get_name();
 
-    _publisher->publish(msg);
-  }
-
-private:
-  /*
-        Need:
-            action server
-            action client
-            publisher 10Hz
-            subscriber /joint_states
-            timer to track 10Hz
-            state
-    */
-  rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr _publisher;
-
-  rclcpp::TimerBase::SharedPtr _timer;
-  uint8_t _state;
-};
+    publisher_->publish(msg);
+}
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto mission_node = std::make_shared<MissionNode>();
+  auto mission_node = std::make_shared<positronic_mission::MissionNode>();
   rclcpp::spin(mission_node->get_node_base_interface());
   rclcpp::shutdown();
   return 0;

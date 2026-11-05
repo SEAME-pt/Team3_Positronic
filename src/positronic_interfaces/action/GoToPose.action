@@ -1,0 +1,13 @@
+# Request
+geometry_msgs/PoseStamped target_pose
+---
+# Result
+bool success
+uint8 OK=0
+uint8 REJECTED=1
+uint8 ERROR=2
+uint8 CANCELED=3
+uint8 state
+---
+# Feedback
+string stage
