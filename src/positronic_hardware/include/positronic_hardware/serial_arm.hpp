@@ -81,6 +81,11 @@ public:
   /// follows a get_angles request before its reply is dropped by the arm.
   static constexpr std::chrono::milliseconds REPLY_TIMEOUT{50};
 
+  /// How long halt() and power_on() wait for the thread to put their frame on the wire. Two
+  /// turns of the worst case: a silent arm holds a turn for REPLY_TIMEOUT plus one VTIME read
+  /// (0.1 s), ~150 ms, and the request may land just after a turn has started.
+  static constexpr std::chrono::milliseconds REQUEST_TIMEOUT{300};
+
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
   SerialArm(const std::string & port, int baud_rate, Timing timing = {});
@@ -107,6 +112,14 @@ public:
   /// True once the thread has decoded a first reply from the arm.
   [[nodiscard]] bool has_sample() const override;
 
+  /// Holds every target, then asks the thread to send a stop at the start of its next turn and
+  /// waits for it, up to REQUEST_TIMEOUT.
+  [[nodiscard]] bool halt() override;
+
+  /// Asks the thread to send a power_on at the start of its next turn and waits for it, up to
+  /// REQUEST_TIMEOUT. Lets targets go out again, whether or not the frame made it.
+  [[nodiscard]] bool power_on() override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
@@ -126,6 +139,15 @@ private:
   realtime_tools::RealtimeBuffer<std::optional<JointPositions>> command_{std::nullopt};
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
+  enum class Request : std::uint8_t { NONE, HALT, POWER_ON };
+  // The frame the thread sends at the start of its next turn, before the get_angles. halt() and
+  // power_on() set it from a lifecycle transition; the thread puts it back to NONE once the
+  // frame is on the wire, and that is what the callers wait for.
+  std::atomic<Request> request_{Request::NONE};
+  // True from halt() until power_on(): the thread sends no target meanwhile, so a command stored
+  // before the stop, or one that arrives while inactive, cannot go out after it. Set before
+  // request_, so the turn that sends the stop already sees the hold.
+  std::atomic<bool> halted_{false};
   std::thread thread_;
 };
 
