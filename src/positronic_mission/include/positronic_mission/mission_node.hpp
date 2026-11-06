@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cmath>
 #include <memory>
 #include <thread>
 #include <rclcpp_action/client.hpp>
@@ -37,6 +38,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 namespace positronic_mission
 {
@@ -44,6 +46,14 @@ using positronic_interfaces::msg::Heartbeat;
 using positronic_interfaces::action::GoToPose;
 using GoalHandle = rclcpp_action::ServerGoalHandle<GoToPose>;
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
+enum class State : unsigned char {
+    IDLE,
+    INACTIVE,
+    MOVING,
+    STOPPED,
+    ERROR
+};
 
 class MissionNode : public rclcpp_lifecycle::LifecycleNode
 {
@@ -64,10 +74,11 @@ public:
 
 private:
     void heart_beat();
-    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const GoToPose::Goal> goal);
-    rclcpp_action::CancelResponse handle_cancel(std::shared_ptr<GoalHandle> goal_handle);
-    void handle_accepted(std::shared_ptr<GoalHandle> goal_handle);
-    void execute(std::shared_ptr<GoalHandle> goal_handle);
+    bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
+    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal);
+    rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & goal_handle);
+    void handle_accepted(const std::shared_ptr<GoalHandle> & goal_handle);
+    void execute(const std::shared_ptr<GoalHandle> & goal_handle);
 
     /*
           Need:
@@ -86,7 +97,7 @@ private:
     // state needs to be std::atomic or mutex protected
     // uint8_t state_;
     std::thread exec_thread_;
-
+    std::atomic<State> state_{State::INACTIVE};
 
 };
 } //namespace positronic_mission

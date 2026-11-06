@@ -19,6 +19,7 @@
 // THE SOFTWARE.
 
 #include "positronic_mission/mission_node.hpp"
+#include <cmath>
 #include <memory>
 #include <rclcpp/rate.hpp>
 #include "positronic_interfaces/action/go_to_pose.hpp"
@@ -50,14 +51,14 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
 
     mission_server_ = rclcpp_action::create_server<GoToPose>(
         this, "go_to_pose",
-        [this](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const GoToPose::Goal> goal) {
+        [this](const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal) {
             return handle_goal(uuid, goal);
         },
-        [this](std::shared_ptr<GoalHandle> goal_handle) {
+        [this](const std::shared_ptr<GoalHandle> & goal_handle) {
             return handle_cancel(goal_handle);
         },
-        [this](std::shared_ptr<GoalHandle> goal_handle) {
-            handle_accepted(std::move(goal_handle));
+        [this](const std::shared_ptr<GoalHandle> & goal_handle) {
+            handle_accepted(goal_handle);
         });
 
     timer_ = create_wall_timer(100ms, [this]{heart_beat();});
@@ -82,6 +83,16 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(c
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(const rclcpp_lifecycle::State & state)
 {
     RCLCPP_INFO(get_logger(), "IN on_activate");
+
+    // This is a placeholder
+    // I need to check if the arm is actually state
+    // TODO (possible strategies):
+    // can read from /joint_states
+    // check move_group node
+    // controller status from ros2_control
+    state_ = State::IDLE;
+
+
     LifecycleNode::on_activate(state);
 
     timer_->reset();
@@ -93,8 +104,14 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
 {
     RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
+    state_ = State::INACTIVE;
     timer_->cancel();
     LifecycleNode::on_deactivate(state);
+
+    // Need a way to stop the loop here. Do I need it in shutdown as well?
+    // Use std::atomic<bool>
+    // Set it to true here
+    // Call the thread .join() after
 
     return CallbackReturn::SUCCESS;
 }
@@ -117,41 +134,103 @@ void positronic_mission::MissionNode::heart_beat()
     auto msg = Heartbeat();
     msg.stamp = now();
 
-    // Will need a new variable for it later. And to update it
-    msg.state = Heartbeat::STATE_IDLE;
+    // Update msg state from the actual state
+    msg.state = static_cast<uint8_t>(state_.load());
     msg.node_name = get_name();
 
     publisher_->publish(msg);
 }
 
-rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(const rclcpp_action::GoalUUID & /* uuid */, std::shared_ptr<const GoToPose::Goal> /* goal */)
+static bool is_finite_pose(const geometry_msgs::msg::PoseStamped & p)
+{
+    const auto pos = p.pose.position;
+    const auto qt = p.pose.orientation;
+
+    return (std::isfinite(pos.x) && std::isfinite(pos.y)
+        && std::isfinite(pos.z) && std::isfinite(qt.x)
+        && std::isfinite(qt.y) && std::isfinite(qt.z)
+        && std::isfinite(qt.w));
+}
+
+bool positronic_mission::MissionNode::validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal)
+{
+    // Can goal be null ?
+    if (!goal) {
+        RCLCPP_WARN(get_logger(), "no goal");
+        return false;
+    }
+
+    // Only empty frames rejected for now
+    // Maybe we need to create a list of accepted frames
+    if (goal->target_pose.header.frame_id == "") {
+        RCLCPP_WARN(get_logger(), "invalid frame");
+        return false;
+    }
+
+    auto pose = goal->target_pose;
+    const auto qt = pose.pose.orientation;
+    const auto norm = std::sqrt(qt.x * qt.x + qt.y * qt.y + qt.z * qt.z + qt.w + qt.w);
+    if (std::abs(norm - 1.0) > 1e-3) {
+        RCLCPP_WARN(get_logger(), "invalid w");
+        return false;
+    }
+
+    if (!is_finite_pose(pose)) {
+        RCLCPP_WARN(get_logger(), "non numeric pose values");
+        return false;
+    }
+    return true;
+}
+
+rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
 {
     if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
         // Reject
-        RCLCPP_INFO(get_logger(), "Rejected, node is not activated");
+        // RCLCPP_INFO(get_logger(), "Rejected, node is not activated");
+        RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
         return rclcpp_action::GoalResponse::REJECT;
     }
+    // This is a weird one
+    // compare_exchange_strong does
+    // if equals to first param, change value to second param, return true
+    // if different, set expected to old value, return false
+    State expected = State::IDLE;
+    if (!state_.compare_exchange_strong(expected, State::MOVING)) {
+        RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (!validate_pose(goal)) {
+        RCLCPP_WARN(get_logger(), "Rejected, invalid pose");
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+
+    // My parsing goes here
+    // I need:
+    // Check if the robot arm is idle. If not: reject
+    // Check if the Pose received makes sense. If not: reject
+    // Else: accept and send to moveit
+    // How will I receive the goala here?? Big question!
 
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse positronic_mission::MissionNode::handle_cancel(std::shared_ptr<GoalHandle> /* goal_handle */)
+rclcpp_action::CancelResponse positronic_mission::MissionNode::handle_cancel(const std::shared_ptr<GoalHandle> & /* goal_handle */)
 {
     // Accepting all cancelations for now
     RCLCPP_INFO(get_logger(), "Cancel requested");
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void positronic_mission::MissionNode::handle_accepted(std::shared_ptr<GoalHandle> goal_handle)
+void positronic_mission::MissionNode::handle_accepted(const std::shared_ptr<GoalHandle> & goal_handle)
 {
     // Needs to execute it in a thread to not block the node
-    auto exec_function = [this, goal_handle](){
-        return execute(goal_handle);
-    };
+    auto exec_function = [this, goal_handle](){ execute(goal_handle); };
     exec_thread_ = std::thread(exec_function);
+
+    // exec_thread_ = std::thread([this, goal_handle]() { execute(goal_handle); });
 }
 
-void positronic_mission::MissionNode::execute(std::shared_ptr<GoalHandle> goal_handle)
+void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> & goal_handle)
 {
     RCLCPP_INFO(get_logger(), "Executing");
 
@@ -160,6 +239,8 @@ void positronic_mission::MissionNode::execute(std::shared_ptr<GoalHandle> goal_h
     // Read the received goal from the client
     auto goal = goal_handle->get_goal();
 
+    // What do I do with the goal? Just publish it for moveit?
+
     // Create empty feedback and result, to be populated by me
     auto feedback = std::make_shared<GoToPose::Feedback>();
     auto result = std::make_shared<GoToPose::Result>();
@@ -167,8 +248,7 @@ void positronic_mission::MissionNode::execute(std::shared_ptr<GoalHandle> goal_h
     const int fake_work = 10;
     for (int i = 0; i < fake_work && rclcpp::ok(); i++) {
         if (goal_handle->is_canceling()) {
-            result->set__state(result->CANCELED);
-            feedback->stage = "canceled";
+            result->code = GoToPose::Result::CANCELED;
             goal_handle->canceled(result);
             RCLCPP_INFO(get_logger(), "Goal canceled");
             return ;
@@ -178,13 +258,14 @@ void positronic_mission::MissionNode::execute(std::shared_ptr<GoalHandle> goal_h
         // result->ERROR here ?
         // Maybe I need an abort flag
 
+        // state_ = MOVING;
         feedback->stage = "executing";
         goal_handle->publish_feedback(feedback);
         RCLCPP_INFO(get_logger(), "Working, iteration: %d", i);
         hertz.sleep();
     }
     if (rclcpp::ok()) {
-        result->set__state(result->OK);
+        result->code = GoToPose::Result::OK;
         goal_handle->succeed(result);
         RCLCPP_INFO(get_logger(), "Goal achieved");
     }
