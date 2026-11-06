@@ -74,9 +74,10 @@ public:
   [[nodiscard]] virtual bool halt() = 0;
 
   /// Powers the servos on, so the arm holds its pose, and lets targets go out again after
-  /// halt(). True when the power on went out on the port within the deadline, false when the
-  /// deadline passed with it still pending. Called from a lifecycle transition, never from the
-  /// control loop: it may wait up to 300 ms.
+  /// halt(). A target stored before or during the halt is dropped: the next write_angles() is
+  /// the first to reach the arm. True when the power on went out on the port within the
+  /// deadline, false when the deadline passed with it still pending. Called from a lifecycle
+  /// transition, never from the control loop: it may wait up to 300 ms.
   [[nodiscard]] virtual bool power_on() = 0;
 
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control

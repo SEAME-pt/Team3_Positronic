@@ -116,8 +116,9 @@ public:
   /// waits for it, up to REQUEST_TIMEOUT.
   [[nodiscard]] bool halt() override;
 
-  /// Asks the thread to send a power_on at the start of its next turn and waits for it, up to
-  /// REQUEST_TIMEOUT. Lets targets go out again, whether or not the frame made it.
+  /// Drops the target held since halt(), lets targets go out again, then asks the thread to send
+  /// a power_on at the start of its next turn and waits for it, up to REQUEST_TIMEOUT. The hold
+  /// is released whether or not the frame made it.
   [[nodiscard]] bool power_on() override;
 
 private:

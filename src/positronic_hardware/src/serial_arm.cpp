@@ -190,6 +190,74 @@ bool SerialArm::has_sample() const
   return has_sample_.load();
 }
 
+bool SerialArm::halt()
+{
+  // The hold goes first, so the turn that writes the stop already sends no target after it.
+  halted_.store(true);
+  return request_and_wait(Request::HALT);
+}
+
+bool SerialArm::power_on()
+{
+  // Drop the target stored before or during the halt, before the hold is released: with it
+  // still there, the thread would send it on its next turn, before the plugin's first
+  // write_angles() after activate (the measured pose) could replace it. Seen on the arm as a
+  // short move towards the old target. Both writers here are non-RT, so the buffer's mutex is
+  // enough.
+  command_.writeFromNonRT(std::nullopt);
+  halted_.store(false);
+  return request_and_wait(Request::POWER_ON);
+}
+
+bool SerialArm::request_and_wait(Request request)
+{
+  request_.store(request);
+  // The poll thread writes the frame at the start of its next turn and puts request_ back to
+  // NONE. 1 ms steps: on the arm the frame is out within a few ms, and this runs in a lifecycle
+  // transition, which may wait.
+  const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (request_.load() == Request::NONE) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  // One last look: the thread may have cleared it right at the deadline.
+  return request_.load() == Request::NONE;
+}
+
+std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request request)
+{
+  switch (request) {
+    case Request::HALT:
+      return positronic_protocol::encode_stop();
+    case Request::POWER_ON:
+      return positronic_protocol::encode_power_on();
+    case Request::NONE:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+/// Writes the pending halt or power_on, if any, at the start of a turn: the previous turn is
+/// over, so the arm's input is free, and request_and_wait() is waiting for this. No settle after
+/// it: the caller returns as soon as the frame is written, and if the arm ignores the port for a
+/// while the only cost is this turn's reply. A failed write leaves the request pending for the
+/// next turn. True when a stop went out, so the caller can forget the last target.
+bool SerialArm::send_pending_request()
+{
+  const Request pending{request_.load()};
+  const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
+  if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
+    return false;
+  }
+  // Not a plain store: a request made after a timeout must not be erased by the late clear of
+  // the one that went out.
+  Request expected{pending};
+  request_.compare_exchange_strong(expected, Request::NONE);
+  return pending == Request::HALT;
+}
+
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
 {
   const std::optional<positronic_protocol::JointAngles> angles{
@@ -214,6 +282,13 @@ void SerialArm::poll_loop()
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
     const auto turn_start{std::chrono::steady_clock::now()};
+
+    if (send_pending_request()) {
+      // After a stop the arm is heading nowhere, so the next target goes out even when it
+      // equals the last one sent.
+      last_sent = std::nullopt;
+    }
+
     bool sent{false};
 
     // Ask for the angles. A failed write is transient (busy port): skip this round, keep the
@@ -246,7 +321,7 @@ void SerialArm::poll_loop()
     // A turn without a reply sends nothing, the command waits in command_ for the next.
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
-    if (replied) {
+    if (replied && !halted_.load()) {
       const std::optional<JointPositions> target{*command_.readFromRT()};
       if (target.has_value() && target != last_sent) {
         // NaN or out of range: nothing we can put on the wire, keep the previous target.
