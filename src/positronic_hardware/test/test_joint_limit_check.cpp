@@ -33,6 +33,8 @@
 // Follow-up prompt:
 //   Drop the test that casts 255 to CommandFault: clang-tidy (EnumCastOutOfRange) fails the
 //   strict CI on it, and the repo keeps a single documented NOLINT.
+//   Close the anonymous namespace before the TEST blocks, as the other test files do: with
+//   gtest unparsed, ament_cppcheck misreads a TEST macro inside an anonymous namespace.
 
 #include <gtest/gtest.h>
 
@@ -82,6 +84,8 @@ void expect_fault(const CommandCheck & result, CommandFault fault, std::size_t j
   EXPECT_EQ(result.joint, joint);
   EXPECT_DOUBLE_EQ(result.value, value);
 }
+
+}  // namespace
 
 TEST(JointLimitCheck, HomeIsAccepted)
 {
@@ -272,5 +276,3 @@ TEST(JointLimitCheck, EveryFaultHasItsOwnText)
   }
   EXPECT_EQ(texts.size(), faults.size());
 }
-
-}  // namespace
