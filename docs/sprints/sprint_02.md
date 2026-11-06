@@ -268,19 +268,19 @@ Reminder: open the PR `docs(standups): sprint 02 week 1` today.
 - Blocked: 
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Terminou a Issue #34
+- Today: Revisão e PR
+- Blocked: Nothing.
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Trabalhou na parte do HIL #47
+- Today: Tentar avançar na issue
+- Blocked: nothing
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Designed part 1 of #36 with the lifecycle of the hardware component: deactivate sends a stop and holds the arm, activate powers the servos on, a failed transition leaves the component recoverable. Agreed with Felipe the interface between #35 and #36: the fault state interface, the supervisor order for #35, and the halt timing with a silent arm. Wrote the ArmBackend contract (halt, power_on)
+- Today: The fake arm and the SerialArm side of #36: the poll thread sends the stop and the power on, and holds targets while inactive. push the branch so Felipe can base #35 on it.
+- Blocked: Nothing.
 
 **Vinicius**, block B
 - Done: 
@@ -288,9 +288,9 @@ Reminder: open the PR `docs(standups): sprint 02 week 1` today.
 - Blocked: 
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: começou a parte do action error handle no node.
+- Today: Pretende finzalizar esta parte para integrar com o Movelt
+- Blocked: Nothing.
 
 Challenges:
 - 
