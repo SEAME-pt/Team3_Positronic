@@ -45,6 +45,14 @@
 // Follow-up prompt:
 //   The states stay NaN until the arm's first reply, and on_activate fails if no reply comes.
 //   Test it on a pseudo-terminal that opens like a serial port but never answers.
+// Follow-up prompt:
+//   #34: the plugin reads the joint limits from the URDF and write() refuses a command past a
+//   limit, NaN, and halts. The test joints carry <limits enable="false"/> like the real xacro.
+//   Test that: a command exactly at a limit is written; limit + 5 deg (upper side, and the lower
+//   side of the asymmetric J5) and NaN make write() return ERROR and take the component out of
+//   ACTIVE; after a refusal the component configures and activates again; on_init refuses a
+//   joint without a revolute <limit> and swapped limits; on_activate refuses an arm that stands
+//   outside its limits.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -100,6 +108,8 @@ std::string read_description()
 constexpr std::string_view POSITION{"<state_interface name=\"position\"/>"};
 constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
 constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
+/// ros2_control's clamping limiter off, as in positronic_real.urdf.xacro (#34).
+constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -107,11 +117,35 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
   return "<joint name=\"" + name + "\">" + std::string{interfaces} + "</joint>";
 }
 
-/// A valid joint: position and velocity state interfaces, position command interface.
+/// A valid joint: position and velocity state interfaces, position command interface, and the
+/// ros2_control limiter off, exactly like the real xacro.
 std::string good_joint(const std::string & name)
 {
-  return joint_block(name, std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
+  return joint_block(
+    name, std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} +
+    std::string{VELOCITY});
 }
+
+/// `text` with its one occurrence of `from` replaced by `to`. Used to edit the URDF limits.
+std::string replaced(std::string text, std::string_view from, std::string_view to)
+{
+  const std::size_t at{text.find(from)};
+  if (at != std::string::npos) {
+    text.replace(at, from.size(), to);
+  }
+  return text;
+}
+
+/// The <limit> tags of J1, J2 and J5 in mycobot_280_jn.urdf, verbatim. Each is unique.
+constexpr std::string_view J1_LIMIT{
+  R"(<limit effort="10.0" lower="-2.9321" upper="2.9321" velocity="2.618"/>)"};
+constexpr std::string_view J2_LIMIT{
+  R"(<limit effort="10.0" lower="-2.4434" upper="2.4434" velocity="2.618"/>)"};
+
+/// The URDF limits the refusal tests aim at, in radians.
+constexpr double J2_UPPER{2.4434};
+constexpr double J5_LOWER{-2.7052};
+constexpr double DEG{3.14159265358979323846 / 180.0};
 
 /// All six joints valid, except joint `index`, which gets `interfaces` instead.
 std::string joints_with_one_bad(std::size_t index, const std::string & interfaces)
@@ -132,11 +166,13 @@ std::string param(std::string_view name, std::string_view value)
 /// Tests never open a serial port.
 constexpr std::string_view FAKE_BACKEND{"<param name=\"backend\">fake</param>"};
 
-/// The arm's URDF with a <ros2_control> block that uses RobotSystem for `joint_blocks`,
-/// with `parameters` in its <hardware> tag.
-std::string urdf_with(const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND)
+/// `description` (the arm's URDF by default) with a <ros2_control> block that uses RobotSystem
+/// for `joint_blocks`, with `parameters` in its <hardware> tag.
+std::string urdf_with(
+  const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND,
+  const std::string & description = read_description())
 {
-  std::string urdf{read_description()};
+  std::string urdf{description};
   const std::string ros2_control{
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
@@ -197,6 +233,14 @@ protected:
     return resource_manager_->set_component_state(std::string{HARDWARE_NAME}, target);
   }
 
+  /// Configures (if needed) and activates the component, as the controller manager does.
+  hardware_interface::return_type activate()
+  {
+    return go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE);
+  }
+
   /// One controller-manager cycle of read(), 10 ms long.
   hardware_interface::return_type read_once()
   {
@@ -239,6 +283,16 @@ TEST_F(LoadRobotSystem, DescriptionHasTheSixJoints)
     EXPECT_NE(urdf.find("<joint name=\"" + joint + "\" type=\"revolute\""), std::string::npos)
       << joint;
   }
+}
+
+TEST_F(LoadRobotSystem, DescriptionHasTheLimitsTheTestsEdit)
+{
+  // Guards the #34 tests that edit a <limit>: if the URDF text changes, they must not pass
+  // for the wrong reason.
+  const std::string urdf{read_description()};
+  EXPECT_NE(urdf.find(J1_LIMIT), std::string::npos);
+  EXPECT_NE(urdf.find(J2_LIMIT), std::string::npos);
+  EXPECT_NE(urdf.find("lower=\"-2.7052\""), std::string::npos);
 }
 
 TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
@@ -442,6 +496,110 @@ TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
   EXPECT_DOUBLE_EQ(
     state(JOINTS.at(1), "position").value_or(std::nan("")),
     positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+TEST_F(LoadRobotSystem, WriteSendsACommandExactlyAtTheLimit)
+{
+  // The URDF says "up to here": the limit itself is allowed.
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  ASSERT_TRUE(command(JOINTS.at(1), J2_UPPER));
+  EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state(JOINTS.at(1), "position").value_or(std::nan("")), J2_UPPER);
+}
+
+TEST_F(LoadRobotSystem, WriteRefusesACommandPastTheLimit)
+{
+  // Acceptance criterion of #34: a goal at the limit + 5 deg is refused and the arm halts.
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  ASSERT_TRUE(command(JOINTS.at(1), J2_UPPER + 5.0 * DEG));
+  EXPECT_EQ(write_once(), hardware_interface::return_type::ERROR);
+  // on_error ran: the component left ACTIVE, so no controller can write to it any more.
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, WriteRefusesACommandBelowAnAsymmetricLimit)
+{
+  // J5 goes to +2.7925 but only to -2.7052: the lower side has its own end.
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  ASSERT_TRUE(command(JOINTS.at(4), J5_LOWER - 5.0 * DEG));
+  EXPECT_EQ(write_once(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, WriteRefusesNaN)
+{
+  // Bad data is refused the same way. Every comparison with NaN is false, so a plain range
+  // check would let it through.
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  ASSERT_TRUE(command(JOINTS.at(3), std::nan("")));
+  EXPECT_EQ(write_once(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, ComesBackAfterARefusal)
+{
+  // The refusal is not forever: configure and activate start again from "stay where you are".
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_TRUE(command(JOINTS.at(1), J2_UPPER + 5.0 * DEG));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::ERROR);
+
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(
+    state(JOINTS.at(1), "position").value_or(std::nan("")),
+    positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+TEST_F(LoadRobotSystem, InitRejectsAJointWithoutALimit)
+{
+  // J1 made continuous, without its <limit>: ros2_control accepts it, the driver must not.
+  const std::string description{replaced(
+      replaced(
+        read_description(), R"(<joint name="joint2_to_joint1" type="revolute">)",
+        R"(<joint name="joint2_to_joint1" type="continuous">)"),
+      J1_LIMIT, "")};
+  load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsSwappedLimits)
+{
+  // J2 with lower above upper: the check would refuse every command, so the driver stops here.
+  const std::string description{replaced(
+      read_description(), J2_LIMIT,
+      R"(<limit effort="10.0" lower="2.4434" upper="-2.4434" velocity="2.618"/>)")};
+  load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
+
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, ActivateRefusesAnArmOutsideItsLimits)
+{
+  // J2 narrowed to [-0.2, 0.2] rad: the fake arm stands at 0.5 rad, outside. The first
+  // command would be refused at once, so activation fails with the reason instead.
+  const std::string description{replaced(
+      read_description(), J2_LIMIT,
+      R"(<limit effort="10.0" lower="-0.2" upper="0.2" velocity="2.618"/>)")};
+  load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
+  ASSERT_TRUE(loaded_);
+
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 }
 
 TEST_F(LoadRobotSystem, ConfigureFailsWhenTheSerialPortIsMissing)

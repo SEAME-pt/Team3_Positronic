@@ -36,7 +36,8 @@ using JointPositions = std::array<double, NUM_JOINTS>;
 /// Where the driver reads the joint angles from and sends the targets to.
 ///
 /// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
-/// only calls read_angles() and has_sample(), write() only calls write_angles(). This is the
+/// only calls read_angles() and has_sample(), write() only calls write_angles() and, when it
+/// refuses a command, halt(). This is the
 /// seam that lets the fake arm and the real arm be swapped by a parameter, and the control
 /// loop stay the same.
 ///
@@ -66,6 +67,14 @@ public:
   /// replaces the previous command before it was sent. The plugin calls this only while
   /// active, so an implementation does not need to check that itself.
   virtual void write_angles(const JointPositions & angles) = 0;
+
+  /// Stops the arm where it is, now, and ignores every target after it (#34). Safe from the
+  /// control loop: it only raises a flag, the implementation acts on it on its own thread.
+  /// Going silent is not enough: the arm keeps moving to its last target (Sprint 1, 17 of 17
+  /// trials), so an implementation that talks to the arm sends the protocol STOP (0x29).
+  /// Latched for the life of the object: the plugin builds a new backend on reconfigure.
+  /// Safe to call more than once.
+  virtual void halt() = 0;
 
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control
   /// loop. Until then the plugin reports "unknown" (NaN) instead of the placeholder pose.

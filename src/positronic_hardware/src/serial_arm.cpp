@@ -158,7 +158,8 @@ SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing)
 }
 
 SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing)
-: transport_{std::move(transport)}, timing_{timing}
+: transport_{std::move(transport)},
+  timing_{timing}
 {
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
@@ -185,9 +186,48 @@ void SerialArm::write_angles(const JointPositions & angles)
   command_.writeFromNonRT(angles);
 }
 
+void SerialArm::halt()
+{
+  halt_requested_.store(true);
+}
+
 bool SerialArm::has_sample() const
 {
   return has_sample_.load();
+}
+
+bool SerialArm::send_after_reply(std::optional<JointPositions> & last_sent, bool & stop_sent)
+{
+  if (halt_requested_.load()) {
+    if (stop_sent) {
+      return false;
+    }
+    const positronic_protocol::Frame frame{positronic_protocol::encode_stop()};
+    if (!transport_->write(frame.bytes.data(), frame.size)) {
+      return false;
+    }
+    stop_sent = true;
+    std::this_thread::sleep_for(timing_.send_settle);
+    return true;
+  }
+
+  // nullopt means no command yet, or a read that lost the race with write_angles() before the
+  // first one: both send nothing, the next turn reads again. An unchanged target is not sent
+  // again: the arm already has it.
+  const std::optional<JointPositions> target{*command_.readFromRT()};
+  if (!target.has_value() || target == last_sent) {
+    return false;
+  }
+  // NaN or out of range: nothing we can put on the wire, keep the previous target.
+  const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
+  if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
+    return false;
+  }
+  last_sent = target;
+  // The arm passes the command to the servos and ignores the port meanwhile: a get_angles
+  // inside this window stalls, so the next turn must not start before it.
+  std::this_thread::sleep_for(timing_.send_settle);
+  return true;
 }
 
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
@@ -210,6 +250,7 @@ void SerialArm::poll_loop()
   // keeps the arm busy for the settle, and while it stands still the port is better spent on
   // fresh poses.
   std::optional<JointPositions> last_sent{};
+  bool stop_sent{false};
 
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
@@ -242,23 +283,8 @@ void SerialArm::poll_loop()
       }
     }
 
-    // The arm answered, so its input is free: send the newest command now, if it is new.
-    // A turn without a reply sends nothing, the command waits in command_ for the next.
-    // nullopt means no command yet, or a read that lost the race with write_angles() before
-    // the first one: both send nothing, the next turn reads again.
     if (replied) {
-      const std::optional<JointPositions> target{*command_.readFromRT()};
-      if (target.has_value() && target != last_sent) {
-        // NaN or out of range: nothing we can put on the wire, keep the previous target.
-        const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
-        if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
-          last_sent = target;
-          sent = true;
-          // The arm passes the command to the servos and ignores the port meanwhile: a
-          // get_angles inside this window stalls, so the next turn must not start before it.
-          std::this_thread::sleep_for(timing_.send_settle);
-        }
-      }
+      sent = send_after_reply(last_sent, stop_sent);
     }
 
     std::chrono::milliseconds period{POLL_PERIOD};
