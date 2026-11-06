@@ -447,8 +447,6 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
     ++received;
   }
 
-  // #34: check before anything reaches the arm. The view carries the count actually read, so
-  // the wrong-count rule of the issue sits here too, although on_init already wants six joints.
   const CommandCheck check{check_command(CommandView{commands.data(), received}, limits_)};
   if (!check.ok()) {
     refuse(check);
