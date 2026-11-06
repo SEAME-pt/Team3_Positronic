@@ -37,6 +37,8 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "lifecycle_msgs/msg/state.hpp"
+
 namespace positronic_hardware
 {
 using hardware_interface::CallbackReturn;
@@ -115,7 +117,8 @@ bool read_timing(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
   SerialArm::Timing & out)
 {
-  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+  if (
+    !read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
     !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
   {
     return false;
@@ -158,7 +161,8 @@ CallbackReturn RobotSystem::on_init(
     }
     // The arm only takes angles (send_angles), so position is the one command we can honour.
     // A velocity or effort command interface would be claimed by a controller and never sent.
-    if (joint.command_interfaces.size() != 1 ||
+    if (
+      joint.command_interfaces.size() != 1 ||
       joint.command_interfaces.front().name != hardware_interface::HW_IF_POSITION)
     {
       RCLCPP_ERROR(
@@ -255,6 +259,9 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
 {
   // "Plug in the cable". SerialArm opens the port and starts its polling thread; it throws if
   // the port cannot be opened. Allocating and throwing are fine here, outside the control loop.
+  // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
+  // open, even from this process): drop it first. On a first configure there is nothing to drop.
+  arm_.reset();
   try {
     if (config_.backend == Backend::SERIAL) {
       arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing);
@@ -323,10 +330,55 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
+  // "Power the servos on" (#36), after the first reply: a released arm still answers
+  // get_angles, so the wait above does not need torque, and a silent arm fails there first.
+  // power_on() also lets targets out again after a halt(). If its frame cannot be written, the
+  // port is in trouble: ERROR hands the component to on_error rather than leaving it ACTIVE.
+  if (!arm_->power_on()) {
+    RCLCPP_ERROR(
+      get_logger(), "power_on was not sent to the arm within %d ms; not activating.",
+      static_cast<int>(SerialArm::REQUEST_TIMEOUT.count()));
+    return CallbackReturn::ERROR;
+  }
+
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
   for (const auto & [name, description] : joint_command_interfaces_) {
     set_command(name, get_state(name));
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // "Cut actuation": the arm gets a stop and holds where it is, and no target goes out until
+  // the next activate. halt() waits for the stop to reach the port, so SUCCESS means the arm
+  // was told to stop, not only that the component changed state.
+  if (arm_->halt()) {
+    return CallbackReturn::SUCCESS;
+  }
+  // The stop never left: nobody knows what the arm is doing. FAILURE would keep the component
+  // ACTIVE and the controllers commanding it; ERROR takes it out of service through on_error,
+  // and the supervisor sees a component that must be configured and activated again.
+  RCLCPP_ERROR(
+    get_logger(), "stop was not sent to the arm within %d ms.",
+    static_cast<int>(SerialArm::REQUEST_TIMEOUT.count()));
+  return CallbackReturn::ERROR;
+}
+
+CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // Any transition that returned ERROR lands here, and so does a write() that returned ERROR
+  // (#34: a refused command), on the control loop thread. The arm may still be moving towards
+  // its last valid target, so it gets a stop, without waiting here: the backend stays alive,
+  // its thread sends the stop at the start of its next turn and holds every target, and keeps
+  // reading the pose. Dropping it here would join its thread on the control loop; on_configure
+  // drops it instead, before opening the port again. arm_ is null when on_configure itself
+  // failed to open the port.
+  // SUCCESS takes the component to UNCONFIGURED, where configure starts it afresh; the base
+  // class would return FAILURE and finalize it, which only a plugin reload undoes.
+  if (arm_ != nullptr) {
+    arm_->request_halt();
   }
   return CallbackReturn::SUCCESS;
 }
@@ -339,6 +391,15 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
 
 return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
+  // The resource manager never calls write() on an inactive component, and after a halt() the
+  // backend holds every target anyway. This is a second guard for a caller outside the
+  // controller manager (a test, a script). No log: nothing here is RT-safe to log, and the
+  // normal path never reaches it.
+  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  if (!active) {
+    return return_type::OK;
+  }
+
   JointPositions commands{};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_get = false: never block on a controller that is writing the handle.

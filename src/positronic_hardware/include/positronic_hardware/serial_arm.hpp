@@ -116,6 +116,10 @@ public:
   /// waits for it, up to REQUEST_TIMEOUT.
   [[nodiscard]] bool halt() override;
 
+  /// halt() without the wait: holds every target and leaves the stop for the start of the
+  /// thread's next turn. Two atomic stores, safe from the control loop.
+  void request_halt() override;
+
   /// Drops the target held since halt(), lets targets go out again, then asks the thread to send
   /// a power_on at the start of its next turn and waits for it, up to REQUEST_TIMEOUT. The hold
   /// is released whether or not the frame made it.

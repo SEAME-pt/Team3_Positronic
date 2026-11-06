@@ -197,6 +197,12 @@ bool SerialArm::halt()
   return request_and_wait(Request::HALT);
 }
 
+void SerialArm::request_halt()
+{
+  halted_.store(true);
+  request_.store(Request::HALT);
+}
+
 bool SerialArm::power_on()
 {
   // Drop the target stored before or during the halt, before the hold is released: with it
