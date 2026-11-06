@@ -33,6 +33,11 @@
 // Follow-up prompt:
 //   PosixSerialPort takes the port with TIOCEXCL. On a pseudo-terminal, check that a second
 //   PosixSerialPort on the same device is refused while the first one is open.
+// Follow-up prompt:
+//   halt() (#34) makes the poll thread send the STOP frame FE FE 02 29 FA once, after a reply,
+//   and no send_angles after it. Check: after a target went out, halt() puts exactly one STOP
+//   on the wire and a later write_angles() sends nothing; halt() before any command still sends
+//   the STOP; and calling halt() twice sends one STOP.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -141,6 +146,26 @@ std::vector<std::vector<std::uint8_t>> wait_for_sends(
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
   }
   return send_angles_frames(transport.written());
+}
+
+/// How many STOP frames (`FE FE 02 29 FA`) are among `frames`.
+std::size_t stop_frames(const std::vector<std::vector<std::uint8_t>> & frames)
+{
+  const std::vector<std::uint8_t> stop{0xFE, 0xFE, 0x02, 0x29, 0xFA};
+  return static_cast<std::size_t>(std::count(frames.begin(), frames.end(), stop));
+}
+
+/// Waits until the thread has written a STOP frame, or the timeout elapses.
+std::size_t wait_for_stop(ReplayTransport & transport)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (stop_frames(transport.written()) > 0) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  return stop_frames(transport.written());
 }
 
 /// Parses a space-separated hex string ("ff fe 0a") into bytes. Test-only.
@@ -268,6 +293,39 @@ TEST(SerialArm, SkipsACommandItCannotEncode)
 
   arm.write_angles(JointPositions{std::nan(""), 0.0, 0.0, 0.0, 0.0, 0.0});
   std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_TRUE(send_angles_frames(port.written()).empty());
+}
+
+TEST(SerialArm, HaltSendsOneStopAndNoTargetAfterIt)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+
+  arm.halt();
+  EXPECT_EQ(wait_for_stop(port), 1u);
+
+  // A controller that keeps writing after the halt reaches nothing: no new send_angles.
+  arm.write_angles(JointPositions{0.3, 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 1u);
+  EXPECT_EQ(stop_frames(port.written()), 1u);
+}
+
+TEST(SerialArm, HaltBeforeAnyCommandStillSendsTheStop)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+
+  arm.halt();
+  arm.halt();  // twice: still one STOP
+  EXPECT_EQ(wait_for_stop(port), 1u);
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(stop_frames(port.written()), 1u);
   EXPECT_TRUE(send_angles_frames(port.written()).empty());
 }
 

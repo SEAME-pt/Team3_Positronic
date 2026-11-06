@@ -29,6 +29,10 @@
 #   the xacro arguments; the joints of the
 #   block are exactly the six revolute joints of the URDF, in URDF order; and every joint has
 #   position and velocity state interfaces and a position command interface.
+# Follow-up prompt:
+#   #34: check that every joint of the <ros2_control> block turns ros2_control's limiter off
+#   with <limits enable="false"/>, for both backends, and that every one of them still has a
+#   <limit> in the URDF for the plugin to read.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -116,3 +120,22 @@ def test_every_joint_is_commanded_in_position(backend):
         assert states == ['position', 'velocity'], joint.get('name')
         commands = [command.get('name') for command in joint.findall('command_interface')]
         assert commands == ['position'], joint.get('name')
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_ros2_control_limiter_is_off_on_every_joint(backend):
+    """Check that the plugin, not ros2_control's limiter, sees a command past a limit (#34)."""
+    for joint in expand(backend=backend).findall('ros2_control/joint'):
+        limits = joint.findall('limits')
+        assert len(limits) == 1, joint.get('name')
+        assert limits[0].get('enable') == 'false', joint.get('name')
+
+
+def test_every_commanded_joint_has_a_urdf_limit():
+    """Check that the limits the plugin reads in on_init are in the URDF (#34)."""
+    robot = expand()
+    urdf_joints = {joint.get('name'): joint for joint in robot.findall('joint')}
+    for joint in robot.findall('ros2_control/joint'):
+        limit = urdf_joints[joint.get('name')].find('limit')
+        assert limit is not None, joint.get('name')
+        assert float(limit.get('lower')) < float(limit.get('upper')), joint.get('name')

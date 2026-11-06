@@ -29,7 +29,10 @@
 //   a wrong joint count (too few, too many, zero, null pointer) is refused as WRONG_COUNT;
 //   when several joints are bad, the first one in J1..J6 order is reported; a NaN is never
 //   reported as a limit fault; limits_valid() rejects swapped, equal and non-finite limits;
-//   to_string() gives a distinct text for every fault, and a text even for a corrupted value.
+//   to_string() gives a distinct text for every fault.
+// Follow-up prompt:
+//   Drop the test that casts 255 to CommandFault: clang-tidy (EnumCastOutOfRange) fails the
+//   strict CI on it, and the repo keeps a single documented NOLINT.
 
 #include <gtest/gtest.h>
 
@@ -270,12 +273,6 @@ TEST(JointLimitCheck, EveryFaultHasItsOwnText)
     texts.insert(to_string(fault));
   }
   EXPECT_EQ(texts.size(), faults.size());
-}
-
-TEST(JointLimitCheck, OutOfRangeFaultStillHasAText)
-{
-  // A corrupted value must still give a log line, never a null pointer.
-  EXPECT_STREQ(to_string(static_cast<CommandFault>(255)), "unknown fault");
 }
 
 }  // namespace
