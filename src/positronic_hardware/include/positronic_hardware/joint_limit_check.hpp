@@ -126,14 +126,19 @@ inline constexpr double LIMIT_TOLERANCE{1e-6};
   return check_command(values, limits, tolerance);
 }
 
-/// True when every limit is usable: both ends finite and lower < upper. Call it once in
-/// on_init: a missing or swapped <limit> in the URDF must stop the driver, not let it run with
-/// a check that refuses everything (or nothing).
+/// True when one limit is usable: both ends finite and lower < upper.
+[[nodiscard]] inline bool limit_valid(const PositionLimit & limit) noexcept
+{
+  const bool finite{std::isfinite(limit.lower) && std::isfinite(limit.upper)};
+  return finite && limit.lower < limit.upper;
+}
+
+/// True when every limit is usable (see limit_valid). Call it once in on_init: a missing or
+/// swapped <limit> in the URDF must stop the driver, not let it run with a check that refuses
+/// everything (or nothing).
 [[nodiscard]] inline bool limits_valid(const PositionLimits & limits) noexcept
 {
-  return std::all_of(limits.begin(), limits.end(), [](const PositionLimit & limit) {
-    return std::isfinite(limit.lower) && std::isfinite(limit.upper) && limit.lower < limit.upper;
-  });
+  return std::all_of(limits.begin(), limits.end(), limit_valid);
 }
 
 /// Short, stable text for a fault, for the log line.

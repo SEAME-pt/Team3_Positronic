@@ -104,6 +104,11 @@ public:
   /// wait 0.5 ms, once in a long while, when it meets the poll thread swapping the buffer.
   void write_angles(const JointPositions & angles) override;
 
+  /// Stops the arm (#34). Safe from the control loop: it only raises a flag. On its next turn
+  /// with a reply the thread sends the STOP frame in the slot a target would use, and from then
+  /// on it sends no target at all, only get_angles, so the pose stays fresh.
+  void halt() override;
+
   /// True once the thread has decoded a first reply from the arm.
   [[nodiscard]] bool has_sample() const override;
 
@@ -111,6 +116,8 @@ private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
   void poll_loop();
+
+  bool send_after_reply(std::optional<JointPositions> & last_sent, bool & stop_sent);
 
   /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
   static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
@@ -126,6 +133,7 @@ private:
   realtime_tools::RealtimeBuffer<std::optional<JointPositions>> command_{std::nullopt};
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
+  std::atomic<bool> halt_requested_{false};
   std::thread thread_;
 };
 
