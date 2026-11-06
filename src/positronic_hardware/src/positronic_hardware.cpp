@@ -116,7 +116,8 @@ bool read_timing(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
   SerialArm::Timing & out)
 {
-  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+  if (
+    !read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
     !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
   {
     return false;
@@ -181,7 +182,8 @@ CallbackReturn RobotSystem::on_init(
     }
     // The arm only takes angles (send_angles), so position is the one command we can honour.
     // A velocity or effort command interface would be claimed by a controller and never sent.
-    if (joint.command_interfaces.size() != 1 ||
+    if (
+      joint.command_interfaces.size() != 1 ||
       joint.command_interfaces.front().name != hardware_interface::HW_IF_POSITION)
     {
       RCLCPP_ERROR(

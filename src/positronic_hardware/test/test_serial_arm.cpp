@@ -124,7 +124,8 @@ std::vector<std::vector<std::uint8_t>> send_angles_frames(
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
+    if (
+      frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
       frame[3] == 0x22)
     {
       found.push_back(frame);
@@ -272,8 +273,25 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
   const auto sends{wait_for_sends(port, 1)};
   ASSERT_EQ(sends.size(), 1u);
-  const std::vector<std::uint8_t> expected{0xFE, 0xFE, 0x0F, 0x22, 0x02, 0x3D, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, SerialArm::SEND_SPEED, 0xFA};
+  const std::vector<std::uint8_t> expected{
+    0xFE,
+    0xFE,
+    0x0F,
+    0x22,
+    0x02,
+    0x3D,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    SerialArm::SEND_SPEED,
+    0xFA};
   EXPECT_EQ(sends.front(), expected);
 
   // The same command is not sent again: the arm already has it.

@@ -122,8 +122,8 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
 std::string good_joint(const std::string & name)
 {
   return joint_block(
-    name, std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} +
-    std::string{VELOCITY});
+    name,
+    std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
 }
 
 /// `text` with its one occurrence of `from` replaced by `to`. Used to edit the URDF limits.
@@ -363,7 +363,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -566,10 +566,10 @@ TEST_F(LoadRobotSystem, InitRejectsAJointWithoutALimit)
 {
   // J1 made continuous, without its <limit>: ros2_control accepts it, the driver must not.
   const std::string description{replaced(
-      replaced(
-        read_description(), "<joint name=\"joint2_to_joint1\" type=\"revolute\">",
-        "<joint name=\"joint2_to_joint1\" type=\"continuous\">"),
-      J1_LIMIT, "")};
+    replaced(
+      read_description(), "<joint name=\"joint2_to_joint1\" type=\"revolute\">",
+      "<joint name=\"joint2_to_joint1\" type=\"continuous\">"),
+    J1_LIMIT, "")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -580,8 +580,8 @@ TEST_F(LoadRobotSystem, InitRejectsSwappedLimits)
 {
   // J2 with lower above upper: the check would refuse every command, so the driver stops here.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      "<limit effort=\"10.0\" lower=\"2.4434\" upper=\"-2.4434\" velocity=\"2.618\"/>")};
+    read_description(), J2_LIMIT,
+    "<limit effort=\"10.0\" lower=\"2.4434\" upper=\"-2.4434\" velocity=\"2.618\"/>")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -593,8 +593,8 @@ TEST_F(LoadRobotSystem, ActivateRefusesAnArmOutsideItsLimits)
   // J2 narrowed to [-0.2, 0.2] rad: the fake arm stands at 0.5 rad, outside. The first
   // command would be refused at once, so activation fails with the reason instead.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      "<limit effort=\"10.0\" lower=\"-0.2\" upper=\"0.2\" velocity=\"2.618\"/>")};
+    read_description(), J2_LIMIT,
+    "<limit effort=\"10.0\" lower=\"-0.2\" upper=\"0.2\" velocity=\"2.618\"/>")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
   ASSERT_TRUE(loaded_);
 

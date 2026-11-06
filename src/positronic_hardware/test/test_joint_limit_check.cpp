@@ -65,18 +65,17 @@ constexpr double DEG{3.14159265358979323846 / 180.0};
 // The limits of the myCobot 280 URDF (mycobot_280_jn.urdf), in radians. Test data only: the
 // plugin reads its limits from the URDF, never from this table.
 constexpr PositionLimits URDF_LIMITS{{
-  {-2.9321, 2.9321},     // J1
-  {-2.4434, 2.4434},     // J2
-  {-2.6179, 2.6179},     // J3
-  {-2.6179, 2.6179},     // J4
-  {-2.7052, 2.7925},     // J5, not symmetric
-  {-3.14159, 3.14159},   // J6
+  {-2.9321, 2.9321},    // J1
+  {-2.4434, 2.4434},    // J2
+  {-2.6179, 2.6179},    // J3
+  {-2.6179, 2.6179},    // J4
+  {-2.7052, 2.7925},    // J5, not symmetric
+  {-3.14159, 3.14159},  // J6
 }};
 
 constexpr JointPositions HOME{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-void expect_fault(
-  const CommandCheck & result, CommandFault fault, std::size_t joint, double value)
+void expect_fault(const CommandCheck & result, CommandFault fault, std::size_t joint, double value)
 {
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(result.fault, fault) << to_string(result.fault);
@@ -179,23 +178,22 @@ TEST(JointLimitCheck, WrongCountIsRefused)
 {
   const std::vector<double> five(NUM_JOINTS - 1, 0.0);
   expect_fault(
-    check_command(CommandView{five.data(), five.size()}, URDF_LIMITS),
-    CommandFault::WRONG_COUNT, 0, static_cast<double>(NUM_JOINTS - 1));
+    check_command(CommandView{five.data(), five.size()}, URDF_LIMITS), CommandFault::WRONG_COUNT, 0,
+    static_cast<double>(NUM_JOINTS - 1));
 
   const std::vector<double> seven(NUM_JOINTS + 1, 0.0);
   expect_fault(
-    check_command(CommandView{seven.data(), seven.size()}, URDF_LIMITS),
-    CommandFault::WRONG_COUNT, 0, static_cast<double>(NUM_JOINTS + 1));
+    check_command(CommandView{seven.data(), seven.size()}, URDF_LIMITS), CommandFault::WRONG_COUNT,
+    0, static_cast<double>(NUM_JOINTS + 1));
 
-  expect_fault(
-    check_command(CommandView{}, URDF_LIMITS), CommandFault::WRONG_COUNT, 0, 0.0);
+  expect_fault(check_command(CommandView{}, URDF_LIMITS), CommandFault::WRONG_COUNT, 0, 0.0);
 }
 
 TEST(JointLimitCheck, NullPointerWithSixIsRefused)
 {
   expect_fault(
-    check_command(CommandView{nullptr, NUM_JOINTS}, URDF_LIMITS),
-    CommandFault::WRONG_COUNT, 0, static_cast<double>(NUM_JOINTS));
+    check_command(CommandView{nullptr, NUM_JOINTS}, URDF_LIMITS), CommandFault::WRONG_COUNT, 0,
+    static_cast<double>(NUM_JOINTS));
 }
 
 TEST(JointLimitCheck, CountIsCheckedBeforeValues)
@@ -217,8 +215,8 @@ TEST(JointLimitCheck, ViewOfSixIsTheSameAsTheArray)
 TEST(JointLimitCheck, FirstBadJointIsReported)
 {
   JointPositions command{HOME};
-  command[3] = URDF_LIMITS[3].upper + 1.0;   // J4 bad
-  command[5] = URDF_LIMITS[5].lower - 1.0;   // J6 bad too
+  command[3] = URDF_LIMITS[3].upper + 1.0;  // J4 bad
+  command[5] = URDF_LIMITS[5].lower - 1.0;  // J6 bad too
   expect_fault(check_command(command, URDF_LIMITS), CommandFault::ABOVE_UPPER, 3, command[3]);
 }
 

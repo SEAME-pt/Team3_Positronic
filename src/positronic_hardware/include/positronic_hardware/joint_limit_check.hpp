@@ -115,8 +115,7 @@ inline constexpr double LIMIT_TOLERANCE{1e-6};
 /// The count is checked first: anything but exactly NUM_JOINTS values, or a null pointer, is
 /// WRONG_COUNT and no value is read. Otherwise the six values are checked as above.
 [[nodiscard]] inline CommandCheck check_command(
-  CommandView command, const PositionLimits & limits,
-  double tolerance = LIMIT_TOLERANCE) noexcept
+  CommandView command, const PositionLimits & limits, double tolerance = LIMIT_TOLERANCE) noexcept
 {
   if (command.size != NUM_JOINTS || command.data == nullptr) {
     return CommandCheck{CommandFault::WRONG_COUNT, 0, static_cast<double>(command.size)};
