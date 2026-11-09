@@ -51,13 +51,21 @@
 //   command written after deactivate never reaches the arm, that activate resumes commands from
 //   the measured pose, and that cleanup still works afterwards. On the silent pseudo-terminal,
 //   check that a failed activate leaves the component UNCONFIGURED and configurable again.
+// Follow-up prompt (#36):
+//   on_deactivate returning ERROR is the safety path of the change and no test reaches it,
+//   because the fake arm's halt() always succeeds. Use a pseudo-terminal that answers get_angles
+//   so activate succeeds, then close its controller side so every write fails: the stop cannot
+//   leave, deactivate must return ERROR and the component must end in UNCONFIGURED.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -68,6 +76,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -76,6 +85,7 @@
 #include "hardware_interface/types/lifecycle_state_names.hpp"
 #include "hardware_interface/types/resource_manager_params.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "positronic_hardware/arm_backend.hpp"
 #include "positronic_hardware/fake_arm.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
@@ -178,6 +188,50 @@ int open_pseudo_terminal(std::array<char, 128> & port)
   }
   return controller;
 }
+
+/// One get_angles reply as the arm sends it, recorded on the real arm (the pose the SerialArm
+/// tests decode). Written back for every request, so a power_on also gets a pose: the arm
+/// answers that one with an ack, but the thread only looks for poses.
+constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8, 0xFF,
+  0xEF, 0xFF, 0xC3, 0xFF, 0x85, 0x00, 0x2B, 0x00, 0x3D, 0xFA};
+
+/// Answers every request on the controller side of a pseudo-terminal with RECORDED_REPLY until
+/// stopped: a silent-free stand-in for the arm, enough for activate to succeed.
+class ReplyingArm
+{
+public:
+  explicit ReplyingArm(int controller)
+  : thread_{[this, controller]() {
+        std::array<std::uint8_t, 64> request{};
+        while (!stop_.load()) {
+          pollfd waiting{controller, POLLIN, 0};
+          if (::poll(&waiting, 1, 10) <= 0) {
+            continue;
+          }
+          const ssize_t got{::read(controller, request.data(), request.size())};
+          if (got > 0) {
+            static_cast<void>(::write(controller, RECORDED_REPLY.data(), RECORDED_REPLY.size()));
+          }
+        }
+      }}
+  {
+  }
+
+  ~ReplyingArm()
+  {
+    stop_.store(true);
+    thread_.join();
+  }
+
+  ReplyingArm(const ReplyingArm &) = delete;
+  ReplyingArm & operator=(const ReplyingArm &) = delete;
+  ReplyingArm(ReplyingArm &&) = delete;
+  ReplyingArm & operator=(ReplyingArm &&) = delete;
+
+private:
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
 
 class LoadRobotSystem : public ::testing::Test
 {
@@ -633,4 +687,49 @@ TEST_F(LoadRobotSystem, AFailedActivateLeavesTheComponentConfigurable)
 
   resource_manager_.reset();
   ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsConfigurable)
+{
+  // A pseudo-terminal with an arm behind it that answers every request, so the component gets
+  // its first reply and becomes ACTIVE like on the bench.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_FALSE(std::isnan(state(JOINTS.at(0), "position").value_or(std::nan(""))));
+
+  // The arm goes away: with the controller side closed every write on the port fails, so the
+  // stop can never leave. halt() gives up after REQUEST_TIMEOUT and on_deactivate must report
+  // it: a component that could not stop the arm must not stay ACTIVE, and on_error takes it to
+  // UNCONFIGURED, where a supervisor can configure it again. (The thread does not spin
+  // meanwhile: a failed get_angles write skips the read and sleeps out the turn.)
+  arm.reset();
+  ::close(controller);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::ERROR);
+  const auto elapsed{std::chrono::steady_clock::now() - start};
+  EXPECT_GE(elapsed, positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_LT(elapsed, 2 * positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+
+  resource_manager_.reset();
 }
