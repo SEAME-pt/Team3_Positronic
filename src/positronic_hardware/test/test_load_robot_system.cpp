@@ -45,6 +45,12 @@
 // Follow-up prompt:
 //   The states stay NaN until the arm's first reply, and on_activate fails if no reply comes.
 //   Test it on a pseudo-terminal that opens like a serial port but never answers.
+// Follow-up prompt (#36):
+//   on_deactivate halts the arm and on_error releases it, on_activate powers the servos on, and
+//   write() returns early when the component is not active. With the fake arm, check that a
+//   command written after deactivate never reaches the arm, that activate resumes commands from
+//   the measured pose, and that cleanup still works afterwards. On the silent pseudo-terminal,
+//   check that a failed activate leaves the component UNCONFIGURED and configurable again.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -153,6 +159,25 @@ std::string all_good_joints()
     blocks += good_joint(joint);
   }
   return blocks;
+}
+
+/// Opens a pseudo-terminal, which opens and configures like a serial port but never answers,
+/// and writes its device path into `port`. Returns the controller descriptor, which the caller
+/// closes, or -1.
+int open_pseudo_terminal(std::array<char, 128> & port)
+{
+  const int controller{::posix_openpt(O_RDWR | O_NOCTTY)};
+  if (controller < 0) {
+    return -1;
+  }
+  if (
+    ::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
+    ::ptsname_r(controller, port.data(), port.size()) != 0)
+  {
+    ::close(controller);
+    return -1;
+  }
+  return controller;
 }
 
 class LoadRobotSystem : public ::testing::Test
@@ -309,7 +334,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -488,12 +513,9 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmIsSilent)
 {
   // A pseudo-terminal stands in for the serial port: it opens and configures like one, but
   // nothing ever answers get_angles. No arm is needed.
-  const int controller{::posix_openpt(O_RDWR | O_NOCTTY)};
-  ASSERT_GE(controller, 0);
-  ASSERT_EQ(::grantpt(controller), 0);
-  ASSERT_EQ(::unlockpt(controller), 0);
   std::array<char, 128> port{};
-  ASSERT_EQ(::ptsname_r(controller, port.data(), port.size()), 0);
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
 
   load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
   ASSERT_TRUE(loaded_);
@@ -522,5 +544,94 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmIsSilent)
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   resource_manager_.reset();  // closes the port before its pseudo-terminal goes away
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, DeactivateHoldsCommandsAndActivateResumesThem)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_TRUE(command(JOINTS.at(0), 0.25));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  ASSERT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.25);
+
+  // Deactivate: on_deactivate halts the arm (nothing to interrupt on the fake) and succeeds.
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+
+  // A controller still writing its command interface reaches nothing: the resource manager
+  // skips an inactive component's write(), and write() itself returns early when not active.
+  ASSERT_TRUE(command(JOINTS.at(0), 0.5));
+  EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.25);
+
+  // Activate again: power_on, commands start from the measured pose, and then follow.
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  ASSERT_TRUE(command(JOINTS.at(0), 0.5));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.5);
+
+  // The rest of the lifecycle still works after a deactivate.
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED,
+      hardware_interface::lifecycle_state_names::UNCONFIGURED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, AFailedActivateLeavesTheComponentConfigurable)
+{
+  // Same silent pseudo-terminal: activate fails, and on_error must take the component back to
+  // UNCONFIGURED, never FINALIZED (which needs a plugin reload), so a supervisor can configure
+  // it again.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::ERROR);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+
+  // on_error kept the backend, and with it the port: configure drops it before opening again.
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+
+  resource_manager_.reset();
   ::close(controller);
 }
