@@ -33,6 +33,7 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/velocity_estimator.hpp"
 #include "rclcpp/logging.hpp"
@@ -56,6 +57,12 @@ public:
     const rclcpp_lifecycle::State & previous_state) override;
 
   hardware_interface::CallbackReturn on_activate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_error(
     const rclcpp_lifecycle::State & previous_state) override;
 
   hardware_interface::return_type read(
@@ -87,6 +94,16 @@ private:
   /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
   bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
 
+  /// Fills limits_ from the <limit> tags of the URDF (#34). It parses the URDF itself
+  /// (info.original_xml): with <limits enable="false"/> on the joints, ros2_control leaves no
+  /// position limit in info.limits. False, with an error logged, when a joint has no usable
+  /// position limit: the driver must not run without its last guard.
+  bool load_limits(const hardware_interface::HardwareInfo & info);
+
+  /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
+  /// value. write() then returns ERROR, which takes the component out of ACTIVE.
+  void refuse(const CommandCheck & check);
+
   /// The interfaces of one joint, looked up once so read() and write() build no string: two
   /// states the plugin fills, one command the controller fills and the plugin sends.
   struct JointHandles
@@ -104,6 +121,10 @@ private:
   std::unique_ptr<ArmBackend> arm_;
   VelocityEstimator velocity_estimator_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
+
+  /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
+  /// command against them before it reaches the arm.
+  PositionLimits limits_{};
 };
 
 }  // namespace positronic_hardware
