@@ -127,7 +127,9 @@ class JointStatesRate(Node):
         self.intervals_ms = []
 
 
-def main():
+# Arguments, spin and shutdown only, excluded from coverage: every number it prints comes from
+# the functions tested above, and a spin cannot be tested without a running graph.
+def main():  # pragma: no cover
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--duration', type=float, default=None,
@@ -158,5 +160,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':  # pragma: no cover
     sys.exit(main())
