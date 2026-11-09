@@ -259,15 +259,18 @@ void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
   if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
     return;
   }
+  if (pending == Request::HALT) {
+    last_sent = std::nullopt;
+  } else if (pending == Request::POWER_ON) {
+    // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
+    // right after it must find the hold already released, so its own hold cannot be undone by
+    // this store arriving late. Same rule as halt(), the state changes before the signal.
+    halted_.store(false);
+  }
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Request expected{pending};
   request_.compare_exchange_strong(expected, Request::NONE);
-  if (pending == Request::HALT) {
-    last_sent = std::nullopt;
-  } else if (pending == Request::POWER_ON) {
-    halted_.store(false);
-  }
 }
 
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
