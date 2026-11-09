@@ -205,13 +205,13 @@ void SerialArm::request_halt()
 
 bool SerialArm::power_on()
 {
-  // Drop the target stored before or during the halt, before the hold is released: with it
-  // still there, the thread would send it on its next turn, before the plugin's first
-  // write_angles() after activate (the measured pose) could replace it. Seen on the arm as a
-  // short move towards the old target. Both writers here are non-RT, so the buffer's mutex is
-  // enough.
+  // Drop the target stored before or during the halt: with it still there, the thread would
+  // send it once the hold ends, before the plugin's first write_angles() after activate (the
+  // measured pose) could replace it. Seen on the arm as a short move towards the old target.
+  // Both writers here are non-RT, so the buffer's mutex is enough. The hold itself is released
+  // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
+  // the hold goes on before the stop. A target written meanwhile waits for that turn.
   command_.writeFromNonRT(std::nullopt);
-  halted_.store(false);
   return request_and_wait(Request::POWER_ON);
 }
 
@@ -248,20 +248,26 @@ std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request requ
 /// Writes the pending halt or power_on, if any, at the start of a turn: the previous turn is
 /// over, so the arm's input is free, and request_and_wait() is waiting for this. No settle after
 /// it: the caller returns as soon as the frame is written, and if the arm ignores the port for a
-/// while the only cost is this turn's reply. A failed write leaves the request pending for the
-/// next turn. True when a stop went out, so the caller can forget the last target.
-bool SerialArm::send_pending_request()
+/// while the only cost is this turn's reply. A failed write leaves the request pending, and the
+/// hold as it is, for the next turn. A stop that went out clears `last_sent`: the arm is heading
+/// nowhere, so the next target goes out even when it equals the last one sent. A power on that
+/// went out ends the hold, with the frame already on the wire, so no target can get ahead of it.
+void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
 {
   const Request pending{request_.load()};
   const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
   if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
-    return false;
+    return;
   }
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Request expected{pending};
   request_.compare_exchange_strong(expected, Request::NONE);
-  return pending == Request::HALT;
+  if (pending == Request::HALT) {
+    last_sent = std::nullopt;
+  } else if (pending == Request::POWER_ON) {
+    halted_.store(false);
+  }
 }
 
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
@@ -289,11 +295,7 @@ void SerialArm::poll_loop()
     // The deadline is set before the work, so a slow reply does not drift the period.
     const auto turn_start{std::chrono::steady_clock::now()};
 
-    if (send_pending_request()) {
-      // After a stop the arm is heading nowhere, so the next target goes out even when it
-      // equals the last one sent.
-      last_sent = std::nullopt;
-    }
+    send_pending_request(last_sent);
 
     bool sent{false};
 

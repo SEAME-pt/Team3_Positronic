@@ -80,6 +80,10 @@ using positronic_hardware::PosixSerialPort;
 using positronic_hardware::SerialArm;
 using positronic_hardware::SerialTransport;
 
+constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::CommandId::STOP)};
+constexpr std::uint8_t POWER_ON_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
+
 /// A transport that answers every request with a fixed sequence of byte bursts, looping. It is
 /// thread-safe because SerialArm reads it from its poll thread.
 class ReplayTransport : public SerialTransport
@@ -92,11 +96,24 @@ public:
 
   bool write(const std::uint8_t * data, std::size_t count) override
   {
-    // The request is accepted; the reply is scripted below. Every frame is kept so a test can
-    // check what the thread put on the wire.
+    // A stop or power on is refused while reject_requests_ is set, as a busy port would. Every
+    // other frame is accepted; the reply is scripted below. Accepted frames are kept so a test
+    // can check what the thread put on the wire.
+    if (reject_requests_.load() && count == 5) {
+      const std::uint8_t id{*std::next(data, 3)};
+      if (id == STOP_ID || id == POWER_ON_ID) {
+        return false;
+      }
+    }
     const std::lock_guard<std::mutex> lock{mutex_};
     written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
     return true;
+  }
+
+  /// A port that refuses the stop and power on frames only, until set_reject_requests(false).
+  void set_reject_requests(bool reject)
+  {
+    reject_requests_.store(reject);
   }
 
   /// Every frame written so far, oldest first.
@@ -130,6 +147,7 @@ private:
   std::vector<std::vector<std::uint8_t>> written_;
   std::size_t index_{0};
   std::atomic<bool> silent_{false};
+  std::atomic<bool> reject_requests_{false};
   std::mutex mutex_;
 };
 
@@ -154,8 +172,7 @@ std::vector<std::vector<std::uint8_t>> send_angles_frames(
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (
-      frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
+    if (frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
       frame[3] == 0x22)
     {
       found.push_back(frame);
@@ -164,17 +181,15 @@ std::vector<std::vector<std::uint8_t>> send_angles_frames(
   return found;
 }
 
-constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::CommandId::STOP)};
-constexpr std::uint8_t POWER_ON_ID{
-  static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
-
 /// The 5-byte request frames with command `id` among `frames`: `FE FE 02 id FA`.
 std::vector<std::vector<std::uint8_t>> frames_with_id(
   const std::vector<std::vector<std::uint8_t>> & frames, std::uint8_t id)
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (frame.size() == 5 && frame[0] == 0xFE && frame[1] == 0xFE && frame[3] == id) {
+    if (frame.size() == 5 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x02 &&
+      frame[3] == id && frame[4] == 0xFA)
+    {
       found.push_back(frame);
     }
   }
@@ -300,25 +315,8 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
   const auto sends{wait_for_sends(port, 1)};
   ASSERT_EQ(sends.size(), 1u);
-  const std::vector<std::uint8_t> expected{
-    0xFE,
-    0xFE,
-    0x0F,
-    0x22,
-    0x02,
-    0x3D,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    SerialArm::SEND_SPEED,
-    0xFA};
+  const std::vector<std::uint8_t> expected{0xFE, 0xFE, 0x0F, 0x22, 0x02, 0x3D, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, SerialArm::SEND_SPEED, 0xFA};
   EXPECT_EQ(sends.front(), expected);
 
   // The same command is not sent again: the arm already has it.
@@ -427,6 +425,37 @@ TEST(SerialArm, PowerOnSendsItsFrameOnce)
   // The request is cleared once it is out: the next turns send no second one.
   std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
   EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 1u);
+}
+
+TEST(SerialArm, TheHoldStaysUntilThePowerOnIsOnTheWire)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+  ASSERT_TRUE(arm.halt());
+
+  // The port refuses the power on: power_on() times out, and the request stays pending.
+  port.set_reject_requests(true);
+  EXPECT_FALSE(arm.power_on());
+
+  // A target written while the power on is still pending must not get ahead of it: the hold is
+  // released by the thread when the frame goes out, not by power_on() itself.
+  arm.write_angles(JointPositions{0.3, 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 0u);
+  EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 0u);
+
+  // The port takes the frame again: the pending power on goes out on its own, then the target.
+  port.set_reject_requests(false);
+  EXPECT_EQ(wait_for_sends(port, 1).size(), 1u);
+  const auto frames{port.written()};
+  const auto power_on_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
+        return frame.size() == 5 && frame[3] == POWER_ON_ID;
+  })};
+  ASSERT_NE(power_on_at, frames.end());
+  const std::vector<std::vector<std::uint8_t>> after_power_on{power_on_at, frames.end()};
+  EXPECT_EQ(send_angles_frames(after_power_on).size(), 1u);
 }
 
 TEST(SerialArm, RequestHaltSendsTheStopWithoutWaiting)

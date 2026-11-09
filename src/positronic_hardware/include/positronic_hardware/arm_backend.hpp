@@ -22,6 +22,7 @@
 #define POSITRONIC_HARDWARE__ARM_BACKEND_HPP_
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 
 namespace positronic_hardware
@@ -67,10 +68,14 @@ public:
   /// active, so an implementation does not need to check that itself.
   virtual void write_angles(const JointPositions & angles) = 0;
 
+  /// How long halt() and power_on() may wait for their frame to reach the port. Part of the
+  /// contract, so the plugin can log the deadline without knowing which backend it holds.
+  static constexpr std::chrono::milliseconds REQUEST_TIMEOUT{300};
+
   /// Stops the arm where it is and holds every target until power_on(). True when the stop
   /// went out on the port within the deadline, false when the deadline passed with the stop
   /// still pending. Called from a lifecycle transition, never from the control loop: it may
-  /// wait up to 300 ms.
+  /// wait up to REQUEST_TIMEOUT.
   [[nodiscard]] virtual bool halt() = 0;
 
   /// The same stop and hold as halt(), without the wait: it only leaves the request, the
@@ -83,7 +88,7 @@ public:
   /// halt(). A target stored before or during the halt is dropped: the next write_angles() is
   /// the first to reach the arm. True when the power on went out on the port within the
   /// deadline, false when the deadline passed with it still pending. Called from a lifecycle
-  /// transition, never from the control loop: it may wait up to 300 ms.
+  /// transition, never from the control loop: it may wait up to REQUEST_TIMEOUT.
   [[nodiscard]] virtual bool power_on() = 0;
 
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control

@@ -81,10 +81,9 @@ public:
   /// follows a get_angles request before its reply is dropped by the arm.
   static constexpr std::chrono::milliseconds REPLY_TIMEOUT{50};
 
-  /// How long halt() and power_on() wait for the thread to put their frame on the wire. Two
-  /// turns of the worst case: a silent arm holds a turn for REPLY_TIMEOUT plus one VTIME read
-  /// (0.1 s), ~150 ms, and the request may land just after a turn has started.
-  static constexpr std::chrono::milliseconds REQUEST_TIMEOUT{300};
+  // REQUEST_TIMEOUT, from the contract, covers two turns of the worst case: a silent arm holds a
+  // turn for REPLY_TIMEOUT plus one VTIME read (0.1 s), ~150 ms, and the request may land just
+  // after a turn has started.
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
@@ -120,9 +119,10 @@ public:
   /// thread's next turn. Two atomic stores, safe from the control loop.
   void request_halt() override;
 
-  /// Drops the target held since halt(), lets targets go out again, then asks the thread to send
-  /// a power_on at the start of its next turn and waits for it, up to REQUEST_TIMEOUT. The hold
-  /// is released whether or not the frame made it.
+  /// Drops the target held since halt(), then asks the thread to send a power_on at the start
+  /// of its next turn and waits for it, up to REQUEST_TIMEOUT. The thread releases the hold in
+  /// the turn that writes the frame, so targets go out again only once the power on is on the
+  /// wire. If the frame never made it, the hold stays.
   [[nodiscard]] bool power_on() override;
 
 private:
@@ -135,8 +135,9 @@ private:
   };
   /// The stop or power_on frame for `request`, or nullopt for NONE.
   static std::optional<positronic_protocol::Frame> encode_request(Request request);
-  /// Sends the pending request, if any, at the start of a turn. True when it was a stop.
-  bool send_pending_request();
+  /// Sends the pending request, if any, at the start of a turn, and applies what it means for
+  /// the thread: a stop clears `last_sent`, a power on ends the hold.
+  void send_pending_request(std::optional<JointPositions> & last_sent);
 
   void poll_loop();
 
@@ -160,9 +161,10 @@ private:
   // power_on() set it from a lifecycle transition; the thread puts it back to NONE once the
   // frame is on the wire, and that is what the callers wait for.
   std::atomic<Request> request_{Request::NONE};
-  // True from halt() until power_on(): the thread sends no target meanwhile, so a command stored
-  // before the stop, or one that arrives while inactive, cannot go out after it. Set before
-  // request_, so the turn that sends the stop already sees the hold.
+  // True from halt() until the thread has written the power on: it sends no target meanwhile,
+  // so a command stored before the stop, or one that arrives while inactive, cannot go out after
+  // it. halt() sets it before request_, so the turn that sends the stop already sees the hold;
+  // the thread clears it in the turn that sends the power on, so no target gets ahead of that.
   std::atomic<bool> halted_{false};
   std::thread thread_;
 };

@@ -122,7 +122,7 @@ No arm is needed:
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
 | `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose. |
-| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, `request_halt()` returns at once, a port that refuses writes, a silent arm); `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); `PosixSerialPort` exclusivity on a pseudo-terminal. |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
 
