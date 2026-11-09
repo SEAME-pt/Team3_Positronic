@@ -263,9 +263,9 @@ Meetings today: none
 Reminder: open the PR `docs(standups): sprint 02 week 1` today.
 
 **Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: continuou a issue 35 e estacva estudando melhor como integrar a issue 35 com o pacote positronic hardware
+- Today: Estudo e planejamento do ROS
+- Blocked: nothing
 
 **Leandro**, block B
 - Done: Terminou a Issue #34
@@ -283,13 +283,13 @@ Reminder: open the PR `docs(standups): sprint 02 week 1` today.
 - Blocked: Nothing.
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Wallace**, block B
 - Done: começou a parte do action error handle no node.
 - Today: Pretende finzalizar esta parte para integrar com o Movelt
+- Blocked: Nothing.
+
+**Wallace**, block B
+- Done: fez o script e testou, nao funcionou.
+- Today: Tentando ver quais sao as melhores formas de medição com o script
 - Blocked: Nothing.
 
 Challenges:
