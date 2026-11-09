@@ -22,7 +22,6 @@
 """
 Run the real arm driver on the Jetson and publish /joint_states (#23).
 
-Three nodes:
 - robot_state_publisher, which publishes the URDF on /robot_description (latched). The
   controller_manager reads the description from that topic.
 - ros2_control_node (the controller_manager), which loads the hardware plugin and, on the
@@ -30,7 +29,7 @@ Three nodes:
 - the spawner, which activates joint_state_broadcaster, the controller that turns the plugin's
   state interfaces into /joint_states.
 
-The launch spawns no controller that moves the arm. forward_position_controller is in the
+Forward_position_controller is in the
 yaml for the first motion and for jogging; spawn it by hand with the bench clear (#32).
 
 The mirror launch (mirror.launch.py, #24) runs its own robot_state_publisher. Running the
@@ -56,7 +55,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Return the driver launch: the arguments, the three nodes and the xacro call."""
+    """Return the driver launch: the arguments, the nodes and the xacro call."""
     backend = DeclareLaunchArgument(
         'backend', default_value='serial',
         description='serial: the real arm. fake: a standing arm, no serial port.')
