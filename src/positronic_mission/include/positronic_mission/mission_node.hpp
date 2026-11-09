@@ -21,29 +21,31 @@
 #ifndef POSITRONIC_MISSION__MISSION_NODE_HPP_
 #define POSITRONIC_MISSION__MISSION_NODE_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <memory>
+#include <rclcpp/service.hpp>
 #include <thread>
 #include <rclcpp_action/client.hpp>
 #include <rclcpp_action/server.hpp>
 #include <rclcpp_action/server_goal_handle.hpp>
 #include <rclcpp_action/types.hpp>
-#include <shared_mutex>
 #include "positronic_interfaces/msg/heartbeat.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
-#include "std_msgs/msg/string.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "positronic_interfaces/srv/state_trigger.hpp"
 
 namespace positronic_mission
 {
 using positronic_interfaces::msg::Heartbeat;
 using positronic_interfaces::action::GoToPose;
+using positronic_interfaces::srv::StateTrigger;
 using GoalHandle = rclcpp_action::ServerGoalHandle<GoToPose>;
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -55,6 +57,13 @@ enum class State : unsigned char {
     ERROR
 };
 
+// Make sure that the enum State is the same value as the Heartbeat.msg
+static_assert(static_cast<uint8_t>(State::IDLE) == Heartbeat::STATE_IDLE);
+static_assert(static_cast<uint8_t>(State::INACTIVE) == Heartbeat::STATE_INACTIVE);
+static_assert(static_cast<uint8_t>(State::MOVING) == Heartbeat::STATE_MOVING);
+static_assert(static_cast<uint8_t>(State::STOPPED) == Heartbeat::STATE_STOPPED);
+static_assert(static_cast<uint8_t>(State::ERROR) == Heartbeat::STATE_ERROR);
+
 class MissionNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -63,8 +72,8 @@ public:
 
     MissionNode(const MissionNode & rhs) = delete;
     MissionNode &operator=(const MissionNode & rhs) = delete;
-    MissionNode(const MissionNode && rhs) = delete;
-    MissionNode &operator=(const MissionNode && rhs) = delete;
+    MissionNode(MissionNode && rhs) = delete;
+    MissionNode &operator=(MissionNode && rhs) = delete;
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State & /* state */) override;
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State & /* state */) override;
@@ -73,12 +82,15 @@ public:
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /* state */) override;
 
 private:
+    void reset_ptrs();
     void heart_beat();
     bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal);
     rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & goal_handle);
     void handle_accepted(const std::shared_ptr<GoalHandle> & goal_handle);
     void execute(const std::shared_ptr<GoalHandle> & goal_handle);
+    void handle_reset(const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response);
+    void handle_emergency_stop(const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response);
 
     /*
           Need:
@@ -88,18 +100,27 @@ private:
               subscriber /joint_states
               timer to track 10Hz
               state
-      */
-    rclcpp_action::Server<GoToPose>::SharedPtr mission_server_;
-    // rclcpp_action::Client<typename ActionT>::SharedPtr mission_client;
-    rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_;
+    */
 
-    rclcpp::TimerBase::SharedPtr timer_;
-    // state needs to be std::atomic or mutex protected
-    // uint8_t state_;
+    rclcpp_action::Server<GoToPose>::SharedPtr mission_server_{nullptr};
+    // rclcpp_action::Client<typename ActionT>::SharedPtr mission_client_;
+    rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_{nullptr};
+    // rclcpp_lifecycle::LifecycleSubscriber<??>::SharedPtr stop_subscriber_;
+
+
+    // Server that resets the State to IDLE
+    rclcpp::Service<StateTrigger>::SharedPtr reset_state_{nullptr};
+
+    // Server that forces a STOPPED State. Doesn't override ERROR State
+    rclcpp::Service<StateTrigger>::SharedPtr emergency_stop_{nullptr};
+
+
     std::thread exec_thread_;
+    rclcpp::TimerBase::SharedPtr timer_{nullptr};
     std::atomic<State> state_{State::INACTIVE};
+    // std::atomic<bool> forced_stop_{false};
 
 };
 } //namespace positronic_mission
 
-#endif  // POSITRONIC_MISSION__MISSION_NODE_HPP_"
+#endif  // POSITRONIC_MISSION__MISSION_NODE_HPP_

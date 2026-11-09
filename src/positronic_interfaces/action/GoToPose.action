@@ -3,10 +3,11 @@ geometry_msgs/PoseStamped target_pose
 ---
 # Result
 bool success
-uint8 OK=0
-uint8 REJECTED=1
-uint8 ERROR=2
-uint8 CANCELED=3
+uint8 OK=0           # accepted, planned and executed
+uint8 REJECTED=1     # accepted, but MoveIt could not plan; arm did not move
+uint8 ERROR=2        # plan valid, execution failed; node goes to ERROR
+uint8 CANCELED=3     # canceled by the client
+uint8 STOPPED=4      # interrupted by e-stop or deactivation
 uint8 code
 ---
 # Feedback

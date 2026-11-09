@@ -15,6 +15,7 @@ find_package(lifecycle_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Heartbeat.msg"
   "action/GoToPose.action"
+  "srv/StateTrigger.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs lifecycle_msgs
 )
 
