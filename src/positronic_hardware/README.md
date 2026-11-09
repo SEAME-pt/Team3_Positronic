@@ -6,8 +6,10 @@ The ros2_control hardware interface of the myCobot 280 (Jetson Nano): the plugin
 It reads the six joint angles from the arm over the serial port and publishes, for each joint,
 a `position` (rad) and a `velocity` (rad/s) state interface. It takes a `position` command
 (rad) per joint and sends the six targets to the arm as one `send_angles` frame at 30 % of the
-firmware speed (#32). Deactivating the component stops the arm and holds it; activating it
-powers the servos on and resumes (#36).
+firmware speed (#32), after checking them against the joint limits of the URDF (#34): a
+command past a limit, NaN or with the wrong joint count is refused and the arm halts.
+Deactivating the component stops the arm and holds it; activating it powers the servos on and
+resumes (#36).
 
 ## How it fits together
 
@@ -34,7 +36,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
   and `moving_period_ms` after a send. The arm drops a frame that arrives while it is still
   answering, so nothing is sent before the reply.
 - `read()` copies the newest pose out of the buffer and runs the velocity filter. `write()`
-  copies the six commands into the buffer. Neither does serial I/O, allocates, logs or throws.
+  checks the six commands against the joint limits and copies them into the buffer. Neither
+  does serial I/O, allocates or throws; the only log is the one line of a refused command.
 - A target equal to the last one sent is not sent again. A target with a NaN or an angle out
   of the protocol range is skipped and the previous one stays.
 
@@ -42,7 +45,7 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
 
 The `<ros2_control>` tag lists the six joints in protocol order, J1 (base) to J6 (flange), each
 with `position` and `velocity` state interfaces and exactly one `position` command interface.
-`on_init` refuses anything else. `positronic_description/urdf/positronic_real.urdf.xacro` is
+`on_init` refuses anything else. Each URDF joint needs a revolute `<limit>`: the plugin reads it. `positronic_description/urdf/positronic_real.urdf.xacro` is
 the real one, with the parameters as xacro arguments.
 
 ```xml
@@ -53,6 +56,7 @@ the real one, with the parameters as xacro arguments.
     <param name="port">/dev/ttyTHS1</param>
   </hardware>
   <joint name="joint2_to_joint1">
+    <limits enable="false"/>
     <command_interface name="position"/>
     <state_interface name="position"/>
     <state_interface name="velocity"/>
@@ -62,8 +66,39 @@ the real one, with the parameters as xacro arguments.
 </ros2_control>
 ```
 
-The Gazebo xacro in `positronic_description` loads `gz_ros2_control/GazeboSimSystem` instead
-of this plugin, so it cannot be reused as is for the real arm.
+`<limits enable="false"/>` is part of the joint limit check, see below. The Gazebo xacro in
+`positronic_description` loads `gz_ros2_control/GazeboSimSystem` instead of this plugin, so it
+cannot be reused as is for the real arm.
+
+## Joint limits (#34)
+
+The plugin is the last gate before the serial port: MoveIt, a misconfigured controller, a test
+script and a bug all pass through `write()`. So every command is checked there, before anything
+reaches the arm.
+
+- **Where the limits come from.** The `<limit lower upper>` tags of the URDF, read once in
+  `on_init` (`load_limits()`), never a table in the code. A joint without a revolute `<limit>`,
+  or with `lower >= upper`, stops the driver at start-up. The six limits are logged
+  (`Joint '...' limits: [..., ...] rad.`).
+- **What is refused.** `check_command()` (`joint_limit_check.hpp`) goes J1 to J6 and the first
+  bad joint wins: a value that is not finite (NaN, inf), below `lower` or above `upper`. Both
+  ends are allowed. The count is checked first: anything but six values is refused unread. It
+  never clamps: a bad command means a bug upstream, and fixing it silently would hide it.
+- **What happens then.** The command is not sent. `write()` asks the backend for a stop
+  (`request_halt()`, non-blocking), logs
+  `Command refused, arm halted: joint '...' = ... rad (... deg), above upper limit [..., ...] rad.`
+  and returns `ERROR`. The controller manager then deactivates the controllers on this
+  component, and `on_error()` takes it to UNCONFIGURED (see Lifecycle).
+- **Coming back.** `configure` and `activate`, as after any error. `on_activate` refuses an arm
+  that already stands outside its limits ("Move the arm inside its limits by hand"), before it
+  powers the servos on.
+- **Why `<limits enable="false"/>`.** With a command interface and a URDF `<limit>`,
+  ros2_control adds its own `JointSaturationLimiter`, which clamps a command to the limit
+  before `write()` sees it: the arm would stop at the limit, but nothing would be refused or
+  logged. The tag turns that limiter off (the launch log says
+  `Joint limits are disabled for joint ...`). It also removes the joint's limits from
+  `HardwareInfo::limits`, which is why `load_limits()` parses the URDF itself
+  (`info.original_xml`). `on_init` warns if the tag is missing.
 
 ## Parameters
 
@@ -89,11 +124,11 @@ The component is not a ROS node: its state changes with
 
 | Transition  | What happens                                                                     |
 |-------------|----------------------------------------------------------------------------------|
-| `on_init`   | Checks the joints and the parameters.                                             |
+| `on_init`   | Checks the joints, reads the joint limits from the URDF (#34), checks the parameters. |
 | `on_configure` | Drops a backend left over from an earlier error, then creates a new one. `serial` opens and locks the port and starts the thread; fails if the port cannot be opened. States are set to NaN ("unknown"). |
 | `read()` (inactive or active) | Publishes position and velocity once the arm has answered; until then the states stay NaN. |
-| `on_activate` | Waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". |
-| `write()` (active only) | Hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive. |
+| `on_activate` | Waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". |
+| `write()` (active only) | Checks the six commands against the joint limits (#34); a bad one is not sent, the arm gets a stop and `write()` returns ERROR. Otherwise hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive. |
 | `on_deactivate` | Sends a stop: the arm halts where it is, and the serial thread holds every target until the next activate. Returns ERROR if the stop did not leave the port within 300 ms, because a component that could not stop the arm must not stay active. |
 | `on_error` | Reached from any transition that returned ERROR, and from a `write()` that returned ERROR, on the control loop. Asks the serial thread for a stop without waiting, keeps the backend alive (it holds every target and keeps reading the pose) and takes the component to UNCONFIGURED, so `configure` and `activate` bring it back. It never joins the thread on the control loop. |
 | `on_cleanup`, `on_shutdown` | Destroys the backend: stops the thread, unlocks and closes the port. |
@@ -121,14 +156,17 @@ No arm is needed:
 
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
-| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose. |
+| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation. |
 | `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); `PosixSerialPort` exclusivity on a pseudo-terminal. |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
+| `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
 
 Passing tests do not prove the driver is right on the arm. On the robot, check that activation
 succeeds, that the first published pose is the real one, and that the velocity looks sane while
-the arm is moved by hand (`release_all_servos`, see `positronic_protocol`).
+the arm is moved by hand (`release_all_servos`, see `positronic_protocol`). For #34, send one
+joint to its limit + 5 deg past MoveIt (a `forward_position_controller`) and check that the arm
+does not move and the log names the joint.
 
 ## Known limits
 
@@ -140,12 +178,20 @@ the arm is moved by hand (`release_all_servos`, see `positronic_protocol`).
 - `halt()` and `power_on()` report true when their frame is on the wire, not when the firmware
   acknowledged it (#103). With a silent arm a serial turn can last about 150 ms, so a stop can
   take that long to reach the port; the 300 ms deadline allows two such turns.
+- The joint limit check refuses, it never corrects (#34). With ros2_control's limiter off, a
+  `joint_trajectory_controller` trajectory that crosses a URDF limit, even by 0.001 rad, makes
+  `write()` return ERROR in the cycle where the command crosses it: the arm moves towards the
+  limit, stops there, the component goes to UNCONFIGURED and its controllers are deactivated.
+  What the supervisor sees is that component state plus the `Command refused, arm halted` line
+  with the joint and the value. #33 must keep the controller's goals and tolerances inside the
+  URDF limits: MoveIt plans inside them, a hand-written trajectory may not.
 
 ## Files
 
 - `include/positronic_hardware/positronic_hardware.hpp`, `src/positronic_hardware.cpp`: the plugin.
 - `arm_backend.hpp`: the `ArmBackend` interface, `NUM_JOINTS`, `JointPositions`.
 - `fake_arm.hpp`: `FakeArm`.
+- `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
 - `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
 - `serial_transport.hpp`: the `SerialTransport` interface.
 - `reply_assembler.hpp`: `ReplyAssembler`.
