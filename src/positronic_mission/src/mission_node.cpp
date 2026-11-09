@@ -65,15 +65,13 @@ void positronic_mission::MissionNode::handle_reset(const std::shared_ptr<StateTr
 
 void positronic_mission::MissionNode::handle_emergency_stop(const std::shared_ptr<StateTrigger::Request> & /* request */, std::shared_ptr<StateTrigger::Response> response)
 {
-    if (state_ == State::ERROR) {
-        response->accepted = false;
-        response->message = "Arm was in Error State";
+    State state_now = state_.load();
+    while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
     }
-    else {
-        state_ = State::STOPPED;
-        response->accepted = true;
-        response->message = "Emergency stop activated";
-    }
+    // need to send a .stop() to moveit once I have it.
+
+    response->accepted = true;
+    response->message = (state_ == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(const rclcpp_lifecycle::State & /* state */)
@@ -141,7 +139,11 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
     // can read from /joint_states
     // check move_group node
     // controller status from ros2_control
-    state_ = State::IDLE;
+
+    // For now. Only put into IDLE if the arm was INACTIVE.
+    // Does not override STOPPED and ERROR States
+    State expected = State::INACTIVE;
+    state_.compare_exchange_strong(expected, State::IDLE);
     // forced_stop_ = false;
 
     LifecycleNode::on_activate(state);
@@ -155,9 +157,13 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
 {
     RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
-    // Need a way to stop the loop here. Do I need it in shutdown as well?
-    // forced_stop_ = true;
-    state_ = State::INACTIVE;
+    // Get the current State
+    // Check if it's not ERROR. Then check if it didn't change from the last check
+    // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
+    // Using _weak because it can be faster on loops. Don't use it for single checks since it can spuriously fail!
+    State state_now = state_.load();
+    while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
+    }
     if (exec_thread_.joinable()) {
         exec_thread_.join();
     }
@@ -340,15 +346,13 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
         RCLCPP_INFO(get_logger(), "Goal canceled");
     }
     else if (stopped_in_loop) {
-        expected = State::MOVING;
         // If state is different than MOVING, don't touch it
         state_.compare_exchange_strong(expected, State::STOPPED);
-        result->code = GoToPose::Result::CANCELED;
+        result->code = GoToPose::Result::STOPPED;
         goal_handle->abort(result);
         RCLCPP_INFO(get_logger(), "Force stop activated");
     }
     else {
-        expected = State::MOVING;
         if (state_.compare_exchange_strong(expected, State::IDLE)) {
             result->success = true;
             result->code = GoToPose::Result::OK;
@@ -356,7 +360,7 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
             RCLCPP_INFO(get_logger(), "Goal achieved");
         }
         else {
-            result->code = (state_ == State::ERROR ) ? GoToPose::Result::ERROR : GoToPose::Result::CANCELED;
+            result->code = (expected == State::ERROR ) ? GoToPose::Result::ERROR : GoToPose::Result::STOPPED;
             goal_handle->abort(result);
             RCLCPP_INFO(get_logger(), "State changed after execution");
         }
