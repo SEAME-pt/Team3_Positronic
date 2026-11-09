@@ -191,6 +191,11 @@ bool SerialArm::has_sample() const
   return has_sample_.load();
 }
 
+bool SerialArm::link_timed_out() const
+{
+  return watchdog_.timed_out(Clock::now());
+}
+
 bool SerialArm::halt()
 {
   // The hold goes first, so the turn that writes the stop already sends no target after it.
@@ -204,20 +209,15 @@ void SerialArm::request_halt()
   request_.store(Request::HALT);
 }
 
-bool SerialArm::link_timed_out() const
-{
-  return watchdog_.timed_out(Clock::now());
-}
-
 bool SerialArm::power_on()
 {
-  // Drop the target stored before or during the halt, before the hold is released: with it
-  // still there, the thread would send it on its next turn, before the plugin's first
-  // write_angles() after activate (the measured pose) could replace it. Seen on the arm as a
-  // short move towards the old target. Both writers here are non-RT, so the buffer's mutex is
-  // enough.
+  // Drop the target stored before or during the halt: with it still there, the thread would
+  // send it once the hold ends, before the plugin's first write_angles() after activate (the
+  // measured pose) could replace it. Seen on the arm as a short move towards the old target.
+  // Both writers here are non-RT, so the buffer's mutex is enough. The hold itself is released
+  // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
+  // the hold goes on before the stop. A target written meanwhile waits for that turn.
   command_.writeFromNonRT(std::nullopt);
-  halted_.store(false);
   return request_and_wait(Request::POWER_ON);
 }
 
@@ -227,8 +227,8 @@ bool SerialArm::request_and_wait(Request request)
   // The poll thread writes the frame at the start of its next turn and puts request_ back to
   // NONE. 1 ms steps: on the arm the frame is out within a few ms, and this runs in a lifecycle
   // transition, which may wait.
-  const auto deadline{Clock::now() + REQUEST_TIMEOUT};
-  while (Clock::now() < deadline) {
+  const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
+  while (std::chrono::steady_clock::now() < deadline) {
     if (request_.load() == Request::NONE) {
       return true;
     }
@@ -254,20 +254,29 @@ std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request requ
 /// Writes the pending halt or power_on, if any, at the start of a turn: the previous turn is
 /// over, so the arm's input is free, and request_and_wait() is waiting for this. No settle after
 /// it: the caller returns as soon as the frame is written, and if the arm ignores the port for a
-/// while the only cost is this turn's reply. A failed write leaves the request pending for the
-/// next turn. True when a stop went out, so the caller can forget the last target.
-bool SerialArm::send_pending_request()
+/// while the only cost is this turn's reply. A failed write leaves the request pending, and the
+/// hold as it is, for the next turn. A stop that went out clears `last_sent`: the arm is heading
+/// nowhere, so the next target goes out even when it equals the last one sent. A power on that
+/// went out ends the hold, with the frame already on the wire, so no target can get ahead of it.
+void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
 {
   const Request pending{request_.load()};
   const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
   if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
-    return false;
+    return;
+  }
+  if (pending == Request::HALT) {
+    last_sent = std::nullopt;
+  } else if (pending == Request::POWER_ON) {
+    // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
+    // right after it must find the hold already released, so its own hold cannot be undone by
+    // this store arriving late. Same rule as halt(), the state changes before the signal.
+    halted_.store(false);
   }
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Request expected{pending};
   request_.compare_exchange_strong(expected, Request::NONE);
-  return pending == Request::HALT;
 }
 
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
@@ -290,18 +299,14 @@ void SerialArm::poll_loop()
   // keeps the arm busy for the settle, and while it stands still the port is better spent on
   // fresh poses.
   std::optional<JointPositions> last_sent{};
-  // Set the watchdog time to now before starting the loop.
+  // Count the silence from now, so an arm that never answers also times out (#35).
   watchdog_.reset(Clock::now());
 
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
-    const auto turn_start{Clock::now()};
+    const auto turn_start{std::chrono::steady_clock::now()};
 
-    if (send_pending_request()) {
-      // After a stop the arm is heading nowhere, so the next target goes out even when it
-      // equals the last one sent.
-      last_sent = std::nullopt;
-    }
+    send_pending_request(last_sent);
 
     bool sent{false};
 
@@ -314,7 +319,7 @@ void SerialArm::poll_loop()
       // request and its reply must be over before anything else is written: the arm drops a
       // send_angles that arrives while it is still answering a get_angles.
       const auto reply_deadline{turn_start + REPLY_TIMEOUT};
-      while (!replied && !stop_.load() && Clock::now() < reply_deadline) {
+      while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
         const std::size_t got{transport_->read(chunk.data(), chunk.size())};
         if (got == 0) {
           // A real port blocks up to VTIME before returning 0; a test transport returns at
@@ -326,7 +331,6 @@ void SerialArm::poll_loop()
           latest_.writeFromNonRT(pose.value());
           // Set after the write, so whoever sees true also finds the real pose in the buffer.
           has_sample_.store(true);
-          // Update watchdog value to latest
           watchdog_.on_reply(Clock::now());
           replied = true;
         }

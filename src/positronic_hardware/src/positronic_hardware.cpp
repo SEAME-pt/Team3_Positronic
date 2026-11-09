@@ -337,7 +337,7 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   if (!arm_->power_on()) {
     RCLCPP_ERROR(
       get_logger(), "power_on was not sent to the arm within %d ms; not activating.",
-      static_cast<int>(SerialArm::REQUEST_TIMEOUT.count()));
+      static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
 
@@ -362,7 +362,7 @@ CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*prev
   // and the supervisor sees a component that must be configured and activated again.
   RCLCPP_ERROR(
     get_logger(), "stop was not sent to the arm within %d ms.",
-    static_cast<int>(SerialArm::REQUEST_TIMEOUT.count()));
+    static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
   return CallbackReturn::ERROR;
 }
 

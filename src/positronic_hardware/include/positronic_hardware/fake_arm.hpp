@@ -57,12 +57,6 @@ public:
   /// Nothing to interrupt here either.
   void request_halt() override {}
 
-  /// Always returns false since there is no connection to be timed out.
-  [[nodiscard]] bool link_timed_out() const override
-  {
-    return false;
-  }
-
   /// The fake arm has no servos to power.
   [[nodiscard]] bool power_on() override
   {
@@ -73,6 +67,12 @@ public:
   [[nodiscard]] bool has_sample() const override
   {
     return true;
+  }
+
+  /// There is no serial line to go silent, so the fake link never times out.
+  [[nodiscard]] bool link_timed_out() const override
+  {
+    return false;
   }
 
 private:
