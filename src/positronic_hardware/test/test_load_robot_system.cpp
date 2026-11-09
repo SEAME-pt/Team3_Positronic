@@ -180,8 +180,7 @@ int open_pseudo_terminal(std::array<char, 128> & port)
   if (controller < 0) {
     return -1;
   }
-  if (
-    ::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
+  if (::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
     ::ptsname_r(controller, port.data(), port.size()) != 0)
   {
     ::close(controller);
@@ -193,9 +192,8 @@ int open_pseudo_terminal(std::array<char, 128> & port)
 /// One get_angles reply as the arm sends it, recorded on the real arm (the pose the SerialArm
 /// tests decode). Written back for every request, so a power_on also gets a pose: the arm
 /// answers that one with an ack, but the thread only looks for poses.
-constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8,
-  0xFF, 0xEF, 0xFF, 0xC3, 0xFF, 0x85,
-  0x00, 0x2B, 0x00, 0x3D, 0xFA};
+constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8, 0xFF,
+  0xEF, 0xFF, 0xC3, 0xFF, 0x85, 0x00, 0x2B, 0x00, 0x3D, 0xFA};
 
 /// Answers every request on the controller side of a pseudo-terminal with RECORDED_REPLY until
 /// stopped: a silent-free stand-in for the arm, enough for activate to succeed.
@@ -389,7 +387,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
