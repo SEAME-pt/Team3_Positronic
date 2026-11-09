@@ -36,9 +36,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
-
 #include "lifecycle_msgs/msg/state.hpp"
-// Jazzy's urdf (rclcpp 28) has model.h only; model.hpp comes with later distributions.
 #include "urdf/model.h"
 
 namespace positronic_hardware
