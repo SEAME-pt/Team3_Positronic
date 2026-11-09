@@ -59,6 +59,9 @@ public:
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 
+  hardware_interface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
   hardware_interface::CallbackReturn on_error(
     const rclcpp_lifecycle::State & previous_state) override;
 
@@ -91,9 +94,14 @@ private:
   /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
   bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
 
+  /// Fills limits_ from the <limit> tags of the URDF (#34). It parses the URDF itself
+  /// (info.original_xml): with <limits enable="false"/> on the joints, ros2_control leaves no
+  /// position limit in info.limits. False, with an error logged, when a joint has no usable
+  /// position limit: the driver must not run without its last guard.
   bool load_limits(const hardware_interface::HardwareInfo & info);
 
-  /// Refuses a bad command: stops the arm, logs the joint name and value, latches halted_.
+  /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
+  /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
 
   /// The interfaces of one joint, looked up once so read() and write() build no string: two
@@ -117,10 +125,6 @@ private:
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
   PositionLimits limits_{};
-
-  /// Set when a command was refused. write() sends nothing more until the component is
-  /// configured and activated again: a refused command means something upstream is wrong.
-  bool halted_{false};
 };
 
 }  // namespace positronic_hardware

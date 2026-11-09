@@ -36,6 +36,9 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+
+#include "lifecycle_msgs/msg/state.hpp"
+// Jazzy's urdf (rclcpp 28) has model.h only; model.hpp comes with later distributions.
 #include "urdf/model.h"
 
 namespace positronic_hardware
@@ -116,8 +119,7 @@ bool read_timing(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
   SerialArm::Timing & out)
 {
-  if (
-    !read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
     !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
   {
     return false;
@@ -182,8 +184,7 @@ CallbackReturn RobotSystem::on_init(
     }
     // The arm only takes angles (send_angles), so position is the one command we can honour.
     // A velocity or effort command interface would be claimed by a controller and never sent.
-    if (
-      joint.command_interfaces.size() != 1 ||
+    if (joint.command_interfaces.size() != 1 ||
       joint.command_interfaces.front().name != hardware_interface::HW_IF_POSITION)
     {
       RCLCPP_ERROR(
@@ -191,7 +192,9 @@ CallbackReturn RobotSystem::on_init(
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
-
+    // #34: this plugin refuses an out-of-range command and halts the arm. ros2_control's own
+    // limiter would clamp the command to the limit before write() sees it, so the refusal would
+    // never happen. Still safe (the arm stops at the limit), hence a warning, not an error.
     if (joint.enable_limits) {
       RCLCPP_WARN(
         get_logger(),
@@ -290,6 +293,9 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
 
 bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
 {
+  // The limits come from the URDF itself, never from a table in the code: one source of truth.
+  // Parsing it here, not reading info.limits, because <limits enable="false"/> (which turns
+  // ros2_control's clamping limiter off, see on_init) also wipes the joint's info.limits.
   urdf::Model model{};
   if (!model.initString(info.original_xml)) {
     RCLCPP_ERROR(get_logger(), "Cannot parse the URDF to read the joint limits.");
@@ -300,6 +306,8 @@ bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     const std::string & name{info.joints.at(i).name};
     const urdf::JointConstSharedPtr joint{model.getJoint(name)};
+    // Only a revolute joint has a position range: a continuous one has none, and a missing
+    // joint or <limit> tag leaves nothing to check against.
     if (joint == nullptr || joint->type != urdf::Joint::REVOLUTE || joint->limits == nullptr) {
       RCLCPP_ERROR(
         get_logger(), "Joint '%s' has no revolute <limit> in the URDF. Refusing to start.",
@@ -309,6 +317,7 @@ bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
     limits.at(i) = PositionLimit{joint->limits->lower, joint->limits->upper};
   }
 
+  // A swapped or infinite limit would refuse everything, or nothing.
   if (!limits_valid(limits)) {
     RCLCPP_ERROR(
       get_logger(), "The URDF position limits are not usable: each needs lower < upper, finite.");
@@ -328,8 +337,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
 {
   // "Plug in the cable". SerialArm opens the port and starts its polling thread; it throws if
   // the port cannot be opened. Allocating and throwing are fine here, outside the control loop.
-  // Drop the old backend first: after on_error the component is UNCONFIGURED with its SerialArm
-  // still holding the port, and TIOCEXCL refuses a second open of it, even from this process.
+  // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
+  // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
   try {
     if (config_.backend == Backend::SERIAL) {
@@ -399,13 +408,26 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
+  // #34: the measured pose becomes the first command, so it must be inside the limits, or the
+  // first write() would refuse it at once. Checked before power_on: an arm outside its limits
+  // is not torqued. ERROR goes through on_error, which leaves the arm released and stopped.
   const CommandCheck start{check_command(arm_->read_angles(), limits_)};
   if (!start.ok()) {
     log_fault(get_logger(), "Not activated, the arm is outside its limits", start, limits_, info_);
     RCLCPP_ERROR(get_logger(), "Move the arm inside its limits by hand, then activate again.");
     return CallbackReturn::ERROR;
   }
-  halted_ = false;
+
+  // "Power the servos on" (#36), after the first reply: a released arm still answers
+  // get_angles, so the wait above does not need torque, and a silent arm fails there first.
+  // power_on() also lets targets out again after a halt(). If its frame cannot be written, the
+  // port is in trouble: ERROR hands the component to on_error rather than leaving it ACTIVE.
+  if (!arm_->power_on()) {
+    RCLCPP_ERROR(
+      get_logger(), "power_on was not sent to the arm within %d ms; not activating.",
+      static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
+    return CallbackReturn::ERROR;
+  }
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
@@ -415,14 +437,36 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   return CallbackReturn::SUCCESS;
 }
 
+CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // "Cut actuation": the arm gets a stop and holds where it is, and no target goes out until
+  // the next activate. halt() waits for the stop to reach the port, so SUCCESS means the arm
+  // was told to stop, not only that the component changed state.
+  if (arm_->halt()) {
+    return CallbackReturn::SUCCESS;
+  }
+  // The stop never left: nobody knows what the arm is doing. FAILURE would keep the component
+  // ACTIVE and the controllers commanding it; ERROR takes it out of service through on_error,
+  // and the supervisor sees a component that must be configured and activated again.
+  RCLCPP_ERROR(
+    get_logger(), "stop was not sent to the arm within %d ms.",
+    static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
+  return CallbackReturn::ERROR;
+}
+
 CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // Whatever led here (a refused command, a failed write, a failed transition), the arm stops.
-  // SUCCESS takes the component to UNCONFIGURED: configure and activate bring it back, and
-  // on_activate starts again from "stay where you are".
-  halted_ = true;
+  // Any transition that returned ERROR lands here, and so does a write() that returned ERROR
+  // (#34: a refused command), on the control loop thread. The arm may still be moving towards
+  // its last valid target, so it gets a stop, without waiting here: the backend stays alive,
+  // its thread sends the stop at the start of its next turn and holds every target, and keeps
+  // reading the pose. Dropping it here would join its thread on the control loop; on_configure
+  // drops it instead, before opening the port again. arm_ is null when on_configure itself
+  // failed to open the port.
+  // SUCCESS takes the component to UNCONFIGURED, where configure starts it afresh; the base
+  // class would return FAILURE and finalize it, which only a plugin reload undoes.
   if (arm_ != nullptr) {
-    arm_->halt();
+    arm_->request_halt();
   }
   return CallbackReturn::SUCCESS;
 }
@@ -435,8 +479,13 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
 
 return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  if (halted_) {
-    return return_type::ERROR;
+  // The resource manager never calls write() on an inactive component, and after a halt() the
+  // backend holds every target anyway. This is a second guard for a caller outside the
+  // controller manager (a test, a script). No log: nothing here is RT-safe to log, and the
+  // normal path never reaches it.
+  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  if (!active) {
+    return return_type::OK;
   }
 
   JointPositions commands{};
@@ -449,9 +498,13 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
     ++received;
   }
 
+  // #34: check before anything reaches the arm. The view carries the count actually read, so
+  // the wrong-count rule of the issue sits here too, although on_init already wants six joints.
   const CommandCheck check{check_command(CommandView{commands.data(), received}, limits_)};
   if (!check.ok()) {
     refuse(check);
+    // ERROR: the controller manager deactivates the controllers on this component and the
+    // resource manager calls on_error(), which takes the component out of ACTIVE (#36).
     return return_type::ERROR;
   }
 
@@ -461,8 +514,11 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
 void RobotSystem::refuse(const CommandCheck & check)
 {
-  halted_ = true;
-  arm_->halt();
+  // Going silent does not stop the arm: it keeps going to its last target. request_halt() is
+  // the non-blocking stop of #36 (two atomic stores, safe here on the control loop); on_error
+  // asks for it again, which changes nothing. The refused command never reached the backend.
+  arm_->request_halt();
+  // One log line per refusal: write() is not called again once the component leaves ACTIVE.
   log_fault(get_logger(), "Command refused, arm halted", check, limits_, info_);
 }
 

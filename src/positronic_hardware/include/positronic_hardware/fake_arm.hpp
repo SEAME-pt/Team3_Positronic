@@ -42,17 +42,27 @@ public:
     return angles_;
   }
 
-  /// Where the joints will be. Ignored once halted, as the real arm does.
+  /// Where the joints will be.
   void write_angles(const JointPositions & angles) override
   {
-    if (!halted_) {
-      angles_ = angles;
-    }
+    angles_ = angles;
   }
 
-  void halt() override
+  /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
+  [[nodiscard]] bool halt() override
   {
-    halted_ = true;
+    return true;
+  }
+
+  /// Nothing to interrupt here either.
+  void request_halt() override
+  {
+  }
+
+  /// The fake arm has no servos to power.
+  [[nodiscard]] bool power_on() override
+  {
+    return true;
   }
 
   /// The fake pose is known from the start.
@@ -63,7 +73,6 @@ public:
 
 private:
   JointPositions angles_{START_POSE};
-  bool halted_{false};
 };
 
 }  // namespace positronic_hardware
