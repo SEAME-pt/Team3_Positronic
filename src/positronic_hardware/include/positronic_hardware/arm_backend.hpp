@@ -79,6 +79,12 @@ public:
   /// whether the stop went out: the plugin drops the backend on the next configure anyway.
   virtual void request_halt() = 0;
 
+  /// True when the link to the arm has gone silent for longer than the backend's timeout (#35),
+  /// so the pose from read_angles() is stale and no target can be trusted to arrive. It does
+  /// not latch: it turns false again once replies resume. Non-blocking, safe from the control
+  /// loop.
+  [[nodiscard]] virtual bool link_timed_out() const = 0;
+
   /// Powers the servos on, so the arm holds its pose, and lets targets go out again after
   /// halt(). A target stored before or during the halt is dropped: the next write_angles() is
   /// the first to reach the arm. True when the power on went out on the port within the

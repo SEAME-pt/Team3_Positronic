@@ -55,8 +55,12 @@ public:
   }
 
   /// Nothing to interrupt here either.
-  void request_halt() override
+  void request_halt() override {}
+
+  /// Always returns false since there is no connection to be timed out.
+  [[nodiscard]] bool link_timed_out() const override
   {
+    return false;
   }
 
   /// The fake arm has no servos to power.

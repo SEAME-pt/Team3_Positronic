@@ -158,7 +158,8 @@ SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing)
 }
 
 SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing)
-: transport_{std::move(transport)}, timing_{timing}
+: transport_{std::move(transport)},
+  timing_{timing}
 {
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
@@ -203,6 +204,11 @@ void SerialArm::request_halt()
   request_.store(Request::HALT);
 }
 
+bool SerialArm::link_timed_out() const
+{
+  return watchdog_.timed_out(Clock::now());
+}
+
 bool SerialArm::power_on()
 {
   // Drop the target stored before or during the halt, before the hold is released: with it
@@ -221,8 +227,8 @@ bool SerialArm::request_and_wait(Request request)
   // The poll thread writes the frame at the start of its next turn and puts request_ back to
   // NONE. 1 ms steps: on the arm the frame is out within a few ms, and this runs in a lifecycle
   // transition, which may wait.
-  const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
-  while (std::chrono::steady_clock::now() < deadline) {
+  const auto deadline{Clock::now() + REQUEST_TIMEOUT};
+  while (Clock::now() < deadline) {
     if (request_.load() == Request::NONE) {
       return true;
     }
@@ -284,10 +290,12 @@ void SerialArm::poll_loop()
   // keeps the arm busy for the settle, and while it stands still the port is better spent on
   // fresh poses.
   std::optional<JointPositions> last_sent{};
+  // Set the watchdog time to now before starting the loop.
+  watchdog_.reset(Clock::now());
 
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
-    const auto turn_start{std::chrono::steady_clock::now()};
+    const auto turn_start{Clock::now()};
 
     if (send_pending_request()) {
       // After a stop the arm is heading nowhere, so the next target goes out even when it
@@ -306,7 +314,7 @@ void SerialArm::poll_loop()
       // request and its reply must be over before anything else is written: the arm drops a
       // send_angles that arrives while it is still answering a get_angles.
       const auto reply_deadline{turn_start + REPLY_TIMEOUT};
-      while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
+      while (!replied && !stop_.load() && Clock::now() < reply_deadline) {
         const std::size_t got{transport_->read(chunk.data(), chunk.size())};
         if (got == 0) {
           // A real port blocks up to VTIME before returning 0; a test transport returns at
@@ -318,6 +326,8 @@ void SerialArm::poll_loop()
           latest_.writeFromNonRT(pose.value());
           // Set after the write, so whoever sees true also finds the real pose in the buffer.
           has_sample_.store(true);
+          // Update watchdog value to latest
+          watchdog_.on_reply(Clock::now());
           replied = true;
         }
       }

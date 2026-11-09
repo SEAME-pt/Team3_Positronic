@@ -309,7 +309,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);

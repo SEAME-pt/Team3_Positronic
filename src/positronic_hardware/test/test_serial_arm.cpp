@@ -33,6 +33,10 @@
 // Follow-up prompt:
 //   PosixSerialPort takes the port with TIOCEXCL. On a pseudo-terminal, check that a second
 //   PosixSerialPort on the same device is refused while the first one is open.
+// Follow-up prompt (#35):
+//   Let ReplayTransport go silent mid-run. Check that link_timed_out() is false while replies
+//   arrive and true once the line has been silent past the timeout, and also true when the arm
+//   never answers at all.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -40,6 +44,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -93,8 +98,17 @@ public:
     return written_;
   }
 
+  /// From now on read() returns no bytes, like a serial line that went quiet (#35).
+  void go_silent()
+  {
+    silent_.store(true);
+  }
+
   std::size_t read(std::uint8_t * dst, std::size_t max) override
   {
+    if (silent_.load()) {
+      return 0;
+    }
     const std::lock_guard<std::mutex> lock{mutex_};
     if (bursts_.empty()) {
       return 0;
@@ -111,6 +125,8 @@ private:
   std::vector<std::vector<std::uint8_t>> written_;
   std::size_t index_{0};
   std::mutex mutex_;
+  // Set by the test thread, read by the poll thread.
+  std::atomic<bool> silent_{false};
 };
 
 /// The send_angles frames among `frames`: `FE FE 0F 22` + 12 bytes of angles + speed + `FA`.
@@ -119,7 +135,8 @@ std::vector<std::vector<std::uint8_t>> send_angles_frames(
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
+    if (
+      frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
       frame[3] == 0x22)
     {
       found.push_back(frame);
@@ -247,8 +264,25 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
   const auto sends{wait_for_sends(port, 1)};
   ASSERT_EQ(sends.size(), 1u);
-  const std::vector<std::uint8_t> expected{0xFE, 0xFE, 0x0F, 0x22, 0x02, 0x3D, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, SerialArm::SEND_SPEED, 0xFA};
+  const std::vector<std::uint8_t> expected{
+    0xFE,
+    0xFE,
+    0x0F,
+    0x22,
+    0x02,
+    0x3D,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    SerialArm::SEND_SPEED,
+    0xFA};
   EXPECT_EQ(sends.front(), expected);
 
   // The same command is not sent again: the arm already has it.
@@ -269,6 +303,35 @@ TEST(SerialArm, SkipsACommandItCannotEncode)
   arm.write_angles(JointPositions{std::nan(""), 0.0, 0.0, 0.0, 0.0, 0.0});
   std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
   EXPECT_TRUE(send_angles_frames(port.written()).empty());
+}
+
+// #35. SerialArm reads the real clock, so these tests must sleep. 300 ms is the 200 ms timeout
+// plus a margin for a busy CI machine; the exact boundary is tested in test_link_watchdog.cpp.
+constexpr std::chrono::milliseconds PAST_THE_TIMEOUT{300};
+
+TEST(SerialArm, ReportsATimeoutWhenTheArmStopsAnswering)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  const SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+  ASSERT_TRUE(arm.has_sample());
+  EXPECT_FALSE(arm.link_timed_out());  // replies keep arriving every turn
+
+  port.go_silent();
+  std::this_thread::sleep_for(PAST_THE_TIMEOUT);
+  EXPECT_TRUE(arm.link_timed_out());
+}
+
+TEST(SerialArm, ReportsATimeoutWhenTheArmNeverAnswers)
+{
+  // The poll thread resets the watchdog when it starts, so silence from the first turn on
+  // still times out.
+  const std::vector<std::vector<std::uint8_t>> no_reply{};
+  const SerialArm arm{std::make_unique<ReplayTransport>(no_reply)};
+  std::this_thread::sleep_for(PAST_THE_TIMEOUT);
+  EXPECT_FALSE(arm.has_sample());
+  EXPECT_TRUE(arm.link_timed_out());
 }
 
 TEST(SerialArm, StopsCleanly)
