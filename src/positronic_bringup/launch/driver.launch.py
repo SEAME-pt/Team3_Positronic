@@ -122,6 +122,12 @@ def generate_launch_description():
         output='both',
         arguments=['joint_state_broadcaster'])
 
+    arm_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='both',
+        arguments=['arm_controller', '--param-file', controllers_yaml])
+
     return LaunchDescription([
         backend,
         port,
@@ -132,4 +138,5 @@ def generate_launch_description():
         robot_state_publisher,
         control_node,
         joint_state_broadcaster,
+        arm_controller,
     ])
