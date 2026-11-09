@@ -114,6 +114,8 @@ class JointStatesRate(Node):
     def on_message(self, msg):
         """Keep the interval since the previous new pose; a repeat of the last pose is ignored."""
         positions = list(msg.position)
+        # Exact comparison on purpose: the driver copies the arm's bytes, so a repeat is
+        # identical and a step of the servo (0.09 deg) already differs.
         if positions == self.last_positions:
             return  # the driver had nothing new: a repeat of the last pose
         now_ns = stamp_ns(msg.header.stamp)
