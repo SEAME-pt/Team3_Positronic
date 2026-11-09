@@ -48,6 +48,23 @@ public:
     angles_ = angles;
   }
 
+  /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
+  [[nodiscard]] bool halt() override
+  {
+    return true;
+  }
+
+  /// Nothing to interrupt here either.
+  void request_halt() override
+  {
+  }
+
+  /// The fake arm has no servos to power.
+  [[nodiscard]] bool power_on() override
+  {
+    return true;
+  }
+
   /// The fake pose is known from the start.
   [[nodiscard]] bool has_sample() const override
   {
