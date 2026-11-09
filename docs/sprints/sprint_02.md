@@ -306,34 +306,36 @@ Scrum Master:
 Meetings today: none
 
 **Felipe**, block A
-- Done: 
-- Today: 
+- Done: Continuou a issue 35
+- Today: Pretende terminar e abrir um pr da issue 35
 - Blocked: 
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Revisao e estudo da issue 34#
+- Today: Refazer a issue para conectar com a #36
+- Blocked: nothing
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: continuou a 
+Issue 47.
+- Today: Começar a issue 33
+- Blocked: nothing
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Part of #36 on the branch and pushed: the ArmBackend contrat, SerialArm and FakeArm sending
+            the stop and the power on though the poll thread, the pluginś deactivate, activate and on_error. so it can be used as the base for #35
+- Today: Finish #36, the tests and the REEADME, and open the PR.
+- Blocked: Nothing. 
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: começou a parte do action error handle no node.
+- Today: Tratar a parte de error do mission
+- Blocked: nothing
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: Fez as runs do script para a simulação e gravou os resultados
+- Today: Estudando um forma de que possa facilitar o desenvolvimento do braço.
+- Blocked: Issue #47
 
 Challenges:
 - 
