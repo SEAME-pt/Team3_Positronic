@@ -92,21 +92,11 @@ private:
     void handle_reset(const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response);
     void handle_emergency_stop(const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response);
 
-    /*
-          Need:
-              action server
-              action client
-              publisher 10Hz
-              subscriber /joint_states
-              timer to track 10Hz
-              state
-    */
-
     rclcpp_action::Server<GoToPose>::SharedPtr mission_server_{nullptr};
     // rclcpp_action::Client<typename ActionT>::SharedPtr mission_client_;
-    rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_{nullptr};
-    // rclcpp_lifecycle::LifecycleSubscriber<??>::SharedPtr stop_subscriber_;
 
+    // Heartbeat of the Node
+    rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_{nullptr};
 
     // Server that resets the State to IDLE
     rclcpp::Service<StateTrigger>::SharedPtr reset_state_{nullptr};
@@ -114,12 +104,9 @@ private:
     // Server that forces a STOPPED State. Doesn't override ERROR State
     rclcpp::Service<StateTrigger>::SharedPtr emergency_stop_{nullptr};
 
-
     std::thread exec_thread_;
     rclcpp::TimerBase::SharedPtr timer_{nullptr};
     std::atomic<State> state_{State::INACTIVE};
-    // std::atomic<bool> forced_stop_{false};
-
 };
 } //namespace positronic_mission
 

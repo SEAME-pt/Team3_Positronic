@@ -66,12 +66,14 @@ void positronic_mission::MissionNode::handle_reset(const std::shared_ptr<StateTr
 void positronic_mission::MissionNode::handle_emergency_stop(const std::shared_ptr<StateTrigger::Request> & /* request */, std::shared_ptr<StateTrigger::Response> response)
 {
     State state_now = state_.load();
+    // TODO: If the arm is INACTIVE. I'm setting it to STOPPED.
+    // Need to define the behavior. Choose between INACTIVE or STOPPED.
     while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
     }
     // need to send a .stop() to moveit once I have it.
 
     response->accepted = true;
-    response->message = (state_ == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
+    response->message = (state_now == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(const rclcpp_lifecycle::State & /* state */)
@@ -144,8 +146,6 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
     // Does not override STOPPED and ERROR States
     State expected = State::INACTIVE;
     state_.compare_exchange_strong(expected, State::IDLE);
-    // forced_stop_ = false;
-
     LifecycleNode::on_activate(state);
 
     timer_->reset();
@@ -162,7 +162,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
     // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
     // Using _weak because it can be faster on loops. Don't use it for single checks since it can spuriously fail!
     State state_now = state_.load();
-    while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
+    while ((state_now == State::IDLE || state_now == State::MOVING)
+        && !state_.compare_exchange_weak(state_now, State::INACTIVE)) {
     }
     if (exec_thread_.joinable()) {
         exec_thread_.join();
@@ -178,7 +179,6 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
 {
     RCLCPP_INFO(get_logger(), "IN on_shutdown");
 
-    // forced_stop_ = true;
     state_ = State::INACTIVE;
     if (exec_thread_.joinable()) {
         exec_thread_.join();
@@ -249,20 +249,19 @@ rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(const r
         RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
         return rclcpp_action::GoalResponse::REJECT;
     }
-    // This is a weird one
-    // compare_exchange_strong does
-    // if equals to first param, change value to second param, return true
-    // if different, set expected to old value, return false
     if (!validate_pose(goal)) {
         RCLCPP_WARN(get_logger(), "Rejected, invalid pose");
         return rclcpp_action::GoalResponse::REJECT;
     }
+    // This is a weird one
+    // compare_exchange_strong does
+    // if equals to first param, change value to second param, return true
+    // if different, set expected to old value, return false
     State expected = State::IDLE;
     if (!state_.compare_exchange_strong(expected, State::MOVING)) {
         RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");
         return rclcpp_action::GoalResponse::REJECT;
     }
-    // forced_stop_ = false;
 
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -332,7 +331,7 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
 
     if (!rclcpp::ok()) {
         // Protection for the lower checks. If mission_node is shutdown
-        // call backend stop() before returning
+        // TODO: call backend .stop() before returning
         return ;
     }
 
@@ -346,8 +345,6 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
         RCLCPP_INFO(get_logger(), "Goal canceled");
     }
     else if (stopped_in_loop) {
-        // If state is different than MOVING, don't touch it
-        state_.compare_exchange_strong(expected, State::STOPPED);
         result->code = GoToPose::Result::STOPPED;
         goal_handle->abort(result);
         RCLCPP_INFO(get_logger(), "Force stop activated");
