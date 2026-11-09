@@ -6,7 +6,7 @@ for the arm to pass it to the servos, and polls `get_angles` every turn. Both ti
 launch arguments of `driver.launch.py` (`moving_period_ms`, `send_settle_ms`), so a sweep
 needs no rebuild.
 
-## Offline measurement (2 Nov 2026, pymycobot, arm standing still)
+## Offline measurement (pymycobot, arm standing still)
 
 `measure_serial.py --gap-ms` from `../serial_measurement/tools`: `send_angles` of the current
 pose, a sleep of `gap` ms, then `get_angles`. A stall is a call above 450 ms.
@@ -55,7 +55,7 @@ directions with its time to the csv given. Stop it with Ctrl+C after the run and
 with a new name for the next. On the PC, `python3 tools/tap_stalls.py tap_66_30.csv` prints
 requests, replies, stalls, repeated poses and the round trip.
 
-## Results (3 Nov 2026, joint 1 swinging 10 deg at speed 30)
+## Results (joint 1 swinging 10 deg at speed 30)
 
 | period | settle | runs | new poses per 118 s | interval median ms | requests | replies | stalls | round trip p50 / max ms |
 |---|---|---|---|---|---|---|---|---|

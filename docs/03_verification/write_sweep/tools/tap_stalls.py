@@ -73,6 +73,7 @@ def analyse(rows):
 
 
 def main(paths):
+    """Print requests, replies, sends, stalls, repeated poses and the round trip of each csv."""
     for path in paths:
         n = analyse(load(path))
         print(f"{path}: {n['requests']} requests, {n['replies']} replies, {n['sends']} sends, "

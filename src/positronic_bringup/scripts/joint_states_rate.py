@@ -98,8 +98,10 @@ def write_results(out_dir, samples, lines):
 
 
 class JointStatesRate(Node):
+    """Subscribe to /joint_states and keep the interval between poses that actually changed."""
 
     def __init__(self):
+        """Subscribe, and report once a second."""
         super().__init__('joint_states_rate')
         self.start = time.monotonic()
         self.last_positions = None  # of the previous new pose
@@ -110,6 +112,7 @@ class JointStatesRate(Node):
         self.create_timer(1.0, self.report)
 
     def on_message(self, msg):
+        """Keep the interval since the previous new pose; a repeat of the last pose is ignored."""
         positions = list(msg.position)
         if positions == self.last_positions:
             return  # the driver had nothing new: a repeat of the last pose
@@ -122,14 +125,14 @@ class JointStatesRate(Node):
         self.last_stamp_ns = now_ns
 
     def report(self):
+        """Log the second that just ended and start a new one."""
         line = summary(self.intervals_ms)
         self.get_logger().info(line if line else 'no new poses')
         self.intervals_ms = []
 
 
-# Arguments, spin and shutdown only, excluded from coverage: every number it prints comes from
-# the functions tested above, and a spin cannot be tested without a running graph.
-def main():  # pragma: no cover
+def main():
+    """Parse the arguments, spin for --duration or until Ctrl+C, print and write the summary."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--duration', type=float, default=None,
@@ -160,5 +163,5 @@ def main():  # pragma: no cover
     return 0
 
 
-if __name__ == '__main__':  # pragma: no cover
+if __name__ == '__main__':
     sys.exit(main())

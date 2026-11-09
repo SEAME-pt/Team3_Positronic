@@ -26,6 +26,8 @@ source /ws/install/setup.bash
 set -u  # after the ROS setup files, which read variables they do not define
 
 driver_pid=""
+# Stops the driver started below: an INT to its whole process group, launch and nodes, then
+# waits for it. Called at the end of every point and from the trap on Ctrl+C.
 stop_driver() {
   if [ -n "$driver_pid" ] && kill -0 "$driver_pid" 2>/dev/null; then
     kill -INT -- "-$driver_pid" 2>/dev/null
