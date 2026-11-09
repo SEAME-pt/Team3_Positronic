@@ -408,7 +408,7 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
 
   // #34: the measured pose becomes the first command, so it must be inside the limits, or the
   // first write() would refuse it at once. Checked before power_on: an arm outside its limits
-  // is not torqued. ERROR goes through on_error, which leaves the arm released and stopped.
+  // is not torqued. ERROR goes through on_error, which requests a stop: the arm stays where it is.
   const CommandCheck start{check_command(arm_->read_angles(), limits_)};
   if (!start.ok()) {
     log_fault(get_logger(), "Not activated, the arm is outside its limits", start, limits_, info_);
