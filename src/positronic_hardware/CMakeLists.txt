@@ -88,6 +88,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_reply_assembler test/test_reply_assembler.cpp)
   target_include_directories(test_reply_assembler PRIVATE include)
   target_link_libraries(test_reply_assembler positronic_protocol::positronic_protocol)
+
+  # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
+  ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
+  target_include_directories(test_link_watchdog PRIVATE include)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
