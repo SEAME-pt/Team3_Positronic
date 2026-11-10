@@ -20,6 +20,8 @@
 #   ros2 bag record in the background the way record_joint_states.sh does (set -m, SIGINT, wait),
 #   wait 1 s, run run_trajectory.py, wait 1 s, stop the recorder cleanly. Forward Ctrl+C so the
 #   bag still closes, exit with the sender's code, and rename a failed run to _FAILED.
+#   Then: wait up to 30 s for a message on each topic instead of only checking that the topic
+#   exists, so a Gazebo that is still loading does not fail the run.
 set -euo pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,12 +60,23 @@ fi
 # Refuse a bad trajectory before anything starts, so no empty run folder is left behind.
 python3 "${TOOLS_DIR}/run_trajectory.py" --check-only
 
-TOPIC_LIST="$(ros2 topic list)"
+# Wait for one real message on each topic, not only for the topic to exist: a topic shows up as
+# soon as a node announces it, while Gazebo can still be loading and sending nothing (sim_1, the
+# sender found no /joint_states within its 5 s). Goes on as soon as a message arrives; gives up
+# after DATA_TIMEOUT_S. Short tries in a loop, because ros2 topic echo can exit at once when the
+# topic does not exist yet instead of waiting for it.
+DATA_TIMEOUT_S=30
 for topic in "${TOPICS[@]}"; do
-  if ! grep -qx "${topic}" <<< "${TOPIC_LIST}"; then
-    echo "${topic} is not published: is the ${WORLD} launch running with arm_controller?" >&2
-    exit 1
-  fi
+  deadline=$((SECONDS + DATA_TIMEOUT_S))
+  until timeout 5 ros2 topic echo --once "${topic}" > /dev/null 2>&1; do
+    if [ "${SECONDS}" -ge "${deadline}" ]; then
+      echo "No message on ${topic} for ${DATA_TIMEOUT_S} s: is the ${WORLD} launch running" \
+        "with arm_controller active?" >&2
+      exit 1
+    fi
+    echo "Waiting for data on ${topic}..." >&2
+    sleep 1
+  done
 done
 
 mkdir -p "${OUT_DIR}"
