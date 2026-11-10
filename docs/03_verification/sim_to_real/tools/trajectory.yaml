@@ -10,6 +10,9 @@
 # - 30 % speed: URDF velocity 2.618 rad/s -> 0.785 rad/s. Peak of a segment that starts and
 #   stops at rest is about 1.9 x |dtheta| / dt. Largest move here: 0.5236 rad in 4 s
 #   -> 1.9 x 0.5236 / 4 = 0.249 rad/s, about 32 % of the 30 % limit.
+# - the real arm follows at most 15 deg/s (0.262 rad/s) within the 5 deg trajectory tolerance
+#   of arm_controller (#33, docs/03_verification/jtc_on_the_arm), so run_trajectory.py caps the
+#   speed there. 0.249 rad/s is 95 % of that cap: a faster segment here would be refused.
 
 joint_names:
   - joint2_to_joint1

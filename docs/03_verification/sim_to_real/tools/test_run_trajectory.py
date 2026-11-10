@@ -29,6 +29,8 @@
 #   or a duplicated name is refused; wrong list lengths, NaN and times that do not increase are
 #   refused; the home move is sized to 30 % with a 4 s minimum; seconds split into sec and
 #   nanosec; and main --check-only exits 0 on the real file and 1 on a refused one.
+#   Then: the allowed speed is capped at 15 deg/s (#33). A segment between 15 deg/s and the
+#   30 % rule is refused, and the home move is sized to 15 deg/s.
 
 """Unit tests for the trajectory checks of issue #37 (no ROS 2 needed)."""
 
@@ -113,6 +115,21 @@ def test_too_fast_segment_is_refused():
     assert problems[0].startswith('home -> point 1 joint2_to_joint1')
 
 
+def test_allowed_speed_is_the_arm_limit_not_30_percent():
+    """Check every joint is capped at 15 deg/s, below 30 % of the URDF (0.785 rad/s)."""
+    for name in JOINTS:
+        assert run.allowed_speed(name, limits()) == pytest.approx(math.radians(15.0))
+
+
+def test_segment_above_15_deg_per_s_is_refused():
+    """Check 30 deg in 2 s (peak 0.497 rad/s) is refused: under 30 %, over the arm's limit."""
+    trajectory = simple([0.5236, 0, 0, 0, 0, 0], seconds=2.0)
+    assert 1.9 * 0.5236 / 2.0 < 0.30 * 2.618
+    problems = run.check_speeds(trajectory, limits())
+    assert len(problems) == 1
+    assert 'allowed 0.262' in problems[0]
+
+
 def test_dt_is_the_difference_of_the_times():
     """Check segment 2 of the committed file uses 8 - 4 = 4 s, not 8 s."""
     peaks = {(label, name): peak for label, name, peak in run.segment_peaks(committed())}
@@ -180,11 +197,11 @@ def test_home_duration_has_a_minimum():
     assert run.home_duration([0.1] * 6, [0.0] * 6, JOINTS, limits()) == 4.0
 
 
-def test_home_duration_respects_30_percent():
-    """Check a long move to home is slowed so its peak stays at or below 30 %."""
+def test_home_duration_respects_the_arm_limit():
+    """Check a long move to home is slowed so its peak stays at or below 15 deg/s."""
     seconds = run.home_duration([2.5, 0, 0, 0, 0, 0], [0.0] * 6, JOINTS, limits())
-    assert seconds > 4.0
-    assert 1.9 * 2.5 / seconds <= 0.30 * 2.618
+    assert seconds == pytest.approx(18.2)  # 1.9 x 2.5 / 0.262 = 18.14, rounded up
+    assert 1.9 * 2.5 / seconds <= math.radians(15.0)
 
 
 @pytest.mark.parametrize('seconds, expected', [

@@ -27,13 +27,20 @@
 #   /arm_controller/follow_joint_trajectory, send the home pose, wait for its result and 2 s,
 #   send the whole trajectory as one goal, wait for its result with a timeout taken from the
 #   file, print the error code and exit 0 or non-zero. Ctrl-C or a timeout cancels the goal.
-"""Check trajectory.yaml against the URDF and 30 % speed, then run it on arm_controller."""
+#   Then: cap the allowed speed at 15 deg/s, the most the real arm follows within the 5 deg
+#   trajectory tolerance of arm_controller (#33, docs/03_verification/jtc_on_the_arm), for both
+#   the check and the home move.
+"""Check trajectory.yaml against the URDF and the arm's speed, then run it on arm_controller."""
 
 # Steps:
 #   1. load trajectory.yaml (positions in rad, time_from_start in s)
 #   2. refuse it before ROS starts: joint names, URDF limits minus 10 deg, peak speed
 #   3. wait up to 5 s for the arm_controller action server
-#   4. read the current pose and send the home pose, slow enough for the 30 % rule
+#   4. read the current pose and send the home pose, slow enough for the speed limit
+#
+# Speed limit per joint: the smaller of 30 % of the URDF velocity (#37) and 15 deg/s (#33).
+# 30 % is 0.785 rad/s (45 deg/s), three times what the real arm follows: above about 15 deg/s
+# a joint lags more than the 5 deg trajectory tolerance and arm_controller aborts the goal.
 #   5. wait for its result, then 2 s so the arm settles
 #   6. send the whole trajectory as one goal, wait for its result, print the error code
 #   Ctrl-C, or a result that never comes, cancels the running goal before exiting.
@@ -55,6 +62,7 @@ import yaml
 
 ACTION_NAME = '/arm_controller/follow_joint_trajectory'
 SPEED_FRACTION = 0.30  # #37: "motion on hardware at 30 % speed"
+ARM_MAX_SPEED = math.radians(15.0)  # 0.262 rad/s, #33: "the working limit" on the real arm
 PEAK_FACTOR = 1.9  # peak / average speed of a smooth segment that starts and stops at rest
 LIMIT_MARGIN = math.radians(10.0)  # every position at least 10 deg inside the URDF limits
 HOME_MIN_DURATION_S = 4.0
@@ -118,7 +126,8 @@ def check_shape(trajectory):
     previous = 0.0
     for i, (_, seconds) in enumerate(trajectory['points']):
         if not seconds > previous:
-            problems.append(f'point {i + 1}: time_from_start {seconds} s is not after {previous} s')
+            problems.append(
+                f'point {i + 1}: time_from_start {seconds} s is not after {previous} s')
         previous = seconds
     if not trajectory['points']:
         problems.append('no points')
@@ -171,11 +180,16 @@ def segment_peaks(trajectory):
     return peaks
 
 
-def check_speeds(trajectory, limits, fraction=SPEED_FRACTION):
-    """Return problems for every segment whose peak is above fraction x the URDF velocity."""
+def allowed_speed(name, limits):
+    """Return the highest peak allowed for a joint, rad/s: 30 % of the URDF, at most 15 deg/s."""
+    return min(SPEED_FRACTION * limits[name][2], ARM_MAX_SPEED)
+
+
+def check_speeds(trajectory, limits):
+    """Return problems for every segment whose peak is above the joint's allowed speed."""
     problems = []
     for label, name, peak in segment_peaks(trajectory):
-        allowed = fraction * limits[name][2]
+        allowed = allowed_speed(name, limits)
         if peak > allowed:
             problems.append(f'{label} {name}: peak {peak:.3f} rad/s, allowed {allowed:.3f}')
     return problems
@@ -192,9 +206,9 @@ def check_trajectory(trajectory, limits):
     return check_positions(trajectory, limits) + check_speeds(trajectory, limits)
 
 
-def home_duration(current, home, joint_names, limits, fraction=SPEED_FRACTION):
-    """Seconds for the move from the current pose to home, so its peak stays within fraction."""
-    needed = max(PEAK_FACTOR * abs(end - start) / (fraction * limits[name][2])
+def home_duration(current, home, joint_names, limits):
+    """Seconds for the move from the current pose to home, so its peak stays allowed."""
+    needed = max(PEAK_FACTOR * abs(end - start) / allowed_speed(name, limits)
                  for name, start, end in zip(joint_names, current, home))
     return max(HOME_MIN_DURATION_S, math.ceil(needed * 10.0) / 10.0)
 
@@ -340,7 +354,8 @@ def main(argv=None):
     parser.add_argument('--trajectory', default=DEFAULT_TRAJECTORY,
                         help='trajectory file (default: trajectory.yaml next to this script)')
     parser.add_argument('--urdf', default=DEFAULT_URDF,
-                        help="URDF with the joint limits (default: the repo's mycobot_280_jn.urdf)")
+                        help='URDF with the joint limits '
+                             "(default: the repo's mycobot_280_jn.urdf)")
     parser.add_argument('--check-only', action='store_true',
                         help='run the checks and print the peak speeds, send nothing')
     args = parser.parse_args(argv)
@@ -357,7 +372,7 @@ def main(argv=None):
         return 1
     label, name, peak = max(segment_peaks(trajectory), key=lambda entry: entry[2])
     print(f'Checks pass. Highest peak: {peak:.3f} rad/s ({name}, {label}), allowed '
-          f'{SPEED_FRACTION * limits[name][2]:.3f} rad/s')
+          f'{allowed_speed(name, limits):.3f} rad/s')
     if args.check_only:
         return 0
     return send(trajectory, limits)
