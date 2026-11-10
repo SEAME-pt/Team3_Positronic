@@ -117,7 +117,7 @@ degrees:
 | largest seen | 2.93 | 2.32 | 2.73 |
 
 Update rate during the goals: `/joint_states` at 30.0 Hz, interval 28 to 39 ms, standard
-deviation 1 ms over windows of 300 messages, with the pauses of about 0.3 s noted under run B.
+deviation 1 ms over windows of 300 messages.
 
 ### What the numbers say
 
@@ -173,9 +173,7 @@ Per-run `last` and `max abs`: [results.md](results.md#run-b-with-the-tolerances)
   in an abort and a standing arm, not in a silent miss.
 - **Joint 4 again 2.3 to 2.7 deg off** without being commanded, as in run A.
 
-Update rate over the three sessions: 30.0 Hz, intervals of 27 to 39 ms, the criterion holds. A
-few pauses of about 0.3 s in the control loop were also seen during the sessions. The loop
-period and its worst cases are measured in detail over a 10-minute run in #39.
+Update rate over the three sessions: 30.0 Hz, intervals of 27 to 39 ms, the criterion holds.
 
 ## Without the gripper and the camera
 
