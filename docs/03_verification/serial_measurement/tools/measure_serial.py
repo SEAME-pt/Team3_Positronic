@@ -122,6 +122,12 @@ ap.add_argument(
     default=200,
     help="write+read pairs for the round-trip phase (0 skips it)",
 )
+ap.add_argument(
+    "--gap-ms",
+    type=float,
+    default=0.0,
+    help="sleep between send_angles and get_angles in the round-trip phase, in ms",
+)
 ap.add_argument("--out", default=None)
 args = ap.parse_args()
 
@@ -204,10 +210,12 @@ if args.rtt > 0:
             t0 = time.perf_counter()
             mc.send_angles(base, SPEED)
             t1 = time.perf_counter()
+            time.sleep(args.gap_ms / 1000.0)
+            t1b = time.perf_counter()
             a = mc.get_angles()
             t2 = time.perf_counter()
             rtt_rows.append(
-                (i, t0 - t_first, t1 - t0, t2 - t1, t2 - t0, int(valid_angles(a)))
+                (i, t0 - t_first, t1 - t0, t2 - t1b, t2 - t0, int(valid_angles(a)))
             )
     except KeyboardInterrupt:
         print("\nInterrupted round-trip phase")

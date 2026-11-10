@@ -1,16 +1,86 @@
 # Controllers of the real arm on the Jetson (#23). Read by ros2_control_node in
-# driver.launch.py. Separate from ros2_controllers.yaml (Gazebo) because the real driver is
-# read-only until #32: it exports no command interface, so arm_controller cannot load here.
+# driver.launch.py. Separate from ros2_controllers.yaml (Gazebo) because the rates and the
+# controllers differ: the real arm takes one command every 50 ms (see SerialArm), Gazebo runs
+# at 100 Hz.
 controller_manager:
   ros__parameters:
     # Hz. Also the /joint_states publish rate, since joint_state_broadcaster publishes once
     # per update.
     #
-    # #20 measured get_angles alone at 101 Hz on average, but one call takes up to 21 ms
-    # (p99 16 ms) and #20 does not fix a read rate. SerialArm polls with a read (~10 ms) plus
-    # a 10 ms sleep, so a fresh sample arrives about every 20 ms: 50 Hz. Publishing faster
-    # would only repeat the same sample. At 50 Hz the #23 limit (no period over 2x) is 40 ms,
-    # above the slowest read #20 recorded. Confirm with the 10 minute run before closing #23.
+    # The serial thread of SerialArm asks for a pose every 10 ms while no new command comes,
+    # and runs turns of moving_period_ms (50 by default, #32) while it sends them. At 30 Hz an
+    # update finds a fresh pose when the arm stands still, and when it moves the newest command
+    # reaches the arm at most 1000 / moving_period_ms times a second, 20 with the default: the
+    # ones in between are replaced, not queued. A higher rate would only repeat poses and
+    # replace more commands.
     update_rate: 30
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # Writes six positions straight into the command interfaces, no interpolation: for the
+    # first motion of #32 and for jogging by hand. Not spawned by the launch; spawn it only
+    # when nothing else owns the command interfaces (arm_controller cannot be active at the
+    # same time), with the bench clear. Every message moves all six joints: publish the
+    # current pose with one joint changed, never a bare target.
+    forward_position_controller:
+      type: forward_command_controller/ForwardCommandController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - joint2_to_joint1
+      - joint3_to_joint2
+      - joint4_to_joint3
+      - joint5_to_joint4
+      - joint6_to_joint5
+      - joint6output_to_joint6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+    # Tolerances (#33), from 3-point trajectories on the arm with the gripper and the camera
+    # mounted (docs/03_verification/jtc_on_the_arm). The defaults are 0, which means no check:
+    # a trajectory the arm did not follow would still end in SUCCEEDED.
+    constraints:
+      # Seconds after the last point for every joint to enter its goal tolerance. A servo stops
+      # 0.5 to 1.5 deg short of its target and closes the rest slowly, if at all.
+      goal_time: 1.0
+      # Radians, per joint. `trajectory` is the largest error allowed while moving, checked on
+      # every update. The error grows with speed: 2.7 to 3.1 deg at 10 deg/s, 4.5 to 4.9 at
+      # 20 deg/s on the base, and the wrist servos take 0.2 s to start moving. With 5 deg (0.087)
+      # 20 deg/s is the most the base passes, 22.5 aborts, and the wrist passes 17.5 and aborts 20.
+      # 15 deg/s is the working limit for planned trajectories. `goal` is the error allowed at
+      # the end, after goal_time: at rest a joint sits 0.5 to 1.5 deg off its command, 2.7 at most
+      # on joint 4 under the gripper's weight, so 4 deg (0.070) leaves 1.3 deg over the worst seen.
+      joint2_to_joint1:
+        trajectory: 0.087
+        goal: 0.070
+      joint3_to_joint2:
+        trajectory: 0.087
+        goal: 0.070
+      joint4_to_joint3:
+        trajectory: 0.087
+        goal: 0.070
+      joint5_to_joint4:
+        trajectory: 0.087
+        goal: 0.070
+      joint6_to_joint5:
+        trajectory: 0.087
+        goal: 0.070
+      joint6output_to_joint6:
+        trajectory: 0.087
+        goal: 0.070
+
+forward_position_controller:
+  ros__parameters:
+    joints:
+      - joint2_to_joint1
+      - joint3_to_joint2
+      - joint4_to_joint3
+      - joint5_to_joint4
+      - joint6_to_joint5
+      - joint6output_to_joint6
+    interface_name: position

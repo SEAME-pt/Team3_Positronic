@@ -22,7 +22,6 @@
 """
 Run the real arm driver on the Jetson and publish /joint_states (#23).
 
-Three nodes:
 - robot_state_publisher, which publishes the URDF on /robot_description (latched). The
   controller_manager reads the description from that topic.
 - ros2_control_node (the controller_manager), which loads the hardware plugin and, on the
@@ -30,7 +29,8 @@ Three nodes:
 - the spawner, which activates joint_state_broadcaster, the controller that turns the plugin's
   state interfaces into /joint_states.
 
-Read-only: no controller can move the arm (#32).
+Forward_position_controller is in the
+yaml for the first motion and for jogging; spawn it by hand with the bench clear (#32).
 
 The mirror launch (mirror.launch.py, #24) runs its own robot_state_publisher. Running the
 driver and the mirror at the same time on one ROS_DOMAIN_ID gives two /tf publishers for the
@@ -42,6 +42,8 @@ Launch arguments:
   port:=/dev/ttyTHS1          the arm's UART
   baud:=1000000               the arm's firmware rate (115200 or 1000000)
   update_rate:=30             Hz, of the control loop and of /joint_states
+  moving_period_ms:=50        ms of a serial-thread turn that sends a command
+  send_settle_ms:=30          ms the thread waits after a send_angles before a get_angles
 """
 
 from launch import LaunchDescription
@@ -53,6 +55,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    """Return the driver launch: the arguments, the nodes and the xacro call."""
     backend = DeclareLaunchArgument(
         'backend', default_value='serial',
         description='serial: the real arm. fake: a standing arm, no serial port.')
@@ -62,6 +65,13 @@ def generate_launch_description():
     baud = DeclareLaunchArgument(
         'baud', default_value='1000000',
         description='Baud rate of the arm serial link: 115200 or 1000000.')
+    # Timings of the serial thread (#32). Arguments so a sweep on the arm needs no rebuild.
+    moving_period_ms = DeclareLaunchArgument(
+        'moving_period_ms', default_value='50',
+        description='ms of a serial-thread turn that sends a command (50 measured).')
+    send_settle_ms = DeclareLaunchArgument(
+        'send_settle_ms', default_value='30',
+        description='ms the arm needs after a send_angles before a get_angles (30 measured).')
     # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
     # without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -81,6 +91,8 @@ def generate_launch_description():
             ' backend:=', LaunchConfiguration('backend'),
             ' port:=', LaunchConfiguration('port'),
             ' baud:=', LaunchConfiguration('baud'),
+            ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
+            ' send_settle_ms:=', LaunchConfiguration('send_settle_ms'),
         ]),
         value_type=str)
 
@@ -109,12 +121,21 @@ def generate_launch_description():
         output='both',
         arguments=['joint_state_broadcaster'])
 
+    arm_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='both',
+        arguments=['arm_controller', '--param-file', controllers_yaml])
+
     return LaunchDescription([
         backend,
         port,
         baud,
+        moving_period_ms,
+        send_settle_ms,
         update_rate,
         robot_state_publisher,
         control_node,
         joint_state_broadcaster,
+        arm_controller,
     ])

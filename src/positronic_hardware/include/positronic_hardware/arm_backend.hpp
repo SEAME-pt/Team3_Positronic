@@ -22,6 +22,7 @@
 #define POSITRONIC_HARDWARE__ARM_BACKEND_HPP_
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 
 namespace positronic_hardware
@@ -33,12 +34,12 @@ inline constexpr std::size_t NUM_JOINTS{6};
 /// Six joint angles in radians, J1 (base) to J6 (flange).
 using JointPositions = std::array<double, NUM_JOINTS>;
 
-/// Where the driver reads the joint angles from.
+/// Where the driver reads the joint angles from and sends the targets to.
 ///
-/// One method: "where are the joints now, in radians?". The plugin (read()) never knows
-/// whether the answer came from the real serial port or from a stand-in; it only calls
-/// read_angles(). This is the seam that lets the fake arm and the real arm be swapped by a
-/// parameter, and the control loop stay the same.
+/// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
+/// only calls read_angles() and has_sample(), write() only calls write_angles(). This is the
+/// seam that lets the fake arm and the real arm be swapped by a parameter, and the control
+/// loop stay the same.
 ///
 /// Contract for read_angles():
 /// - It is called from the ros2_control read() loop, so it must NOT block and must NOT touch
@@ -61,9 +62,44 @@ public:
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
 
+  /// The target joint angles, in radians. Safe from the control loop: the implementation only
+  /// stores the newest command and never waits for the serial port here. A newer call
+  /// replaces the previous command before it was sent. The plugin calls this only while
+  /// active, so an implementation does not need to check that itself.
+  virtual void write_angles(const JointPositions & angles) = 0;
+
+  /// How long halt() and power_on() may wait for their frame to reach the port. Part of the
+  /// contract, so the plugin can log the deadline without knowing which backend it holds.
+  static constexpr std::chrono::milliseconds REQUEST_TIMEOUT{300};
+
+  /// Stops the arm where it is and holds every target until power_on(). True when the stop
+  /// went out on the port within the deadline, false when the deadline passed with the stop
+  /// still pending. Called from a lifecycle transition, never from the control loop: it may
+  /// wait up to REQUEST_TIMEOUT.
+  [[nodiscard]] virtual bool halt() = 0;
+
+  /// The same stop and hold as halt(), without the wait: it only leaves the request, the
+  /// implementation sends the stop on its own thread. For on_error, which may run on the
+  /// control loop (a write() that returned ERROR) and must not wait there. Nothing reports
+  /// whether the stop went out: the plugin drops the backend on the next configure anyway.
+  virtual void request_halt() = 0;
+
+  /// Powers the servos on, so the arm holds its pose, and lets targets go out again after
+  /// halt(). A target stored before or during the halt is dropped: the next write_angles() is
+  /// the first to reach the arm. True when the power on went out on the port within the
+  /// deadline, false when the deadline passed with it still pending. Called from a lifecycle
+  /// transition, never from the control loop: it may wait up to REQUEST_TIMEOUT.
+  [[nodiscard]] virtual bool power_on() = 0;
+
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control
   /// loop. Until then the plugin reports "unknown" (NaN) instead of the placeholder pose.
   [[nodiscard]] virtual bool has_sample() const = 0;
+
+  /// True when the link to the arm has gone silent for longer than the backend's timeout (#35),
+  /// so the pose from read_angles() is stale and no target can be trusted to arrive. It does
+  /// not latch: it turns false again once replies resume. Non-blocking, safe from the control
+  /// loop.
+  [[nodiscard]] virtual bool link_timed_out() const = 0;
 };
 
 }  // namespace positronic_hardware
