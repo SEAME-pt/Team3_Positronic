@@ -9,7 +9,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-<<<<<<< HEAD
 find_package(geometry_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 
@@ -18,12 +17,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/GoToPose.action"
   "srv/StateTrigger.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs lifecycle_msgs
-=======
-
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/Heartbeat.msg"
-  DEPENDENCIES builtin_interfaces
->>>>>>> origin/dev
 )
 
 if(BUILD_TESTING)
