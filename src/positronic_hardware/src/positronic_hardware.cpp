@@ -37,6 +37,7 @@
 #include <tuple>
 #include <unordered_map>
 #include "lifecycle_msgs/msg/state.hpp"
+#include "positronic_hardware/link_watchdog.hpp"
 #include "urdf/model.h"
 
 namespace positronic_hardware
@@ -59,6 +60,29 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
   return joint.state_interfaces.size() == 2 && has(hardware_interface::HW_IF_POSITION) &&
          has(hardware_interface::HW_IF_VELOCITY);
 }
+
+/// True if the <ros2_control> block has exactly the fault <gpio> (#35): one <gpio> named
+/// FAULT_GPIO with one state interface FAULT_STATE and no command interface.
+bool has_fault_gpio(const hardware_interface::HardwareInfo & info)
+{
+  if (info.gpios.size() != 1) {
+    return false;
+  }
+  const hardware_interface::ComponentInfo & gpio{info.gpios.front()};
+  return gpio.name == FAULT_GPIO && gpio.command_interfaces.empty() &&
+         gpio.state_interfaces.size() == 1 && gpio.state_interfaces.front().name == FAULT_STATE;
+}
+
+/// A FaultCode as the value of the fault state interface: a small whole number, exact in a double.
+constexpr double to_state(FaultCode code)
+{
+  return static_cast<double>(std::underlying_type_t<FaultCode>(code));
+}
+
+/// #35: one lost reply costs up to moving_period + REPLY_TIMEOUT + a late reply of silence. A
+/// period at most half the link timeout keeps room for at least one lost reply, so a single
+/// bad turn never trips the fault.
+constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count() / 2)};
 
 /// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
 /// milliseconds, so this is generous; the arm not answering at all is what it catches.
@@ -111,13 +135,15 @@ bool read_milliseconds(
   return true;
 }
 
-/// The two timings of the serial thread (#32), from the URDF when set. The bounds only keep out
-/// nonsense: a period below the arm's own busy time, or a settle longer than the #35 timeout.
+/// The two timings of the serial thread (#32), from the URDF when set. The bounds keep out a
+/// period below the arm's own busy time or too close to the #35 link timeout, and a settle
+/// longer than that timeout.
 bool read_timing(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
   SerialArm::Timing & out)
 {
-  if (!read_milliseconds(logger, parameters, "moving_period_ms", 20, 500, out.moving_period) ||
+  if (!read_milliseconds(
+      logger, parameters, "moving_period_ms", 20, MAX_MOVING_PERIOD_MS, out.moving_period) ||
     !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
   {
     return false;
@@ -200,6 +226,17 @@ CallbackReturn RobotSystem::on_init(
         "refused. Add <limits enable=\"false\"/> to the joint, as positronic_real.urdf.xacro does.",
         joint.name.c_str());
     }
+  }
+
+  // #35: the fault reaches the supervisor through this one state interface. Required, like the
+  // joints: without it the supervisor would read nothing and never stop the arm on a link fault.
+  if (!has_fault_gpio(info)) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "The <ros2_control> block must have exactly one <gpio name=\"%s\"> with one "
+      "<state_interface name=\"%s\"/>, as positronic_real.urdf.xacro does.",
+      std::string{FAULT_GPIO}.c_str(), std::string{FAULT_STATE}.c_str());
+    return CallbackReturn::ERROR;
   }
 
   if (!load_limits(info)) {
@@ -363,6 +400,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       handles_.at(i).velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
+    fault_handle_ =
+      get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{FAULT_STATE});
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
@@ -372,6 +411,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   for (const auto & [name, description] : joint_state_interfaces_) {
     set_state(name, std::numeric_limits<double>::quiet_NaN());
   }
+  // #35: a fault latched before an on_error stays visible; only on_activate clears it.
+  std::ignore = set_state(fault_handle_, to_state(fault_.load()), true);
   return CallbackReturn::SUCCESS;
 }
 
@@ -406,6 +447,14 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
+  // #35: has_sample() stays true once the arm has answered, so it says nothing about a link that
+  // died later. Never activate on a silent link: read() would raise the fault again at once.
+  if (arm_->link_timed_out()) {
+    RCLCPP_ERROR(
+      get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+    return CallbackReturn::ERROR;
+  }
+
   // #34: the measured pose becomes the first command, so it must be inside the limits, or the
   // first write() would refuse it at once. Checked before power_on: an arm outside its limits
   // is not torqued. ERROR goes through on_error, which requests a stop: the arm stays where it is.
@@ -432,6 +481,10 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   for (const auto & [name, description] : joint_command_interfaces_) {
     set_command(name, get_state(name));
   }
+  // #35: the one place a latched fault is cleared. Someone asked for motion again on purpose,
+  // and the link was checked alive above.
+  fault_.store(FaultCode::NONE);
+  std::ignore = set_state(fault_handle_, to_state(FaultCode::NONE), true);
   return CallbackReturn::SUCCESS;
 }
 
@@ -472,6 +525,16 @@ CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_
 return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
   update_states(period.seconds());
+  // #35: a link that goes silent while active is a fault. While inactive nothing can move the
+  // arm, and on_activate refuses a silent link anyway.
+  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  if (active && arm_->link_timed_out()) {
+    raise_fault(FaultCode::LINK_TIMEOUT);
+  }
+  // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
+  // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
+  // anyone reading it sees the latched value.
+  std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
   return return_type::OK;
 }
 
@@ -483,6 +546,10 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
   // normal path never reaches it.
   const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
   if (!active) {
+    return return_type::OK;
+  }
+  // #35: after a fault the backend already holds every target; do not even hand them over.
+  if (fault_.load() != FaultCode::NONE) {
     return return_type::OK;
   }
 
@@ -508,6 +575,24 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
   arm_->write_angles(commands);
   return return_type::OK;
+}
+
+void RobotSystem::raise_fault(FaultCode code)
+{
+  // Only the first fault is kept: it is the cause, later ones are its consequences.
+  FaultCode expected{FaultCode::NONE};
+  if (!fault_.compare_exchange_strong(expected, code)) {
+    return;
+  }
+  // Going silent does not stop the arm: it finishes its last target (#20, serial_link.md
+  // section 5). request_halt() holds every target and leaves a stop for the serial thread; on a
+  // dead link that stop may never arrive, which is why #45 also needs the hardware stop.
+  arm_->request_halt();
+  // Logged once, at the transition, like a refusal (#34): read() does not log on later cycles.
+  RCLCPP_ERROR(
+    get_logger(),
+    "Fault %d: no valid reply from the arm for over %d ms. Targets held until the next activate.",
+    static_cast<int>(code), static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count()));
 }
 
 void RobotSystem::refuse(const CommandCheck & check)

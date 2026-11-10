@@ -63,10 +63,15 @@ the real one, with the parameters as xacro arguments.
   </joint>
   <!-- the same for joint3_to_joint2, joint4_to_joint3, joint5_to_joint4,
        joint6_to_joint5 and joint6output_to_joint6 -->
+  <gpio name="driver">
+    <state_interface name="fault_code"/>
+  </gpio>
 </ros2_control>
 ```
 
-`<limits enable="false"/>` is part of the joint limit check, see below. The Gazebo xacro in
+`<limits enable="false"/>` is part of the joint limit check, see below. The `driver` gpio with
+its one `fault_code` state interface is required too: it is how the driver reports a fault to
+the supervisor (#35, see "Link timeout"). The Gazebo xacro in
 `positronic_description` loads `gz_ros2_control/GazeboSimSystem` instead of this plugin, so it
 cannot be reused as is for the real arm.
 
@@ -111,7 +116,7 @@ says which one.
 | `port`                  | `/dev/ttyTHS1` | any non-empty path   | Serial device                    |
 | `baud`                  | `1000000`      | `115200`, `1000000`  | Baud rate                        |
 | `velocity_filter_alpha` | `0.3`          | (0, 1]               | Low-pass weight of the velocity: closer to 1 follows faster but is noisier |
-| `moving_period_ms`      | `50`           | 20 to 500            | One serial turn after a `send_angles`: a `get_angles` and the send. Measured: 50 held five 2-minute runs with no stall, 40 stalled once |
+| `moving_period_ms`      | `50`           | 20 to 100            | One serial turn after a `send_angles`: a `get_angles` and the send. Measured: 50 held five 2-minute runs with no stall, 40 stalled once. At most half the 200 ms link timeout (#35), so one lost reply never trips it |
 | `send_settle_ms`        | `30`           | 0 to 200, below `moving_period_ms` | Wait after a `send_angles` before the next `get_angles`: the arm ignores the port while it passes the command to the servos. Measured: 30 gave 0 stalls in 4464 requests, 25 gave 43, 20 froze the arm once for 20 s |
 
 The default backend is `serial` on purpose: a URDF that forgets the parameter on the robot fails
@@ -126,9 +131,9 @@ The component is not a ROS node: its state changes with
 |-------------|----------------------------------------------------------------------------------|
 | `on_init`   | Checks the joints, reads the joint limits from the URDF (#34), checks the parameters. |
 | `on_configure` | Drops a backend left over from an earlier error, then creates a new one. `serial` opens and locks the port and starts the thread; fails if the port cannot be opened. States are set to NaN ("unknown"). |
-| `read()` (inactive or active) | Publishes position and velocity once the arm has answered; until then the states stay NaN. |
-| `on_activate` | Waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". |
-| `write()` (active only) | Checks the six commands against the joint limits (#34); a bad one is not sent, the arm gets a stop and `write()` returns ERROR. Otherwise hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive. |
+| `read()` (inactive or active) | Publishes position and velocity once the arm has answered; until then the states stay NaN. While active, a link silent for over 200 ms latches `driver/fault_code` = 1 and stops the arm (#35). Publishes the latched fault code every cycle. |
+| `on_activate` | Waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". Refuses a link that went silent since the first reply (#35). The only place a latched fault is cleared. |
+| `write()` (active only) | Checks the six commands against the joint limits (#34); a bad one is not sent, the arm gets a stop and `write()` returns ERROR. Otherwise hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive, and also while a fault is latched (#35). |
 | `on_deactivate` | Sends a stop: the arm halts where it is, and the serial thread holds every target until the next activate. Returns ERROR if the stop did not leave the port within 300 ms, because a component that could not stop the arm must not stay active. |
 | `on_error` | Reached from any transition that returned ERROR, and from a `write()` that returned ERROR, on the control loop. Asks the serial thread for a stop without waiting, keeps the backend alive (it holds every target and keeps reading the pose) and takes the component to UNCONFIGURED, so `configure` and `activate` bring it back. It never joins the thread on the control loop. |
 | `on_cleanup`, `on_shutdown` | Destroys the backend: stops the thread, unlocks and closes the port. |
@@ -145,6 +150,58 @@ gets "Device or resource busy". Close a `screen`/`minicom` on the port before st
 Root is not stopped by this lock. After an error the port stays held until the next configure or
 cleanup.
 
+## Link timeout (#35)
+
+No valid reply from the arm for 200 ms while the component is active is a fault. `read()`
+latches it and does three things: it sets `driver/fault_code` to 1, it calls `request_halt()`
+(every target held, a stop left for the serial thread), and it logs once. The component stays
+ACTIVE, so the supervisor (#45) can read the code and decide; it reacts to any value but 0.
+Only `on_activate` clears it, and it refuses a link that is still silent.
+
+| `fault_code` | Meaning |
+|---|---|
+| 0 | No fault |
+| 1 | Link timeout: no valid reply for 200 ms while active |
+| 2 | Reserved for S3, "the arm does not follow the target". Not raised yet |
+
+New codes are added at the end of `FaultCode` in `positronic_hardware.hpp`; a value is never
+reused.
+
+**Why 200 ms.** The port reads return at once (`VTIME = 0`), so a turn without a reply ends after
+`REPLY_TIMEOUT` (50 ms). While the arm moves, one lost reply is up to ~120 ms of silence (the
+rest of a 50 ms turn, a silent turn, a late 20 ms reply) and two are ~170 ms. 200 ms tolerates
+two lost replies and faults on the third. The fault is seen at the next `read()`, so the
+supervisor gets it within 200 ms plus one control period (33 ms at 30 Hz).
+
+**What the arm does on silence.** It finishes its last commanded target and holds there: 8 of
+8 classifiable trials at our operating point (30 Hz) in #20, the other 2 too close to the target
+to tell (`docs/03_verification/serial_measurement/docs/serial_link.md`, section 5.1). So the latch cannot stop a move already sent; it keeps any new target from going out,
+and the stop reaches the arm only if the line comes back. On a dead line only the hardware stop
+(#45) stops the arm.
+
+**On the arm.** `hil_link_timeout` (built with the tests, never run by ctest) drives `SerialArm`
+on the real port through a transport that drops every reply, mid-motion, and prints one CSV line
+per trial: the time from the last bytes delivered to the timeout, the J1 target and where J1
+ended. It moves the arm 5 degrees on J1 at 30 % speed: two people, bench clear, a hand on the
+power switch, the driver stopped (the port is exclusive).
+
+```bash
+make nano-build && make nano-shell
+./build/positronic_hardware/hil_link_timeout | tee link_timeout.csv
+```
+
+Run on 2026-11-10, 6 trials, J1 ±5° at 30 % speed (raw CSV in
+`docs/03_verification/link_timeout/2026-11-10_hil_link_timeout.csv`):
+
+| Measurement | Result |
+|---|---|
+| Last bytes from the arm to timeout | 194.0 to 201.3 ms, mean 197.2 ms. The watchdog counts from the last complete reply; a few bytes (bus noise, a partial frame) can arrive after it, which is why some trials read just under 200 ms |
+| Reported to the supervisor | within that plus one control period: ≤ ~234 ms at 30 Hz |
+| J1 at the cut → at the end | It kept moving after the replies stopped: +3.1° to +4.0° (3 trials) and −2.8° to −3.1° (3 trials) |
+| J1 at the end vs target | 0.96° to 1.14° short, every trial, in the direction of motion. The same shortfall shows on the normal return moves, so it is the servo, not the silence |
+
+So on silence the arm **finished** its last target, as in #20.
+
 ## Tests
 
 ```bash
@@ -156,8 +213,9 @@ No arm is needed:
 
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
-| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation. |
-| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation. |
+| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the link timeout (#35), raised by silence and cleared when replies resume; `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_link_watchdog`       | `LinkWatchdog` alone with made-up time points (#35): no fault right after reset, the 200 ms boundary, a reply restarts the count, no latching. |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
 | `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
@@ -173,11 +231,11 @@ does not move and the log names the joint.
 - The velocity uses the control loop `period` as dt, not the time between two serial samples.
   When the controller runs faster than the arm answers (about every 16 ms), some `read()` calls
   see the same pose twice and the velocity is underestimated.
-- A read error and a read timeout look the same, and samples carry no timestamp, so a link that
-  stops answering after activation is not detected yet.
+- A read error and a read timeout look the same to the serial thread: both are "no reply", and
+  the link timeout (#35) catches either after 200 ms.
 - `halt()` and `power_on()` report true when their frame is on the wire, not when the firmware
-  acknowledged it (#103). With a silent arm a serial turn can last about 150 ms, so a stop can
-  take that long to reach the port; the 300 ms deadline allows two such turns.
+  acknowledged it (#103). With a silent arm a serial turn lasts about 50 ms (`VTIME = 0`), so a
+  stop reaches the port within ~100 ms; the 300 ms deadline leaves a wide margin.
 - The joint limit check refuses, it never corrects (#34). With ros2_control's limiter off, a
   `joint_trajectory_controller` trajectory that crosses a URDF limit, even by 0.001 rad, makes
   `write()` return ERROR in the cycle where the command crosses it: the arm moves towards the
@@ -192,7 +250,9 @@ does not move and the log names the joint.
 - `arm_backend.hpp`: the `ArmBackend` interface, `NUM_JOINTS`, `JointPositions`.
 - `fake_arm.hpp`: `FakeArm`.
 - `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
-- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
+- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
+- `link_watchdog.hpp`: `LinkWatchdog`, the 200 ms link timeout (#35).
+- `test/hil_link_timeout.cpp`: the #35 check on the real arm, run by hand.
 - `serial_transport.hpp`: the `SerialTransport` interface.
 - `reply_assembler.hpp`: `ReplyAssembler`.
 - `velocity_estimator.hpp`: `VelocityEstimator`.

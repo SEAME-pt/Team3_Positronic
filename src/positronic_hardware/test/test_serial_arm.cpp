@@ -529,8 +529,8 @@ TEST(SerialArm, ReportsATimeoutWhileTheArmIsSilentAndClearsItWhenRepliesResume)
   EXPECT_TRUE(arm.link_timed_out());
 
   // The backend does not latch: keeping the fault is the plugin's job.
-  // With this transport a silent turn lasts about REPLY_TIMEOUT (50 ms), because read() returns
-  // at once instead of waiting VTIME like the real port; 200 ms leaves room for the next reply.
+  // A silent turn lasts about REPLY_TIMEOUT (50 ms): this transport, like the real port with
+  // VTIME = 0, returns at once. 200 ms leaves room for the next reply.
   port.set_silent(false);
   std::this_thread::sleep_for(std::chrono::milliseconds{200});
   EXPECT_FALSE(arm.link_timed_out());

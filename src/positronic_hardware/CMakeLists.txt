@@ -98,6 +98,11 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
   ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
   target_include_directories(test_link_watchdog PRIVATE include)
+
+  # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
+  # moves the real arm (see the header of the file).
+  add_executable(hil_link_timeout test/hil_link_timeout.cpp)
+  target_link_libraries(hil_link_timeout ${PROJECT_NAME})
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

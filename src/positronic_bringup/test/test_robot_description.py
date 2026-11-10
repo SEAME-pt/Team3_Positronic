@@ -33,6 +33,9 @@
 #   #34: check that every joint of the <ros2_control> block turns ros2_control's limiter off
 #   with <limits enable="false"/>, for both backends, and that every one of them still has a
 #   <limit> in the URDF for the plugin to read.
+# Follow-up prompt (#35):
+#   Check that the <ros2_control> block has one <gpio name="driver"> with one state interface,
+#   fault_code, and no command interface, for both backends.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -139,3 +142,12 @@ def test_every_commanded_joint_has_a_urdf_limit():
         limit = urdf_joints[joint.get('name')].find('limit')
         assert limit is not None, joint.get('name')
         assert float(limit.get('lower')) < float(limit.get('upper')), joint.get('name')
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_driver_reports_the_fault_code(backend):
+    """Check the one gpio the supervisor reads, driver/fault_code, with no command (#35)."""
+    gpios = expand(backend=backend).findall('ros2_control/gpio')
+    assert [gpio.get('name') for gpio in gpios] == ['driver']
+    assert [state.get('name') for state in gpios[0].findall('state_interface')] == ['fault_code']
+    assert gpios[0].findall('command_interface') == []
