@@ -94,7 +94,12 @@ bash docs/03_verification/rt_profile/tools/run_rt_profile.sh load
 
 **4. The latency run** (shell 2, **the arm moves**; bench clear):
 
+Since #110 `driver.launch.py` spawns `arm_controller` (a JointTrajectoryController) active, and it
+holds the command interfaces. `forward_position_controller` cannot own them at the same time, so
+deactivate `arm_controller` first, or the spawner fails with a resource conflict.
+
 ```bash
+ros2 control set_controller_state arm_controller inactive
 ros2 run controller_manager spawner forward_position_controller
 bash docs/03_verification/rt_profile/tools/run_rt_profile.sh steps
 ```

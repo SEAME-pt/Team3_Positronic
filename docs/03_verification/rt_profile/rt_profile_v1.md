@@ -88,14 +88,13 @@ with a reserved core, locked memory, and a bounded transport. None of that is in
 | | |
 |---|---|
 | Date | 2026-11-10 (Jetson clock) |
-| Operator | Leandro Gertrudes |
+| Operator | Leandro Gertrudes|
 | Arm | myCobot 280 Jetson Nano |
 | Image | `positronic-runtime:nano` (ROS 2 Jazzy) |
 | Launch | `ros2 launch positronic_bringup driver.launch.py update_rate:=30` |
 | `update_rate` | 30 Hz (nominal period 33.3 ms) |
 | Serial timings | `moving_period_ms` 50, `send_settle_ms` 30 (launch defaults) |
 | `positronic_arm` component | active for the `steps` run (since #36, `write()` sends nothing while inactive) |
-| Commit | <SHA> |
 | Run folder | `/ws/log/rt_2026-11-10_1358` (kept by the operator, not committed) |
 
 Safety: the `idle` and `load` runs only subscribe, and no controller that can move the arm is
@@ -189,6 +188,11 @@ spread is just 34 ms, one cycle, which confirms the dominant term is a fixed cos
 the variation is only which cycle caught the motion. **This is the delay a closed loop built on
 top of this driver has to live with, and most of it is the arm, not the Jetson.**
 
+The #33 trajectory work measured the same lag from the other side: the wrist servos take about
+0.2 s to start moving after the command changes, which is why a planned trajectory at 20 deg/s
+aborts before they move (`arm_controller` tolerances in `jetson_controllers.yaml`, and
+[`../jtc_on_the_arm/README.md`](../jtc_on_the_arm/README.md)). Two paths, one ~0.2 s floor.
+
 ## 3. Load test: the same loop with the CPU saturated
 
 All four cores busy for 2 minutes (4 shell busy loops; `stress-ng` is not in the nano image),
@@ -266,6 +270,13 @@ The comparison table printed by `analyze_rt.py --report`:
   board. The `arrival` period reported next to the `cycle` period is the one that carries that
   cost plus DDS (its max was 93.6, 139.0 and 103.4 ms on the three runs); the `cycle` period
   does not, and it is the one every number above is measured on.
+- **The loop while the `arm_controller` runs a trajectory.** `idle` and `load` command nothing,
+  and `steps` drives one target at a time through `forward_position_controller`; none has the
+  JointTrajectoryController executing a trajectory with a client attached. The #33 sessions saw
+  `/joint_states` pause for about 0.3 s a few times per session in that case (ten cycles not run,
+  seen on the `header.stamp`, so it is the loop and not the subscriber). It did not happen idle
+  or under load, which is consistent with these runs, but "no cycle past 1.5x" holds only for
+  what was measured here. See [`../jtc_on_the_arm/`](../jtc_on_the_arm/README.md).
 - **One session.** Single runs on a single Jetson, on 2026-11-10. No run-to-run spread.
 
 ## How to reproduce
@@ -278,6 +289,7 @@ running in another shell:
 export OUT=/ws/log/rt_$(date +%Y-%m-%d_%H%M)
 bash docs/03_verification/rt_profile/tools/run_rt_profile.sh idle   # 10 min, read-only
 bash docs/03_verification/rt_profile/tools/run_rt_profile.sh load   # 2 min, read-only
+ros2 control set_controller_state arm_controller inactive           # launch spawns it active (#110)
 ros2 run controller_manager spawner forward_position_controller     # bench clear
 bash docs/03_verification/rt_profile/tools/run_rt_profile.sh steps  # THE ARM MOVES
 python3 docs/03_verification/rt_profile/tools/analyze_rt.py \
@@ -285,6 +297,6 @@ python3 docs/03_verification/rt_profile/tools/analyze_rt.py \
   --rate 30 --figure-dir docs/03_verification/rt_profile/figures
 ```
 
-The csv files are not committed; they stay with the operator at <location>. The pngs in
+The csv files are not committed; they stay with the operator. The pngs in
 `figures/` and this file are. To get the pngs, re-run that last command on a machine with
 matplotlib (the nano image has none).

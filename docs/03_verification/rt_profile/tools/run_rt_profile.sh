@@ -134,6 +134,7 @@ run_steps() {
   if ! ros2 control list_controllers 2> /dev/null | grep -q 'forward_position_controller.*active'
   then
     echo "forward_position_controller is not active. With the bench clear, spawn it:" >&2
+    echo "  ros2 control set_controller_state arm_controller inactive  # launch spawns it active (#110)" >&2
     echo "  ros2 run controller_manager spawner forward_position_controller" >&2
     echo "The arm must also be in fresh mode 1, set before the driver took the port." >&2
     exit 1
