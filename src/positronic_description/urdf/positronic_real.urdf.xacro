@@ -6,7 +6,8 @@
   Differs from positronic_gazebo.urdf.xacro on purpose:
   - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
   - each joint has position AND velocity state interfaces, which the plugin requires;
-  - each joint has exactly one command interface, position, which the plugin requires (#32).
+  - each joint has exactly one command interface, position, which the plugin requires (#32);
+  - ros2_control's joint limiter is off on every joint (#34), see the macro below.
 
   The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
   moving_period_ms, send_settle_ms.
@@ -32,9 +33,11 @@
   <!-- Links, joints and meshes of the arm. -->
   <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
 
-  <!-- One joint as seen by ros2_control: we read position and velocity, we command position. -->
+  <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
+
   <xacro:macro name="real_arm_joint" params="name">
     <joint name="${name}">
+      <limits enable="false"/>
       <command_interface name="position"/>
       <state_interface name="position"/>
       <state_interface name="velocity"/>

@@ -36,8 +36,8 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
-
 #include "lifecycle_msgs/msg/state.hpp"
+#include "urdf/model.h"
 
 namespace positronic_hardware
 {
@@ -132,6 +132,28 @@ bool read_timing(
   }
   return true;
 }
+
+/// For the log lines only: people read degrees faster than radians.
+constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
+
+/// Logs a refused check (#34) as "<what>: joint '<name>' = <rad> rad (<deg> deg), <fault>
+/// [<lower>, <upper>] rad.", the joint name and value the issue asks for.
+void log_fault(
+  const rclcpp::Logger & logger, const char * what, const CommandCheck & check,
+  const PositionLimits & limits, const hardware_interface::HardwareInfo & info)
+{
+  if (check.fault == CommandFault::WRONG_COUNT) {
+    RCLCPP_ERROR(
+      logger, "%s: %s (%.0f values, %zu expected).", what, to_string(check.fault), check.value,
+      NUM_JOINTS);
+    return;
+  }
+  const PositionLimit & limit{limits.at(check.joint)};
+  RCLCPP_ERROR(
+    logger, "%s: joint '%s' = %.4f rad (%.2f deg), %s [%.4f, %.4f] rad.", what,
+    info.joints.at(check.joint).name.c_str(), check.value, check.value * RAD_TO_DEG,
+    to_string(check.fault), limit.lower, limit.upper);
+}
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -168,6 +190,20 @@ CallbackReturn RobotSystem::on_init(
         joint.name.c_str());
       return CallbackReturn::ERROR;
     }
+    // #34: this plugin refuses an out-of-range command and halts the arm. ros2_control's own
+    // limiter would clamp the command to the limit before write() sees it, so the refusal would
+    // never happen. Still safe (the arm stops at the limit), hence a warning, not an error.
+    if (joint.enable_limits) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Joint '%s' has the ros2_control limiter on: commands past a limit are clamped, not "
+        "refused. Add <limits enable=\"false\"/> to the joint, as positronic_real.urdf.xacro does.",
+        joint.name.c_str());
+    }
+  }
+
+  if (!load_limits(info)) {
+    return CallbackReturn::ERROR;
   }
 
   if (!read_parameters(info.hardware_parameters)) {
@@ -253,6 +289,48 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
   return true;
 }
 
+bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
+{
+  // The limits come from the URDF itself, never from a table in the code: one source of truth.
+  // Parsing it here, not reading info.limits, because <limits enable="false"/> (which turns
+  // ros2_control's clamping limiter off, see on_init) also wipes the joint's info.limits.
+  urdf::Model model{};
+  if (!model.initString(info.original_xml)) {
+    RCLCPP_ERROR(get_logger(), "Cannot parse the URDF to read the joint limits.");
+    return false;
+  }
+
+  PositionLimits limits{};
+  for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
+    const std::string & name{info.joints.at(i).name};
+    const urdf::JointConstSharedPtr joint{model.getJoint(name)};
+    // Only a revolute joint has a position range: a continuous one has none, and a missing
+    // joint or <limit> tag leaves nothing to check against.
+    if (joint == nullptr || joint->type != urdf::Joint::REVOLUTE || joint->limits == nullptr) {
+      RCLCPP_ERROR(
+        get_logger(), "Joint '%s' has no revolute <limit> in the URDF. Refusing to start.",
+        name.c_str());
+      return false;
+    }
+    limits.at(i) = PositionLimit{joint->limits->lower, joint->limits->upper};
+  }
+
+  // A swapped or infinite limit would refuse everything, or nothing.
+  if (!limits_valid(limits)) {
+    RCLCPP_ERROR(
+      get_logger(), "The URDF position limits are not usable: each needs lower < upper, finite.");
+    return false;
+  }
+
+  limits_ = limits;
+  for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
+    RCLCPP_INFO(
+      get_logger(), "Joint '%s' limits: [%.4f, %.4f] rad.", info.joints.at(i).name.c_str(),
+      limits_.at(i).lower, limits_.at(i).upper);
+  }
+  return true;
+}
+
 CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Plug in the cable". SerialArm opens the port and starts its polling thread; it throws if
@@ -328,6 +406,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
+  // #34: the measured pose becomes the first command, so it must be inside the limits, or the
+  // first write() would refuse it at once. Checked before power_on: an arm outside its limits
+  // is not torqued. ERROR goes through on_error, which requests a stop: the arm stays where it is.
+  const CommandCheck start{check_command(arm_->read_angles(), limits_)};
+  if (!start.ok()) {
+    log_fault(get_logger(), "Not activated, the arm is outside its limits", start, limits_, info_);
+    RCLCPP_ERROR(get_logger(), "Move the arm inside its limits by hand, then activate again.");
+    return CallbackReturn::ERROR;
+  }
+
   // "Power the servos on" (#36), after the first reply: a released arm still answers
   // get_angles, so the wait above does not need torque, and a silent arm fails there first.
   // power_on() also lets targets out again after a halt(). If its frame cannot be written, the
@@ -399,14 +487,37 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
   }
 
   JointPositions commands{};
+  std::size_t received{0};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_get = false: never block on a controller that is writing the handle.
     if (!get_command(handles_.at(i).command, commands.at(i), false)) {
       return return_type::OK;  // A handle was busy: keep the last command, try next tick.
     }
+    ++received;
   }
+
+  // #34: check before anything reaches the arm. The view carries the count actually read, so
+  // the wrong-count rule of the issue sits here too, although on_init already wants six joints.
+  const CommandCheck check{check_command(CommandView{commands.data(), received}, limits_)};
+  if (!check.ok()) {
+    refuse(check);
+    // ERROR: the controller manager deactivates the controllers on this component and the
+    // resource manager calls on_error(), which takes the component out of ACTIVE (#36).
+    return return_type::ERROR;
+  }
+
   arm_->write_angles(commands);
   return return_type::OK;
+}
+
+void RobotSystem::refuse(const CommandCheck & check)
+{
+  // Going silent does not stop the arm: it keeps going to its last target. request_halt() is
+  // the non-blocking stop of #36 (two atomic stores, safe here on the control loop); on_error
+  // asks for it again, which changes nothing. The refused command never reached the backend.
+  arm_->request_halt();
+  // One log line per refusal: write() is not called again once the component leaves ACTIVE.
+  log_fault(get_logger(), "Command refused, arm halted", check, limits_, info_);
 }
 
 void RobotSystem::update_states(double dt)
