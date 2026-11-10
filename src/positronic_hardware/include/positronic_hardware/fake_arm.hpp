@@ -71,6 +71,12 @@ public:
     return true;
   }
 
+  /// There is no serial line to go silent, so the fake link never times out.
+  [[nodiscard]] bool link_timed_out() const override
+  {
+    return false;
+  }
+
 private:
   JointPositions angles_{START_POSE};
 };
