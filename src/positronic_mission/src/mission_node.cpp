@@ -40,7 +40,9 @@ positronic_mission::MissionNode::~MissionNode()
     }
 }
 
-void positronic_mission::MissionNode::handle_reset(const std::shared_ptr<StateTrigger::Request> & /* request */, std::shared_ptr<StateTrigger::Response> response)
+void positronic_mission::MissionNode::handle_reset(
+    const std::shared_ptr<StateTrigger::Request> & /* request */,
+    std::shared_ptr<StateTrigger::Response> response)
 {
     if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
         response->accepted = false;
@@ -63,7 +65,9 @@ void positronic_mission::MissionNode::handle_reset(const std::shared_ptr<StateTr
     response->message = "Refused: State is not ERROR or STOPPED";
 }
 
-void positronic_mission::MissionNode::handle_emergency_stop(const std::shared_ptr<StateTrigger::Request> & /* request */, std::shared_ptr<StateTrigger::Response> response)
+void positronic_mission::MissionNode::handle_emergency_stop(
+    const std::shared_ptr<StateTrigger::Request> & /* request */,
+    std::shared_ptr<StateTrigger::Response> response)
 {
     State state_now = state_.load();
     // TODO: If the arm is INACTIVE. I'm setting it to STOPPED.
@@ -73,10 +77,12 @@ void positronic_mission::MissionNode::handle_emergency_stop(const std::shared_pt
     // need to send a .stop() to moveit once I have it.
 
     response->accepted = true;
-    response->message = (state_now == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
+    response->message = (state_now ==
+        State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
-positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(const rclcpp_lifecycle::State & /* state */)
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(
+    const rclcpp_lifecycle::State & /* state */)
 {
     auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
@@ -84,17 +90,20 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
     // Create everything here
     publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
     reset_state_ = create_service<StateTrigger>("/mission/reset",
-                    [this](const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response) {
+                    [this](const std::shared_ptr<StateTrigger::Request> & request,
+                        std::shared_ptr<StateTrigger::Response> response) {
                         handle_reset(request, response);
                     });
     emergency_stop_ = create_service<StateTrigger>("/mission/stop",
-                        [this](const std::shared_ptr<StateTrigger::Request> & request, std::shared_ptr<StateTrigger::Response> response) {
+                        [this](const std::shared_ptr<StateTrigger::Request> & request,
+                            std::shared_ptr<StateTrigger::Response> response) {
                             handle_emergency_stop(request, response);
                         });
 
     mission_server_ = rclcpp_action::create_server<GoToPose>(
         this, "/mission/go_to_pose",
-        [this](const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal) {
+        [this](const rclcpp_action::GoalUUID & uuid,
+            const std::shared_ptr<const GoToPose::Goal> & goal) {
             return handle_goal(uuid, goal);
         },
         [this](const std::shared_ptr<GoalHandle> & goal_handle) {
@@ -119,7 +128,8 @@ void positronic_mission::MissionNode::reset_ptrs()
     timer_ = nullptr;
 }
 
-positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(const rclcpp_lifecycle::State & /* state */)
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(
+    const rclcpp_lifecycle::State & /* state */)
 {
     RCLCPP_INFO(get_logger(), "IN on_cleanup");
     state_ = State::INACTIVE;
@@ -131,7 +141,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(c
     return CallbackReturn::SUCCESS;
 }
 
-positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(const rclcpp_lifecycle::State & state)
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
+    const rclcpp_lifecycle::State & state)
 {
     RCLCPP_INFO(get_logger(), "IN on_activate");
 
@@ -153,7 +164,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
     return CallbackReturn::SUCCESS;
 }
 
-positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivate(const rclcpp_lifecycle::State & state)
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivate(
+    const rclcpp_lifecycle::State & state)
 {
     RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
@@ -175,7 +187,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
     return CallbackReturn::SUCCESS;
 }
 
-positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(const rclcpp_lifecycle::State & /* state */)
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
+    const rclcpp_lifecycle::State & /* state */)
 {
     RCLCPP_INFO(get_logger(), "IN on_shutdown");
 
@@ -212,7 +225,8 @@ static bool is_finite_pose(const geometry_msgs::msg::PoseStamped & p)
         && std::isfinite(qt.w));
 }
 
-bool positronic_mission::MissionNode::validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal)
+bool positronic_mission::MissionNode::validate_pose(
+    const std::shared_ptr<const GoToPose::Goal> & goal)
 {
     // Can goal be null ?
     if (!goal) {
@@ -243,7 +257,9 @@ bool positronic_mission::MissionNode::validate_pose(const std::shared_ptr<const 
     return true;
 }
 
-rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
+rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
+    const rclcpp_action::GoalUUID & /* uuid */,
+    const std::shared_ptr<const GoToPose::Goal> & goal)
 {
     if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
         RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
@@ -266,14 +282,16 @@ rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(const r
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse positronic_mission::MissionNode::handle_cancel(const std::shared_ptr<GoalHandle> & /* goal_handle */)
+rclcpp_action::CancelResponse positronic_mission::MissionNode::handle_cancel(
+    const std::shared_ptr<GoalHandle> & /* goal_handle */)
 {
     // Accepting all cancelations for now
     RCLCPP_INFO(get_logger(), "Cancel requested");
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void positronic_mission::MissionNode::handle_accepted(const std::shared_ptr<GoalHandle> & goal_handle)
+void positronic_mission::MissionNode::handle_accepted(
+    const std::shared_ptr<GoalHandle> & goal_handle)
 {
     // Join thread if a goal was finished. Before starting a second goal
     if (exec_thread_.joinable()) {
@@ -348,22 +366,22 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
         result->code = GoToPose::Result::STOPPED;
         goal_handle->abort(result);
         RCLCPP_INFO(get_logger(), "Force stop activated");
-    }
-    else {
+    } else {
         if (state_.compare_exchange_strong(expected, State::IDLE)) {
             result->success = true;
             result->code = GoToPose::Result::OK;
             goal_handle->succeed(result);
             RCLCPP_INFO(get_logger(), "Goal achieved");
-        }
-        else {
-            result->code = (expected == State::ERROR ) ? GoToPose::Result::ERROR : GoToPose::Result::STOPPED;
+        } else {
+            result->code = (expected ==
+                State::ERROR ) ? GoToPose::Result::ERROR : GoToPose::Result::STOPPED;
             goal_handle->abort(result);
             RCLCPP_INFO(get_logger(), "State changed after execution");
         }
     }
 }
 
+#ifndef TEST_EXCLUDE_MAIN
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
@@ -372,6 +390,7 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+#endif
 
 /*
     Three places that use state:

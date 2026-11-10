@@ -49,7 +49,8 @@ using positronic_interfaces::srv::StateTrigger;
 using GoalHandle = rclcpp_action::ServerGoalHandle<GoToPose>;
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-enum class State : unsigned char {
+enum class State : unsigned char
+{
     IDLE,
     INACTIVE,
     MOVING,
