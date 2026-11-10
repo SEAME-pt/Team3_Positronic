@@ -44,9 +44,11 @@ class LinkWatchdog
 public:
   using Clock = std::chrono::steady_clock;
 
-  /// No valid reply for this long is a fault (#35). A healthy turn of the serial thread lasts
-  /// at most the moving period (50 ms) plus a late reply (20 ms worst seen), so 200 ms is about
-  /// three lost turns in a row.
+  /// No valid reply for this long is a fault (#35). One lost reply already means about 160-170 ms
+  /// of silence while the arm moves: the rest of the turn after the last reply (up to the 50 ms
+  /// moving period), a turn with no reply, which ends only when its read gives up after VTIME
+  /// (100 ms, see PosixSerialPort), then the next reply (8 ms typical, 20 ms worst seen). So
+  /// 200 ms tolerates one lost reply and faults on the second one in a row.
   static constexpr std::chrono::milliseconds DEFAULT_TIMEOUT{200};
 
   explicit LinkWatchdog(std::chrono::milliseconds timeout = DEFAULT_TIMEOUT)
