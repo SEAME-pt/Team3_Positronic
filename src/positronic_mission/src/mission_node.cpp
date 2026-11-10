@@ -43,7 +43,9 @@ public:
     // Create everything here
     publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
 
-    timer_ = create_wall_timer(100ms, [this]{heart_beat();});
+    timer_ = create_wall_timer(100ms, [this] {
+          heart_beat();
+    });
     timer_->cancel();
 
     return CallbackReturn::SUCCESS;

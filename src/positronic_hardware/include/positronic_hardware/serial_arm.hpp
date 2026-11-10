@@ -30,6 +30,7 @@
 #include <thread>
 
 #include "positronic_hardware/arm_backend.hpp"
+#include "positronic_hardware/link_watchdog.hpp"
 #include "positronic_hardware/serial_transport.hpp"
 #include "positronic_protocol/types.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
@@ -65,6 +66,7 @@ struct SerialTiming
 class SerialArm : public ArmBackend
 {
 public:
+  using Clock = LinkWatchdog::Clock;
   using Timing = SerialTiming;
 
   /// One turn of the thread while the arm stands still: a get_angles and nothing else. The link
@@ -119,6 +121,10 @@ public:
   /// thread's next turn. Two atomic stores, safe from the control loop.
   void request_halt() override;
 
+  /// True when the poll thread has decoded no valid reply for longer than
+  /// LinkWatchdog::DEFAULT_TIMEOUT. One atomic load, safe from the control loop.
+  [[nodiscard]] bool link_timed_out() const override;
+
   /// Drops the target held since halt(), then asks the thread to send a power_on at the start
   /// of its next turn and waits for it, up to REQUEST_TIMEOUT. The thread releases the hold in
   /// the turn that writes the frame, so targets go out again only once the power on is on the
@@ -148,6 +154,8 @@ private:
 
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
+  // Time since the last valid reply (#35). The poll thread feeds it; the plugin asks it.
+  LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   mutable realtime_tools::RealtimeBuffer<JointPositions> latest_{START_POSE};

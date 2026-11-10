@@ -190,6 +190,11 @@ bool SerialArm::has_sample() const
   return has_sample_.load();
 }
 
+bool SerialArm::link_timed_out() const
+{
+  return watchdog_.timed_out(Clock::now());
+}
+
 bool SerialArm::halt()
 {
   // The hold goes first, so the turn that writes the stop already sends no target after it.
@@ -293,6 +298,8 @@ void SerialArm::poll_loop()
   // keeps the arm busy for the settle, and while it stands still the port is better spent on
   // fresh poses.
   std::optional<JointPositions> last_sent{};
+  // Count the silence from now, so an arm that never answers also times out (#35).
+  watchdog_.reset(Clock::now());
 
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
@@ -323,6 +330,7 @@ void SerialArm::poll_loop()
           latest_.writeFromNonRT(pose.value());
           // Set after the write, so whoever sees true also finds the real pose in the buffer.
           has_sample_.store(true);
+          watchdog_.on_reply(Clock::now());
           replied = true;
         }
       }
