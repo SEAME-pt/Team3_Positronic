@@ -94,6 +94,12 @@ public:
   /// True once read_angles() returns a real measurement. Non-blocking, safe from the control
   /// loop. Until then the plugin reports "unknown" (NaN) instead of the placeholder pose.
   [[nodiscard]] virtual bool has_sample() const = 0;
+
+  /// True when the link to the arm has gone silent for longer than the backend's timeout (#35),
+  /// so the pose from read_angles() is stale and no target can be trusted to arrive. It does
+  /// not latch: it turns false again once replies resume. Non-blocking, safe from the control
+  /// loop.
+  [[nodiscard]] virtual bool link_timed_out() const = 0;
 };
 
 }  // namespace positronic_hardware

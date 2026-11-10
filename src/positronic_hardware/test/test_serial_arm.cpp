@@ -44,6 +44,10 @@
 // Follow-up prompt (#36):
 //   request_halt() is halt() without the wait, for on_error on the control loop. Check: it
 //   returns at once, the stop still goes out, and targets are held until power_on().
+// Follow-up prompt (#35):
+//   Check that link_timed_out() is false while replies arrive, true once the line has been
+//   silent past the timeout, false again when replies resume, and true when the arm never
+//   answers at all.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -505,6 +509,41 @@ TEST(SerialArm, HaltReachesASilentArmInTime)
   EXPECT_TRUE(arm.halt());
   EXPECT_LT(std::chrono::steady_clock::now() - start, SerialArm::REQUEST_TIMEOUT);
   EXPECT_EQ(frames_with_id(port.written(), STOP_ID).size(), 1u);
+}
+
+// #35. SerialArm reads the real clock, so these tests must sleep. 300 ms is the 200 ms timeout
+// plus a margin for a busy CI machine; the exact boundary is tested in test_link_watchdog.cpp.
+constexpr std::chrono::milliseconds PAST_THE_TIMEOUT{300};
+
+TEST(SerialArm, ReportsATimeoutWhileTheArmIsSilentAndClearsItWhenRepliesResume)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  const SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+  ASSERT_TRUE(arm.has_sample());
+  EXPECT_FALSE(arm.link_timed_out());  // replies keep arriving every turn
+
+  port.set_silent(true);
+  std::this_thread::sleep_for(PAST_THE_TIMEOUT);
+  EXPECT_TRUE(arm.link_timed_out());
+
+  // The backend does not latch: keeping the fault is the plugin's job.
+  // With this transport a silent turn lasts about REPLY_TIMEOUT (50 ms), because read() returns
+  // at once instead of waiting VTIME like the real port; 200 ms leaves room for the next reply.
+  port.set_silent(false);
+  std::this_thread::sleep_for(std::chrono::milliseconds{200});
+  EXPECT_FALSE(arm.link_timed_out());
+}
+
+TEST(SerialArm, ReportsATimeoutWhenTheArmNeverAnswers)
+{
+  // The poll thread resets the watchdog when it starts, so silence from the first turn on
+  // still times out.
+  const SerialArm arm{std::make_unique<ReplayTransport>(std::vector<std::vector<std::uint8_t>>{})};
+  std::this_thread::sleep_for(PAST_THE_TIMEOUT);
+  EXPECT_FALSE(arm.has_sample());
+  EXPECT_TRUE(arm.link_timed_out());
 }
 
 TEST(PosixSerialPort, SecondOpenIsRefusedWhileTheFirstHoldsThePort)
