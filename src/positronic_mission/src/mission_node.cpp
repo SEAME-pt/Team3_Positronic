@@ -21,13 +21,15 @@
 #include "positronic_mission/mission_node.hpp"
 #include <cmath>
 #include <memory>
+#include <rclcpp/node_options.hpp>
 #include <rclcpp/rate.hpp>
 #include "positronic_interfaces/action/go_to_pose.hpp"
 
 using namespace std::chrono_literals;
 
-positronic_mission::MissionNode::MissionNode()
-    : LifecycleNode("mission_node")
+positronic_mission::MissionNode::MissionNode(
+    const rclcpp::NodeOptions & options)
+    : LifecycleNode("mission_node", options)
 {
     RCLCPP_INFO(get_logger(), "IN constructor");
 }
@@ -381,16 +383,16 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
     }
 }
 
-#ifndef TEST_EXCLUDE_MAIN
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  auto mission_node = std::make_shared<positronic_mission::MissionNode>();
-  rclcpp::spin(mission_node->get_node_base_interface());
-  rclcpp::shutdown();
-  return 0;
-}
-#endif
+// #ifndef TEST_EXCLUDE_MAIN
+// int main(int argc, char ** argv)
+// {
+//   rclcpp::init(argc, argv);
+//   auto mission_node = std::make_shared<positronic_mission::MissionNode>();
+//   rclcpp::spin(mission_node->get_node_base_interface());
+//   rclcpp::shutdown();
+//   return 0;
+// }
+// #endif
 
 /*
     Three places that use state:
@@ -408,3 +410,7 @@ int main(int argc, char ** argv)
                 .transient_local();   // late joiners receive the last 10 messages
  *
  */
+
+#include "rclcpp_components/register_node_macro.hpp"
+
+RCLCPP_COMPONENTS_REGISTER_NODE(positronic_mission::MissionNode)

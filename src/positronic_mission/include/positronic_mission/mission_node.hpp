@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cmath>
 #include <memory>
+#include <rclcpp/node_options.hpp>
 #include <rclcpp/service.hpp>
 #include <thread>
 #include <rclcpp_action/client.hpp>
@@ -68,7 +69,7 @@ static_assert(static_cast<uint8_t>(State::ERROR) == Heartbeat::STATE_ERROR);
 class MissionNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
-    MissionNode();
+    explicit MissionNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
     ~MissionNode() override;
 
     MissionNode(const MissionNode & rhs) = delete;

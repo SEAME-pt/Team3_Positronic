@@ -18,6 +18,7 @@
   <depend>std_msgs</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>rclcpp_action</depend>
+  <depend>rclcpp_components</depend>
   <depend>positronic_interfaces</depend>
 
   <test_depend>ament_lint_auto</test_depend>
