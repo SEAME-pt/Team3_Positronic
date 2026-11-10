@@ -79,8 +79,10 @@ FROM core AS tools
 
 ARG ROS_DISTRO
 
+# lcov and python3-pytest-cov: line coverage of C++ and Python (scripts/coverage.sh, make coverage).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gdb ccache clang-tidy clangd \
+      lcov python3-pytest-cov \
       ros-${ROS_DISTRO}-ament-cmake-clang-format \
       ros-${ROS_DISTRO}-ament-cmake-clang-tidy \
     && rm -rf /var/lib/apt/lists/*

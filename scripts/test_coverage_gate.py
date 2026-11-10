@@ -27,6 +27,8 @@
 #   passes exactly at 80 % and fails just below it, .py files under test/ and launch/ are not
 #   reported as unmeasured but others are, and main() exits 0, 1 or 2 and writes the report to
 #   $GITHUB_STEP_SUMMARY.
+#   Then: the gate is per package. One package below 80 % fails it even when the total is above,
+#   and the report marks each package PASS or FAIL.
 
 """Unit tests for the coverage gate of issue #109 (no ROS 2 needed)."""
 
@@ -97,6 +99,18 @@ def test_threshold_passes_exactly_at_80_and_fails_below():
     assert not gate.passes(743, 582, 80)  # the first measurement, 78.3 %
 
 
+def test_one_package_below_fails_even_when_the_total_passes():
+    files = gate.parse_tracefile(
+        record('src/big/a.cpp', 1000, 1000) + record('src/small/b.cpp', 50, 0))
+    found, hit = gate.total(files)
+    assert gate.passes(found, hit, 80)  # the total, 1000 / 1050 = 95.2 %, would pass
+    assert gate.failing_packages(files, 80) == ['small']
+    text, passed = gate.report(files, 80, 10, [])
+    assert not passed
+    assert '| big | 1000 / 1000 | 100.0 % | PASS |' in text
+    assert '| small | 0 / 50 | 0.0 % | FAIL |' in text
+
+
 def test_python_files_skip_test_and_launch(tmp_path):
     for rel in ('src/pkg/scripts/node.py', 'src/pkg/test/test_node.py',
                 'src/pkg/launch/sim.launch.py', 'src/pkg/pkg/helper.py'):
@@ -112,10 +126,12 @@ def test_python_files_skip_test_and_launch(tmp_path):
 def test_report_lists_packages_total_and_verdict():
     text, passed = gate.report(gate.parse_tracefile(TRACEFILE), 80, 10, ['src/pkg/x.py'])
     assert not passed
-    assert '| positronic_hardware | 100 / 120 | 83.3 % |' in text
-    assert '| **Total** | **120 / 200** | **60.0 %** |' in text
+    assert '| positronic_hardware | 100 / 120 | 83.3 % | PASS |' in text
+    assert '| positronic_mission | 0 / 40 | 0.0 % | FAIL |' in text
+    assert '| **Total** (information) | **120 / 200** | **60.0 %** | |' in text
     assert 'WARNING' in text and '- src/pkg/x.py' in text
-    assert text.rstrip().endswith('FAIL: 60.0 % < 80 %')
+    assert text.rstrip().endswith(
+        'FAIL: 2 of 3 packages below 80 %: positronic_bringup, positronic_mission')
 
 
 def test_main_exit_codes_and_step_summary(tmp_path, monkeypatch):
@@ -130,7 +146,7 @@ def test_main_exit_codes_and_step_summary(tmp_path, monkeypatch):
     no_src = ['--src', str(tmp_path / 'nothing')]
 
     assert gate.main([str(good)] + no_src) == 0
-    assert 'PASS: 90.0 % >= 80 %' in summary.read_text()
+    assert 'PASS: every package at or above 80 %' in summary.read_text()
     assert gate.main([str(bad)] + no_src) == 1
     assert gate.main([str(empty)] + no_src) == 2
     assert gate.main([str(tmp_path / 'missing.info')] + no_src) == 2

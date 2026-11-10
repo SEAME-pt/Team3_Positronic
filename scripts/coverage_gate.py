@@ -29,14 +29,19 @@
 #   same report to $GITHUB_STEP_SUMMARY when it is set. Warn about .py files under src/ that are
 #   neither measured nor excluded (test/, launch/), since coverage.py does not see files nothing
 #   imports. Exit 1 below the threshold (80 % by default).
-"""Line coverage gate: total of an lcov tracefile against a threshold (issue #109)."""
+#   Then: judge each package against the threshold instead of the total, so a well-tested
+#   package cannot hide one with no tests. The total stays in the report, for information.
+"""Line coverage gate: every package of an lcov tracefile against a threshold (issue #109)."""
 
-# The total is lines hit / lines found, summed over all files. A small file at 0 % weighs
-# less than a big one, unlike an average of percentages.
+# Each package must reach the threshold on its own. The total is for information: a big
+# package at 100 % would hide a small one at 0 %.
+# Package and total are lines hit / lines found, summed over the files. A small file at 0 %
+# weighs less than a big one, unlike an average of percentages.
 #
 #   python3 scripts/coverage_gate.py                       coverage/total.info, 80 %
 #   python3 scripts/coverage_gate.py <tracefile> --threshold 80
-# Exit code 0 at or above the threshold, 1 below it, 2 when the tracefile is missing or empty.
+# Exit code 0 when every package reaches the threshold, 1 when at least one is below it,
+# 2 when the tracefile is missing or empty.
 
 import argparse
 import dataclasses
@@ -118,6 +123,12 @@ def passes(found, hit, threshold):
     return hit * 100 >= threshold * found
 
 
+def failing_packages(files, threshold):
+    """Return the packages below the threshold, sorted by name."""
+    return sorted(name for name, (found, hit) in by_package(files).items()
+                  if not passes(found, hit, threshold))
+
+
 def python_files(src_dir):
     """List the .py files under src_dir that the gate should see, as src/... paths."""
     result = []
@@ -140,11 +151,15 @@ def unmeasured(files, python_paths):
 def report(files, threshold, worst_count, missing):
     """Build the Markdown report and the verdict: (text, passed)."""
     found, hit = total(files)
-    passed = passes(found, hit, threshold)
-    lines = ['## Line coverage', '', '| Package | Lines | Coverage |', '|---|---:|---:|']
+    failing = failing_packages(files, threshold)
+    lines = ['## Line coverage', '', '| Package | Lines | Coverage | Gate |',
+             '|---|---:|---:|:---:|']
     for name, (p_found, p_hit) in sorted(by_package(files).items()):
-        lines.append(f'| {name} | {p_hit} / {p_found} | {percent(p_hit, p_found):.1f} % |')
-    lines.append(f'| **Total** | **{hit} / {found}** | **{percent(hit, found):.1f} %** |')
+        gate = 'FAIL' if name in failing else 'PASS'
+        lines.append(
+            f'| {name} | {p_hit} / {p_found} | {percent(p_hit, p_found):.1f} % | {gate} |')
+    lines.append(
+        f'| **Total** (information) | **{hit} / {found}** | **{percent(hit, found):.1f} %** | |')
 
     worst = worst_files(files, worst_count)
     if worst:
@@ -157,16 +172,18 @@ def report(files, threshold, worst_count, missing):
         lines += ['', 'WARNING: Python files neither measured nor excluded (not in the total):']
         lines += [f'- {p}' for p in missing]
 
-    verdict = 'PASS' if passed else 'FAIL'
-    sign = '>=' if passed else '<'
-    lines += ['', f'{verdict}: {percent(hit, found):.1f} % {sign} {threshold:g} %']
-    return '\n'.join(lines) + '\n', passed
+    if failing:
+        lines += ['', f'FAIL: {len(failing)} of {len(by_package(files))} packages below '
+                  f'{threshold:g} %: {", ".join(failing)}']
+    else:
+        lines += ['', f'PASS: every package at or above {threshold:g} %']
+    return '\n'.join(lines) + '\n', not failing
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('tracefile', nargs='?', default='coverage/total.info')
-    parser.add_argument('--threshold', type=float, default=80.0, help='minimum total, in %%')
+    parser.add_argument('--threshold', type=float, default=80.0, help='minimum per package, in %%')
     parser.add_argument('--worst', type=int, default=10, help='how many files to list')
     parser.add_argument('--src', default='src', help='source folder, to find unmeasured .py')
     args = parser.parse_args(argv)
