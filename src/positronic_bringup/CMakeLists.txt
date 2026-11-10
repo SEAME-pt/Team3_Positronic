@@ -16,6 +16,8 @@ if(BUILD_TESTING)
   # The maths of the delay script, without ROS running (#24).
   ament_add_pytest_test(test_joint_states_delay test/test_joint_states_delay.py)
   ament_add_pytest_test(test_joint_states_rate test/test_joint_states_rate.py)
+  # main() of the rate script, alone: it initialises rclpy itself, so it needs its own process.
+  ament_add_pytest_test(test_joint_states_rate_main test/test_joint_states_rate_main.py)
 endif()
 
 # Copy the folders to install/.
