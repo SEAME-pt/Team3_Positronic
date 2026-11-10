@@ -1,0 +1,11 @@
+# Python coverage for the gate (#46). Paths are the dev container's: the repo is /ws.
+[run]
+# Count our code, including files no test imports (they show up at 0 %).
+source = /ws/src
+# Excluded, and why:
+#   */test/*     test code covering itself would inflate the number
+#   */launch/*   launch files are configuration (which nodes start, with which parameters),
+#                checked by running the simulation, not by unit tests
+omit =
+    */test/*
+    */launch/*
