@@ -27,15 +27,18 @@
 
 #include <array>
 #include <cerrno>
-#include <cstring>
+#include <cstddef>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include "positronic_hardware/reply_assembler.hpp"
 #include "positronic_protocol/encode.hpp"
 #include "positronic_protocol/types.hpp"
+#include "positronic_protocol/units.hpp"
 
 namespace positronic_hardware
 {
@@ -64,24 +67,25 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
 
   fd_ = ::open(port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd_ < 0) {
-    throw std::runtime_error{"Cannot open " + port + ": " + std::strerror(errno)};
+    throw std::system_error{errno, std::system_category(), "Cannot open " + port};
   }
 
   // Exclusive access: while we hold the port, a second open() (another driver, a terminal
   // left open on it) fails with EBUSY instead of stealing half of the replies.
   if (::ioctl(fd_, TIOCEXCL) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"Cannot lock " + port + " for exclusive use: " + message};
+    throw std::system_error{
+            error, std::system_category(), "Cannot lock " + port + " for exclusive use"};
   }
 
   termios tty{};
   if (::tcgetattr(fd_, &tty) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"tcgetattr failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "tcgetattr failed on " + port};
   }
 
   ::cfmakeraw(&tty);  // 8N1, no echo, no line processing: raw bytes in and out.
@@ -93,10 +97,10 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   tty.c_cc[VTIME] = 1;  // after at most 0.1 s, so the thread can check stop_.
 
   if (::tcsetattr(fd_, TCSANOW, &tty) != 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"tcsetattr failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "tcsetattr failed on " + port};
   }
 
   // open() used O_NONBLOCK so it would not block waiting for carrier. Clear it now that the
@@ -105,10 +109,10 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   // it up only on the next cycle. Cleared, read() waits up to VTIME (0.1 s) for the bytes.
   const int flags{::fcntl(fd_, F_GETFL, 0)};
   if (flags < 0 || ::fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
-    const std::string message{std::strerror(errno)};
+    const int error{errno};
     ::close(fd_);
     fd_ = -1;
-    throw std::runtime_error{"fcntl failed on " + port + ": " + message};
+    throw std::system_error{error, std::system_category(), "fcntl failed on " + port};
   }
 }
 
@@ -126,7 +130,8 @@ bool PosixSerialPort::write(const std::uint8_t * data, std::size_t count)
 {
   std::size_t written{0};
   while (written < count) {
-    const ssize_t n{::write(fd_, data + written, count - written)};
+    const std::uint8_t * const next_byte{std::next(data, static_cast<std::ptrdiff_t>(written))};
+    const ssize_t n{::write(fd_, next_byte, count - written)};
     if (n < 0) {
       if (errno == EINTR || errno == EAGAIN) {
         continue;
@@ -147,13 +152,13 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(const std::string & port, int baud_rate)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate)}
+SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing}
 {
 }
 
-SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport)
-: transport_{std::move(transport)}
+SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing)
+: transport_{std::move(transport)}, timing_{timing}
 {
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
@@ -173,9 +178,114 @@ JointPositions SerialArm::read_angles() const
   return *latest_.readFromRT();
 }
 
+void SerialArm::write_angles(const JointPositions & angles)
+{
+  // Only stores the command. The poll thread picks it up on its next turn and sends it over the
+  // port, so the control loop never waits for the serial link here.
+  command_.writeFromNonRT(angles);
+}
+
 bool SerialArm::has_sample() const
 {
   return has_sample_.load();
+}
+
+bool SerialArm::link_timed_out() const
+{
+  return watchdog_.timed_out(Clock::now());
+}
+
+bool SerialArm::halt()
+{
+  // The hold goes first, so the turn that writes the stop already sends no target after it.
+  halted_.store(true);
+  return request_and_wait(Request::HALT);
+}
+
+void SerialArm::request_halt()
+{
+  halted_.store(true);
+  request_.store(Request::HALT);
+}
+
+bool SerialArm::power_on()
+{
+  // Drop the target stored before or during the halt: with it still there, the thread would
+  // send it once the hold ends, before the plugin's first write_angles() after activate (the
+  // measured pose) could replace it. Seen on the arm as a short move towards the old target.
+  // Both writers here are non-RT, so the buffer's mutex is enough. The hold itself is released
+  // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
+  // the hold goes on before the stop. A target written meanwhile waits for that turn.
+  command_.writeFromNonRT(std::nullopt);
+  return request_and_wait(Request::POWER_ON);
+}
+
+bool SerialArm::request_and_wait(Request request)
+{
+  request_.store(request);
+  // The poll thread writes the frame at the start of its next turn and puts request_ back to
+  // NONE. 1 ms steps: on the arm the frame is out within a few ms, and this runs in a lifecycle
+  // transition, which may wait.
+  const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (request_.load() == Request::NONE) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  // One last look: the thread may have cleared it right at the deadline.
+  return request_.load() == Request::NONE;
+}
+
+std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request request)
+{
+  switch (request) {
+    case Request::HALT:
+      return positronic_protocol::encode_stop();
+    case Request::POWER_ON:
+      return positronic_protocol::encode_power_on();
+    case Request::NONE:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+/// Writes the pending halt or power_on, if any, at the start of a turn: the previous turn is
+/// over, so the arm's input is free, and request_and_wait() is waiting for this. No settle after
+/// it: the caller returns as soon as the frame is written, and if the arm ignores the port for a
+/// while the only cost is this turn's reply. A failed write leaves the request pending, and the
+/// hold as it is, for the next turn. A stop that went out clears `last_sent`: the arm is heading
+/// nowhere, so the next target goes out even when it equals the last one sent. A power on that
+/// went out ends the hold, with the frame already on the wire, so no target can get ahead of it.
+void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
+{
+  const Request pending{request_.load()};
+  const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
+  if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
+    return;
+  }
+  if (pending == Request::HALT) {
+    last_sent = std::nullopt;
+  } else if (pending == Request::POWER_ON) {
+    // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
+    // right after it must find the hold already released, so its own hold cannot be undone by
+    // this store arriving late. Same rule as halt(), the state changes before the signal.
+    halted_.store(false);
+  }
+  // Not a plain store: a request made after a timeout must not be erased by the late clear of
+  // the one that went out.
+  Request expected{pending};
+  request_.compare_exchange_strong(expected, Request::NONE);
+}
+
+std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
+{
+  const std::optional<positronic_protocol::JointAngles> angles{
+    positronic_protocol::to_centidegrees(target)};
+  if (!angles.has_value()) {
+    return std::nullopt;
+  }
+  return positronic_protocol::encode_send_angles(angles.value(), SEND_SPEED);
 }
 
 void SerialArm::poll_loop()
@@ -184,32 +294,72 @@ void SerialArm::poll_loop()
   std::array<std::uint8_t, 256> chunk{};
 
   const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
+  // The last target that went out, so an unchanged command is not sent again: a send_angles
+  // keeps the arm busy for the settle, and while it stands still the port is better spent on
+  // fresh poses.
+  std::optional<JointPositions> last_sent{};
+  // Count the silence from now, so an arm that never answers also times out (#35).
+  watchdog_.reset(Clock::now());
 
   while (!stop_.load()) {
-    // Ask for the angles. A failed write is transient (unplugged cable, busy port): skip this
-    // round, keep the last known pose, try again next tick. No request went out, so there is
-    // no reply to wait for.
-    if (!transport_->write(request.bytes.data(), request.size)) {
-      std::this_thread::sleep_for(POLL_PERIOD);
-      continue;
+    // The deadline is set before the work, so a slow reply does not drift the period.
+    const auto turn_start{std::chrono::steady_clock::now()};
+
+    send_pending_request(last_sent);
+
+    bool sent{false};
+
+    // Ask for the angles. A failed write is transient (busy port): skip this round, keep the
+    // last known pose, try again next turn.
+    bool replied{false};
+    if (transport_->write(request.bytes.data(), request.size)) {
+      // Read until the reply completes or REPLY_TIMEOUT passes. The reply comes in many small
+      // chunks behind servo-bus chatter, so a fixed number of reads is not enough, and the
+      // request and its reply must be over before anything else is written: the arm drops a
+      // send_angles that arrives while it is still answering a get_angles.
+      const auto reply_deadline{turn_start + REPLY_TIMEOUT};
+      while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
+        const std::size_t got{transport_->read(chunk.data(), chunk.size())};
+        if (got == 0) {
+          // A real port blocks up to VTIME before returning 0; a test transport returns at
+          // once, so yield instead of spinning.
+          std::this_thread::sleep_for(std::chrono::milliseconds{1});
+          continue;
+        }
+        if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
+          latest_.writeFromNonRT(pose.value());
+          // Set after the write, so whoever sees true also finds the real pose in the buffer.
+          has_sample_.store(true);
+          watchdog_.on_reply(Clock::now());
+          replied = true;
+        }
+      }
     }
 
-    // Drain whatever is there and feed the assembler. One get_angles reply usually arrives over
-    // a few reads, so we keep reading until the port goes quiet or a reply completes.
-    for (int reads{0}; reads < 8 && !stop_.load(); ++reads) {
-      const std::size_t got{transport_->read(chunk.data(), chunk.size())};
-      if (got == 0) {
-        break;
-      }
-      if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
-        latest_.writeFromNonRT(pose.value());
-        // Set after the write, so whoever sees true also finds the real pose in the buffer.
-        has_sample_.store(true);
-        break;
+    // The arm answered, so its input is free: send the newest command now, if it is new.
+    // A turn without a reply sends nothing, the command waits in command_ for the next.
+    // nullopt means no command yet, or a read that lost the race with write_angles() before
+    // the first one: both send nothing, the next turn reads again.
+    if (replied && !halted_.load()) {
+      const std::optional<JointPositions> target{*command_.readFromRT()};
+      if (target.has_value() && target != last_sent) {
+        // NaN or out of range: nothing we can put on the wire, keep the previous target.
+        const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
+        if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
+          last_sent = target;
+          sent = true;
+          // The arm passes the command to the servos and ignores the port meanwhile: a
+          // get_angles inside this window stalls, so the next turn must not start before it.
+          std::this_thread::sleep_for(timing_.send_settle);
+        }
       }
     }
 
-    std::this_thread::sleep_for(POLL_PERIOD);
+    std::chrono::milliseconds period{POLL_PERIOD};
+    if (sent) {
+      period = timing_.moving_period;
+    }
+    std::this_thread::sleep_until(turn_start + period);
   }
 }
 

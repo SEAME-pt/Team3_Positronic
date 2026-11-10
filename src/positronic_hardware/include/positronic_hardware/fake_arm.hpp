@@ -28,7 +28,8 @@ namespace positronic_hardware
 
 /// A pretend arm, so the driver runs without the robot. It never touches the serial port.
 ///
-/// It stands still in a fixed pose. SerialArm answers the same question from the serial port.
+/// It starts in START_POSE and is at every target as soon as write_angles() gets it, with no
+/// motion in between. SerialArm does the same over the serial port.
 class FakeArm : public ArmBackend
 {
 public:
@@ -41,10 +42,39 @@ public:
     return angles_;
   }
 
+  /// Where the joints will be.
+  void write_angles(const JointPositions & angles) override
+  {
+    angles_ = angles;
+  }
+
+  /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
+  [[nodiscard]] bool halt() override
+  {
+    return true;
+  }
+
+  /// Nothing to interrupt here either.
+  void request_halt() override
+  {
+  }
+
+  /// The fake arm has no servos to power.
+  [[nodiscard]] bool power_on() override
+  {
+    return true;
+  }
+
   /// The fake pose is known from the start.
   [[nodiscard]] bool has_sample() const override
   {
     return true;
+  }
+
+  /// There is no serial line to go silent, so the fake link never times out.
+  [[nodiscard]] bool link_timed_out() const override
+  {
+    return false;
   }
 
 private:

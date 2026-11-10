@@ -1,0 +1,8 @@
+# T0: one point, the start pose in 6 s. For the beginning of a session, when the arm rests
+# somewhere else: slow enough to stay inside the trajectory tolerance from any nearby pose.
+trajectory:
+  joint_names: [joint2_to_joint1, joint3_to_joint2, joint4_to_joint3,
+                joint5_to_joint4, joint6_to_joint5, joint6output_to_joint6]
+  points:
+  - positions: [0.2822, 0.0061, -0.0106, -0.2330, 0.0075, -0.0106]
+    time_from_start: {sec: 6}
