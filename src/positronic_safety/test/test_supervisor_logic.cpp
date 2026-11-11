@@ -30,6 +30,8 @@
 //   step that fails turns into a halt with RESUME_FAILED; a halt during a resume drops the
 //   resume; an answer with an old ticket, or with nothing in flight, is ignored; tickets never
 //   repeat; a stop while STOPPED runs the halt again; every enum value has its own name.
+// Follow-up prompt:
+//   waiting_for() is true only for the ticket of the request in flight.
 //   No cast of an out-of-range value to an enum: clang-tidy (EnumCastOutOfRange) fails the
 //   strict CI on it. Close the anonymous namespace before the TEST blocks.
 
@@ -270,6 +272,24 @@ TEST(SupervisorLogic, AnswerWithNothingInFlightIsIgnored)
   EXPECT_EQ(logic.step_done(1, true).step, Step::NONE);
   EXPECT_EQ(logic.mode(), Mode::STOPPED);
   EXPECT_EQ(logic.step(), Step::NONE);
+}
+
+TEST(SupervisorLogic, WaitsOnlyForTheRequestInFlight)
+{
+  SupervisorLogic logic;
+  EXPECT_FALSE(logic.waiting_for(0));  // nothing in flight yet
+  EXPECT_FALSE(logic.waiting_for(1));
+
+  const Order first = logic.resume();
+  EXPECT_TRUE(logic.waiting_for(first.ticket));
+  EXPECT_FALSE(logic.waiting_for(first.ticket + 1));
+
+  const Order second = logic.step_done(first.ticket, true);
+  EXPECT_FALSE(logic.waiting_for(first.ticket));  // answered: now an old ticket
+  EXPECT_TRUE(logic.waiting_for(second.ticket));
+
+  EXPECT_EQ(logic.step_done(second.ticket, true).step, Step::NONE);
+  EXPECT_FALSE(logic.waiting_for(second.ticket));  // the sequence is over
 }
 
 TEST(SupervisorLogic, TicketsNeverRepeat)

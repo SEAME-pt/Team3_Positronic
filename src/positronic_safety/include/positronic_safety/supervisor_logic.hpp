@@ -22,7 +22,6 @@
 #define POSITRONIC_SAFETY__SUPERVISOR_LOGIC_HPP_
 
 #include <cstdint>
-#include <string_view>
 
 namespace positronic_safety
 {
@@ -136,7 +135,7 @@ public:
   /// the one in flight (an answer that came after its timeout, or after a halt replaced it).
   [[nodiscard]] Order step_done(std::uint64_t ticket, bool ok)
   {
-    if (step_ == Step::NONE || ticket != ticket_) {
+    if (!waiting_for(ticket)) {
       return {};
     }
     if (mode_ == Mode::RESUMING && !ok) {
@@ -158,6 +157,13 @@ public:
         break;
     }
     return {};
+  }
+
+  /// True when `ticket` names the request in flight. The node asks before it acts on an
+  /// answer, so a late one changes nothing and logs nothing.
+  [[nodiscard]] bool waiting_for(std::uint64_t ticket) const
+  {
+    return step_ != Step::NONE && ticket == ticket_;
   }
 
   [[nodiscard]] Mode mode() const
@@ -208,8 +214,8 @@ private:
   bool hardware_stopped_{false};
 };
 
-/// Names for the log and the status. A value outside the enum gives "UNKNOWN".
-constexpr std::string_view to_string(Mode mode)
+/// Names for the log. A value outside the enum gives "UNKNOWN".
+[[nodiscard]] constexpr const char * to_string(Mode mode) noexcept
 {
   switch (mode) {
     case Mode::STOPPED:
@@ -224,7 +230,7 @@ constexpr std::string_view to_string(Mode mode)
   return "UNKNOWN";
 }
 
-constexpr std::string_view to_string(Reason reason)
+[[nodiscard]] constexpr const char * to_string(Reason reason) noexcept
 {
   switch (reason) {
     case Reason::NONE:
@@ -245,7 +251,7 @@ constexpr std::string_view to_string(Reason reason)
   return "UNKNOWN";
 }
 
-constexpr std::string_view to_string(Step step)
+[[nodiscard]] constexpr const char * to_string(Step step) noexcept
 {
   switch (step) {
     case Step::NONE:
