@@ -20,12 +20,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-"""Check the maths of joint_states_delay.py: one message, the line per second, the summary."""
+"""
+Check joint_states_delay.py: the maths, the files it writes, and the node without a graph.
+
+The node is created with rclpy initialised once for the module and fed JointState messages
+built by hand, so no launch and no publisher are needed.
+"""
 
 import importlib.util
 import os
 
 from builtin_interfaces.msg import Time
+import pytest
+import rclpy
+from sensor_msgs.msg import JointState
 
 SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       'scripts', 'joint_states_delay.py')
@@ -95,3 +103,50 @@ def test_write_results_makes_the_csv_and_the_summary(tmp_path):
     module.write_results(str(tmp_path), [(0.0, 4.0), (0.02, 5.5)], ['3 msgs', 'PASS'])
     assert (tmp_path / 'delays.csv').read_text() == 'seconds,delay_ms\n0.000,4.000\n0.020,5.500\n'
     assert (tmp_path / 'summary.txt').read_text() == '3 msgs\nPASS\n'
+
+
+@pytest.fixture(scope='module')
+def ros():
+    """Bring rclpy up for the node tests of this module, and down at the end."""
+    rclpy.init()
+    yield
+    rclpy.shutdown()
+
+
+def stamped(stamp_ns):
+    """Build a JointState with only what the node reads: the header stamp, from nanoseconds."""
+    sec, nanosec = divmod(stamp_ns, 10**9)
+    msg = JointState()
+    msg.header.stamp = Time(sec=sec, nanosec=nanosec)
+    return msg
+
+
+def test_node_measures_how_old_each_message_is(ros):
+    """Check on_message: a message stamped 5 ms ago is at least 5 ms late, and is kept twice."""
+    module = load_script()
+    node = module.JointStatesDelay()
+    try:
+        now_ns = node.get_clock().now().nanoseconds
+        node.on_message(stamped(now_ns - 5 * module.NS_PER_MS))
+
+        assert len(node.delays_ms) == 1
+        assert 5.0 <= node.delays_ms[0] < 1000.0  # at least 5 ms, plus the time this test took
+        assert len(node.samples) == 1
+        assert node.samples[0][1] == node.delays_ms[0]
+        assert node.samples[0][0] >= 0.0
+    finally:
+        node.destroy_node()
+
+
+def test_report_closes_the_second(ros):
+    """Check report: it logs the second and starts a new one, with or without messages."""
+    module = load_script()
+    node = module.JointStatesDelay()
+    try:
+        node.delays_ms = [4.0, 9.0]
+        node.report()
+        assert node.delays_ms == []
+        node.report()  # a second without messages is reported, not skipped
+        assert node.delays_ms == []
+    finally:
+        node.destroy_node()
