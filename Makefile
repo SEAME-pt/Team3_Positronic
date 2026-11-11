@@ -45,7 +45,7 @@ ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI
 
 # The packages that talk to the arm or command it (hardware, protocol, mission). A warning here fails
 # the build (CI runs this).
-TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission)/
+TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
 
 .DEFAULT_GOAL := help
 .PHONY: help image shell build test format format-check tidy tidy-strict doctor clean fclean
@@ -96,7 +96,7 @@ NANO_IMAGE    := positronic-runtime:nano
 # The packages the Jetson builds, plus whatever they depend on (colcon --packages-up-to).
 # MoveIt, Gazebo and RViz run on laptops only, so a package that needs them to build stays out
 # of this list. CI builds exactly this list in the runtime image (make nano-packages).
-NANO_PACKAGES := positronic_hardware positronic_bringup
+NANO_PACKAGES := positronic_hardware positronic_bringup positronic_safety
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
