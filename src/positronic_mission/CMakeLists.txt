@@ -13,6 +13,8 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(positronic_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 
 set(dependencies
   rclcpp
@@ -21,6 +23,8 @@ set(dependencies
   rclcpp_action
   rclcpp_components
   positronic_interfaces
+  geometry_msgs
+  lifecycle_msgs
 )
 
 include_directories(
@@ -42,6 +46,7 @@ install(
 
 add_library(mission_node_component SHARED
   src/mission_node.cpp
+  src/pose_validation.cpp
 )
 
 target_include_directories(mission_node_component PUBLIC
@@ -52,9 +57,9 @@ ament_target_dependencies(mission_node_component
   ${dependencies}
 )
 
-rclcpp_components_register_nodes(
-  mission_node_component
-  "positronic_mission::MissionNode"
+rclcpp_components_register_node(mission_node_component
+  PLUGIN "positronic_mission::MissionNode"
+  EXECUTABLE mission_node
 )
 
 install(TARGETS
@@ -68,17 +73,13 @@ if(BUILD_TESTING)
   # find_package(ament_lint_auto REQUIRED)
   # ament_lint_auto_find_test_dependencies()
 
-  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
 
-  ament_add_gtest(test_mission_unit
-    test/test_mission_unit.cpp
-  )
-  target_link_libraries(test_mission_unit
-  mission_node_component
-  )
-  ament_target_dependencies(test_mission_unit
-    ${dependencies}
-  )
+  foreach(test_name test_pose_validation test_goals)   # add test_pose_validation test_lifecycle test_failures as you write them
+    ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
+    target_link_libraries(${test_name} mission_node_component)
+    ament_target_dependencies(${test_name} ${dependencies})
+  endforeach()
 endif()
 
 ament_package()

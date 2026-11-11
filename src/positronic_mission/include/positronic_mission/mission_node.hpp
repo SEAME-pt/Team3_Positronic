@@ -39,8 +39,11 @@
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
-#include "geometry_msgs/msg/pose_stamped.hpp"
+//#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "positronic_interfaces/srv/state_trigger.hpp"
+#include <rclcpp/rate.hpp>
+#include "positronic_mission/motion_backend.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission
 {
@@ -83,10 +86,13 @@ public:
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /* state */) override;
 
+  // Backend interface (mock or moveit)
+  void set_backend(std::shared_ptr<MotionBackend> backend) { backend_ = std::move(backend); }
+
 private:
     void reset_ptrs();
     void heart_beat();
-    bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
+    // bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal);
     rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & goal_handle);
     void handle_accepted(const std::shared_ptr<GoalHandle> & goal_handle);
@@ -109,6 +115,9 @@ private:
     std::thread exec_thread_;
     rclcpp::TimerBase::SharedPtr timer_{nullptr};
     std::atomic<State> state_{State::INACTIVE};
+
+    // Backend interface (mock or moveit)
+    std::shared_ptr<MotionBackend> backend_{nullptr};
 };
 } //namespace positronic_mission
 
