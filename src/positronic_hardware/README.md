@@ -69,8 +69,9 @@ the real one, with the parameters as xacro arguments.
 </ros2_control>
 ```
 
-`<limits enable="false"/>` is part of the joint limit check, see below. The `driver` gpio with
-its one `fault_code` state interface is required too: it is how the driver reports a fault to
+`<limits enable="false"/>` is part of the joint limit check, see below. A `driver` gpio with
+a `fault_code` state interface is required too (other gpios and other `driver` interfaces are
+allowed; a `fault_code` command interface is not): it is how the driver reports a fault to
 the supervisor (#35, see "Link timeout"). The Gazebo xacro in
 `positronic_description` loads `gz_ros2_control/GazeboSimSystem` instead of this plugin, so it
 cannot be reused as is for the real arm.
@@ -176,8 +177,15 @@ supervisor gets it within 200 ms plus one control period (33 ms at 30 Hz).
 **What the arm does on silence.** It finishes its last commanded target and holds there: 8 of
 8 classifiable trials at our operating point (30 Hz) in #20, the other 2 too close to the target
 to tell (`docs/03_verification/serial_measurement/docs/serial_link.md`, section 5.1). So the latch cannot stop a move already sent; it keeps any new target from going out,
-and the stop reaches the arm only if the line comes back. On a dead line only the hardware stop
-(#45) stops the arm.
+and the stop reaches the arm only if the line comes back. **On a dead line no software stops a
+move in progress, the supervisor (#45) included: only cutting the servo power does.** The
+hardware stop button (#27) was closed without being built in M1, so today that means the power
+switch.
+
+**Who reads it.** The driver only exports `driver/fault_code` inside the controller manager;
+nothing publishes it to a topic yet. `joint_state_broadcaster` publishes joints only, and
+`jetson_controllers.yaml` has no gpio controller. Making it readable by the supervisor is part
+of #45.
 
 **On the arm.** `hil_link_timeout` (built with the tests, never run by ctest) drives `SerialArm`
 on the real port through a transport that drops every reply, mid-motion, and prints one CSV line

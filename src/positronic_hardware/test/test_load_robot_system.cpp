@@ -64,6 +64,14 @@
 //   ACTIVE; after a refusal the component configures and activates again; on_init refuses a
 //   joint without a revolute <limit> and swapped limits; on_activate refuses an arm that stands
 //   outside its limits.
+// Follow-up prompt (#35):
+//   The plugin exports driver/fault_code from a <gpio name="driver"> and latches a link timeout
+//   there. Test that: the interface is exported; on_init refuses a missing driver gpio, a missing
+//   fault_code state and a fault_code command, and accepts extra driver states and other gpios;
+//   the code is 0 while the link is alive; on a pseudo-terminal, an arm that stops answering
+//   gives fault 1 with the component still ACTIVE, the fault stays latched and no send_angles
+//   leaves when replies resume, deactivate and activate clear it and targets go out again; and
+//   on_activate refuses a link that went silent.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -945,6 +953,20 @@ TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
     EXPECT_FALSE(loaded_);
     EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
   }
+}
+
+TEST_F(LoadRobotSystem, InitAcceptsMoreDriverStatesAndOtherGpios)
+{
+  // Only the fault is required: S3 adds driver states such as a temperature (#115), and other
+  // gpios may come, without the driver refusing to start.
+  const std::string gpios{
+    R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+    R"(<state_interface name="temperature_max"/></gpio>)"
+    R"(<gpio name="gripper"><state_interface name="position"/></gpio>)"};
+  load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), gpios));
+
+  EXPECT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)

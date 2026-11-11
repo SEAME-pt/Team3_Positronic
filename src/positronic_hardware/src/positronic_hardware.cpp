@@ -36,6 +36,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <vector>
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
 #include "urdf/model.h"
@@ -61,16 +62,32 @@ bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
          has(hardware_interface::HW_IF_VELOCITY);
 }
 
-/// True if the <ros2_control> block has exactly the fault <gpio> (#35): one <gpio> named
-/// FAULT_GPIO with one state interface FAULT_STATE and no command interface.
+/// True if one of `interfaces` is called `name`.
+bool has_interface(
+  const std::vector<hardware_interface::InterfaceInfo> & interfaces, std::string_view name)
+{
+  return std::any_of(
+    interfaces.begin(), interfaces.end(),
+    [name](const hardware_interface::InterfaceInfo & candidate) {
+      return candidate.name == name;
+    });
+}
+
+/// True if the <ros2_control> block has a <gpio> named FAULT_GPIO with a FAULT_STATE state
+/// interface, and no command interface of that name (#35). Only the fault is required: other
+/// gpios, and other interfaces on this one, are allowed, so S3 can add driver states such as
+/// a temperature (#115) without touching this check.
 bool has_fault_gpio(const hardware_interface::HardwareInfo & info)
 {
-  if (info.gpios.size() != 1) {
-    return false;
+  for (const hardware_interface::ComponentInfo & gpio : info.gpios) {
+    if (gpio.name == FAULT_GPIO) {
+      // A command interface of the same name could be claimed by a controller and overwrite
+      // the fault, so it is refused.
+      return has_interface(gpio.state_interfaces, FAULT_STATE) &&
+             !has_interface(gpio.command_interfaces, FAULT_STATE);
+    }
   }
-  const hardware_interface::ComponentInfo & gpio{info.gpios.front()};
-  return gpio.name == FAULT_GPIO && gpio.command_interfaces.empty() &&
-         gpio.state_interfaces.size() == 1 && gpio.state_interfaces.front().name == FAULT_STATE;
+  return false;
 }
 
 /// A FaultCode as the value of the fault state interface: a small whole number, exact in a double.
@@ -233,8 +250,9 @@ CallbackReturn RobotSystem::on_init(
   if (!has_fault_gpio(info)) {
     RCLCPP_ERROR(
       get_logger(),
-      "The <ros2_control> block must have exactly one <gpio name=\"%s\"> with one "
-      "<state_interface name=\"%s\"/>, as positronic_real.urdf.xacro does.",
+      "The <ros2_control> block must have a <gpio name=\"%s\"> with a "
+      "<state_interface name=\"%s\"/> and no command interface of that name, as "
+      "positronic_real.urdf.xacro does.",
       std::string{FAULT_GPIO}.c_str(), std::string{FAULT_STATE}.c_str());
     return CallbackReturn::ERROR;
   }
@@ -585,8 +603,9 @@ void RobotSystem::raise_fault(FaultCode code)
     return;
   }
   // Going silent does not stop the arm: it finishes its last target (#20, serial_link.md
-  // section 5). request_halt() holds every target and leaves a stop for the serial thread; on a
-  // dead link that stop may never arrive, which is why #45 also needs the hardware stop.
+  // section 5). request_halt() holds every target and leaves a stop for the serial thread. On a
+  // dead line that stop never arrives, and no software can stop a move already sent, #45
+  // included: only cutting the servo power does.
   arm_->request_halt();
   // Logged once, at the transition, like a refusal (#34): read() does not log on later cycles.
   RCLCPP_ERROR(

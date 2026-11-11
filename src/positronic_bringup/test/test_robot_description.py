@@ -34,8 +34,9 @@
 #   with <limits enable="false"/>, for both backends, and that every one of them still has a
 #   <limit> in the URDF for the plugin to read.
 # Follow-up prompt (#35):
-#   Check that the <ros2_control> block has one <gpio name="driver"> with one state interface,
-#   fault_code, and no command interface, for both backends.
+#   Check that the <ros2_control> block has one <gpio name="driver"> with a fault_code state
+#   interface and no fault_code command interface, for both backends. Other interfaces on it
+#   are allowed (S3 adds a temperature, #115).
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -146,8 +147,11 @@ def test_every_commanded_joint_has_a_urdf_limit():
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
 def test_driver_reports_the_fault_code(backend):
-    """Check the one gpio the supervisor reads, driver/fault_code, with no command (#35)."""
-    gpios = expand(backend=backend).findall('ros2_control/gpio')
-    assert [gpio.get('name') for gpio in gpios] == ['driver']
-    assert [state.get('name') for state in gpios[0].findall('state_interface')] == ['fault_code']
-    assert gpios[0].findall('command_interface') == []
+    """Check that the driver gpio has a fault_code state and no fault_code command (#35)."""
+    drivers = [gpio for gpio in expand(backend=backend).findall('ros2_control/gpio')
+               if gpio.get('name') == 'driver']
+    assert len(drivers) == 1
+    states = [state.get('name') for state in drivers[0].findall('state_interface')]
+    commands = [command.get('name') for command in drivers[0].findall('command_interface')]
+    assert 'fault_code' in states
+    assert 'fault_code' not in commands
