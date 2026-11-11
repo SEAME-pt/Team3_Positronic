@@ -32,6 +32,8 @@
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <!-- test_controllers_config.py reads jetson_controllers.yaml. -->
+  <test_depend>python3-yaml</test_depend>
   <test_depend>builtin_interfaces</test_depend>
 
   <export>

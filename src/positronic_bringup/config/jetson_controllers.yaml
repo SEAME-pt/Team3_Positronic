@@ -14,6 +14,12 @@ controller_manager:
     # ones in between are replaced, not queued. A higher rate would only repeat poses and
     # replace more commands.
     update_rate: 30
+    # No parameters, on purpose (#45). With `joints` and `interfaces` unset it claims every
+    # state interface and publishes them all on /dynamic_joint_states, the `driver` gpio
+    # included: that is where the safety supervisor reads driver/fault_code. Setting both
+    # `joints` and `interfaces`, `publish_dynamic_joint_states: false` or
+    # `use_local_topics: true` takes the fault code away from the supervisor, which then halts
+    # the arm. test_controllers_config.py checks this.
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
