@@ -14,7 +14,7 @@ name: Claude review
 # The rules it reviews against are in CLAUDE.md at the repo root.
 # It runs on the team's Claude subscription, not on paid API credits: the secret
 # CLAUDE_CODE_OAUTH_TOKEN comes from `claude setup-token`, run by the seat that lends its usage.
-# (<name of the seat owner>). Each review uses that seat's usage limits. The token lasts a year.
+# Each review uses that seat's usage limits. The token lasts a year.
 # Pick a model for one run with "model:haiku", "model:sonnet" or "model:opus" in the comment;
 # otherwise the repository variable CLAUDE_REVIEW_MODEL, otherwise Sonnet.
 
