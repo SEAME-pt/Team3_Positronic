@@ -22,9 +22,11 @@
 #define POSITRONIC_HARDWARE__POSITRONIC_HARDWARE_HPP_
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "hardware_interface/handle.hpp"
@@ -41,6 +43,27 @@
 
 namespace positronic_hardware
 {
+
+/// What the driver reports in its fault state interface (#35), as a whole number in a double.
+/// The supervisor (#45) stops the arm on any value other than NONE, so a new fault needs no
+/// change there. The values are part of the interface: add new ones at the end, never reuse or
+/// renumber one.
+enum class FaultCode : std::uint8_t
+{
+  /// No fault: the link is alive (or the component is not active).
+  NONE = 0,
+  /// No valid reply from the arm for LinkWatchdog::DEFAULT_TIMEOUT while active. Latched until
+  /// the next activate.
+  LINK_TIMEOUT = 1,
+  /// Reserved for S3, "the arm does not follow the target". Not raised yet.
+  TRACKING_ERROR = 2,
+};
+
+/// The <gpio> of the <ros2_control> block that carries the fault, and its one state interface.
+/// The supervisor reads "driver/fault_code".
+inline constexpr std::string_view FAULT_GPIO{"driver"};
+inline constexpr std::string_view FAULT_STATE{"fault_code"};
+
 class RobotSystem : public hardware_interface::SystemInterface
 {
 public:
@@ -100,6 +123,10 @@ private:
   /// position limit: the driver must not run without its last guard.
   bool load_limits(const hardware_interface::HardwareInfo & info);
 
+  /// Latches `code` (#35): stores it, asks the backend to stop the arm, and logs it once. Only
+  /// the first fault is kept; on_activate clears it. No allocation: safe from read().
+  void raise_fault(FaultCode code);
+
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
@@ -121,6 +148,11 @@ private:
   std::unique_ptr<ArmBackend> arm_;
   VelocityEstimator velocity_estimator_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
+  /// "driver/fault_code", looked up once like the joint handles.
+  hardware_interface::StateInterface::SharedPtr fault_handle_;
+  /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
+  /// another thread: an atomic keeps both sides safe without a lock.
+  std::atomic<FaultCode> fault_{FaultCode::NONE};
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
