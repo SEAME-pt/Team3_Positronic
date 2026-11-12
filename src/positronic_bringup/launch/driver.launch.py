@@ -44,6 +44,7 @@ Launch arguments:
   update_rate:=30             Hz, of the control loop and of /joint_states
   moving_period_ms:=50        ms of a serial-thread turn that sends a command
   send_settle_ms:=30          ms the thread waits after a send_angles before a get_angles
+  servo_temp_limit_c:=60      degC that cuts the arm (stop, then power off); 30 to 60
 """
 
 from launch import LaunchDescription
@@ -72,6 +73,10 @@ def generate_launch_description():
     send_settle_ms = DeclareLaunchArgument(
         'send_settle_ms', default_value='30',
         description='ms the arm needs after a send_angles before a get_angles (30 measured).')
+    # The over-temperature cut. Only lower it, for the hardware test of the cut.
+    servo_temp_limit_c = DeclareLaunchArgument(
+        'servo_temp_limit_c', default_value='60',
+        description='degC at which a servo stops the arm and powers it off (30 to 60).')
     # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
     # without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -93,6 +98,7 @@ def generate_launch_description():
             ' baud:=', LaunchConfiguration('baud'),
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
             ' send_settle_ms:=', LaunchConfiguration('send_settle_ms'),
+            ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
         ]),
         value_type=str)
 
@@ -133,6 +139,7 @@ def generate_launch_description():
         baud,
         moving_period_ms,
         send_settle_ms,
+        servo_temp_limit_c,
         update_rate,
         robot_state_publisher,
         control_node,
