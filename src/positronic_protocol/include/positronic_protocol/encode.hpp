@@ -44,6 +44,9 @@ namespace positronic_protocol
 /// Request frame for get_angles: `FE FE 02 20 FA`.
 [[nodiscard]] Frame encode_get_angles() noexcept;
 
+/// Request frame for get_servo_temps: `FE FE 02 E5 FA`.
+[[nodiscard]] Frame encode_get_servo_temps() noexcept;
+
 /// Request frame for send_angles: `FE FE 0F 22` + 6 x int16 big-endian + speed + `FA`.
 ///
 /// @param angles Target joint angles in 0.01 deg.
