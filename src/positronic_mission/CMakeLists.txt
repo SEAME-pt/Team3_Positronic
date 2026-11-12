@@ -15,6 +15,7 @@ find_package(rclcpp_components REQUIRED)
 find_package(positronic_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
 
 set(dependencies
   rclcpp
@@ -25,6 +26,7 @@ set(dependencies
   positronic_interfaces
   geometry_msgs
   lifecycle_msgs
+  moveit_ros_planning_interface
 )
 
 include_directories(
@@ -75,7 +77,7 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_ros REQUIRED)
 
-  foreach(test_name test_pose_validation test_goals)   # add test_pose_validation test_lifecycle test_failures as you write them
+  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
     ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mission_node_component)
     ament_target_dependencies(${test_name} ${dependencies})

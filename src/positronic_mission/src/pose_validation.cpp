@@ -18,7 +18,7 @@ namespace positronic_mission
     {
         // We need to create a list of accepted frames
         // For now, only base_link is accepted
-        if (pose.header.frame_id != "base_link") {
+        if (pose.header.frame_id != "g_base") {
             return "invalid frame_id";
         }
 

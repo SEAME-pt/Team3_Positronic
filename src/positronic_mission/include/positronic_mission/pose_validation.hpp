@@ -6,6 +6,8 @@
 
 namespace positronic_mission
 {
+    inline constexpr const char * BASE_FRAME = "g_base";
+
     // Empty string if valid, otherwise returns the reason
     std::string validate_pose(const geometry_msgs::msg::PoseStamped & pose);
 }   // namespace positronic_mission

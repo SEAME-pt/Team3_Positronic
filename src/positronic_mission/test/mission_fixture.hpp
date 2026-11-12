@@ -24,7 +24,8 @@
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_mission/mission_node.hpp"
 // MockBackend lives here for now. When you move it, change this to "mock_backend.hpp"
-#include "positronic_mission/motion_backend.hpp"
+#include "mock_backend.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission
 {
@@ -35,6 +36,7 @@ using namespace std::chrono_literals;
 using GoalHandleClient = rclcpp_action::ClientGoalHandle<GoToPose>;
 using WrappedResult = GoalHandleClient::WrappedResult;
 using PoseStamped = geometry_msgs::msg::PoseStamped;
+using LifeState = lifecycle_msgs::msg::State;
 
 class MissionNodeTest : public ::testing::Test
 {
@@ -61,8 +63,16 @@ protected:
         reset_client_ = client_node_->create_client<StateTrigger>("/mission/reset");
         heartbeat_sub_ = client_node_->create_subscription<Heartbeat>(
             "/mission/heartbeat", rclcpp::QoS(10).best_effort(),
-            [this](const Heartbeat::SharedPtr msg) {
+            [this](const Heartbeat::SharedPtr  msg) {
                 last_state_ = msg->state;
+                if (msg->node_name != "mission_node") {
+                    node_name_ok_ = false;
+                }
+                const int64_t stamp = rclcpp::Time(msg->stamp).nanoseconds();
+                if (stamp <= last_stamp_ns_) {
+                    last_stamp_ok_ = false;
+                }
+                last_stamp_ns_ = stamp;
                 ++heartbeat_count_;
             });
 
@@ -108,7 +118,7 @@ protected:
     static PoseStamped valid_pose()
     {
         PoseStamped p;
-        p.header.frame_id = "base_link";
+        p.header.frame_id = BASE_FRAME;
         p.pose.position.x = 0.15;
         p.pose.position.z = 0.20;
         p.pose.orientation.w = 1.0;
@@ -190,6 +200,31 @@ protected:
         return future.get();
     }
 
+    void cycle(int amount) {
+        for (int i = 0; i < amount; i++) {
+            ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
+            ASSERT_EQ(node_->cleanup().id(), LifeState::PRIMARY_STATE_UNCONFIGURED);
+            ASSERT_EQ(node_->configure().id(), LifeState::PRIMARY_STATE_INACTIVE);
+            ASSERT_EQ(node_->activate().id(), LifeState::PRIMARY_STATE_ACTIVE);
+        }
+        // Giving time for the client to discover the newaction server
+        last_state_ = 255;
+        ASSERT_TRUE(action_client_->wait_for_action_server(2s));
+        ASSERT_TRUE(wait_for_state(State::IDLE));
+    }
+
+    void deactivate_activate_cycle() {
+        ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
+        std::this_thread::sleep_for(100ms);
+
+        // Reseting last state before waiting for a new one.
+        last_state_ = 255;
+        std::this_thread::sleep_for(300ms);
+        EXPECT_EQ(last_state_, 255);
+
+        ASSERT_EQ(node_->activate().id(), LifeState::PRIMARY_STATE_ACTIVE);
+    }
+
     // ================= Members =================
     std::shared_ptr<MockBackend> mock_;
     std::shared_ptr<MissionNode> node_;
@@ -205,6 +240,9 @@ protected:
 
     // Written by subscription/feedback callbacks (executor thread), read by tests
     std::atomic<uint8_t> last_state_{255};   // 255 = no heartbeat yet
+    std::atomic<bool> node_name_ok_{true};
+    std::atomic<bool> last_stamp_ok_{true};
+    std::atomic<int64_t> last_stamp_ns_{0};
     std::atomic<int> heartbeat_count_{0};
     std::atomic<int> feedback_count_{0};
 };

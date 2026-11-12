@@ -127,7 +127,9 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
     //      return nullptr;
     // }
     if (!backend_) {
-        backend_ = std::make_shared<MockBackend>();
+       // backend_ = std::make_shared<MockBackend>();
+       RCLCPP_ERROR(get_logger(), "No motion backend set");
+       return CallbackReturn::FAILURE;
     }
 
     timer_ = create_wall_timer(100ms, [this]{heart_beat();});

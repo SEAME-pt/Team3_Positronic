@@ -1,45 +1,72 @@
 // Pure gtest, no ROS. Just call validate_pose and check the result.
 
-#include <gtest/gtest.h>
 #include "mission_fixture.hpp"
-#include "positronic_mission/pose_validation.hpp"
 
-using positronic_mission::State;
 using positronic_mission::GoToPose;
-using positronic_mission::MotionOutcome;
-using rclcpp_action::ResultCode;
 using namespace positronic_mission::test;
 
 // ======================= Pose Check =======================
 
-TEST_F(MissionNodeTest, PoseValidationCheck)
+namespace {
+    geometry_msgs::msg::PoseStamped valid_pose()
+    {
+        PoseStamped p;
+        p.header.frame_id = positronic_mission::BASE_FRAME;
+        p.pose.position.x = 0.15;
+        p.pose.position.z = 0.20;
+        p.pose.orientation.w = 1.0;
+        return p;
+    }
+}
+
+TEST(PoseValidation, FrameValidation)
 {
     auto p = valid_pose();
     auto q = valid_pose();
+    auto r = valid_pose();
+
     p.header.frame_id = "invalid";
     q.header.frame_id = "";
 
     EXPECT_EQ(positronic_mission::validate_pose(p), "invalid frame_id");
     EXPECT_EQ(positronic_mission::validate_pose(q), "invalid frame_id");
+    EXPECT_EQ(positronic_mission::validate_pose(r), "");
+}
 
-    p = valid_pose();
-    q = valid_pose();
 
-    p.pose.orientation.w = 2.0;
-    p.pose.orientation.x = 1.0;
+TEST(PoseValidation, QuaternionValidation)
+{
+    auto p = valid_pose();
+    auto q = valid_pose();
+    auto r = valid_pose();
+    auto s = valid_pose();
+    auto t = valid_pose();
 
-    q.pose.orientation.x = -1.0;
-    q.pose.orientation.z = -1.0;
-    q.pose.orientation.y = -1.0;
+    p.pose.orientation.w = 0.0;
+    q.pose.orientation.x = 0.7071;
+    q.pose.orientation.w = 0.7071;
+    r.pose.orientation.w = 1.002;
+    s.pose.orientation.w = -1.0;
+    t.pose.orientation.w = 1.0005;
 
     EXPECT_EQ(positronic_mission::validate_pose(p), "invalid quaternion");
-    EXPECT_EQ(positronic_mission::validate_pose(q), "invalid quaternion");
+    EXPECT_EQ(positronic_mission::validate_pose(q), "");
+    EXPECT_EQ(positronic_mission::validate_pose(r), "invalid quaternion");
+    EXPECT_EQ(positronic_mission::validate_pose(s), "");
+    EXPECT_EQ(positronic_mission::validate_pose(t), "");
+}
 
-    p = valid_pose();
-    q = valid_pose();
+TEST(PoseValidation, NonFiniteValidation)
+{
+    auto p = valid_pose();
+    auto q = valid_pose();
+    auto r = valid_pose();
 
-    p.pose.position.x = NAN;
-    q.pose.position.z = INFINITY;
+    p.pose.orientation.x = NAN;
+    q.pose.position.x = NAN;
+    r.pose.position.z = INFINITY;
+
     EXPECT_EQ(positronic_mission::validate_pose(p), "non numeric pose value");
     EXPECT_EQ(positronic_mission::validate_pose(q), "non numeric pose value");
+    EXPECT_EQ(positronic_mission::validate_pose(r), "non numeric pose value");
 }
