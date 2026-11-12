@@ -2,11 +2,15 @@
 #define POSITRONIC_MISSION__MOVEIT_BACKEND_HPP_
 
 #include <atomic>
-#include <chrono>
+#include <memory>
+#include <string>
 #include <thread>
+#include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "positronic_mission/motion_backend.hpp"
-#include <moveit/move_group_interface/move_group_interface.h>
+
+// Forwarding the class to the .cpp file
+namespace moveit::planning_interface { class MoveGroupInterface; }
 
 namespace positronic_mission
 {
@@ -14,54 +18,35 @@ namespace positronic_mission
 class MoveitBackend: public MotionBackend
 {
 public:
+    explicit MoveitBackend(const std::string & group_name);
+    ~MoveitBackend() override;
+    MoveitBackend(const MoveitBackend &) = delete;
+    MoveitBackend &operator=(const MoveitBackend &) = delete;
+    MoveitBackend(MoveitBackend &&) = delete;
+    MoveitBackend &operator=(MoveitBackend &&) = delete;
 
     // Blocking. Called from the execute thread.
-    MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose)
-    {
-            /*
-             * What MoveIt takes and gives back
-
-             The simplest route is MoveGroupInterface:
-
-             Your backend	                 MoveIt call	                    Returns
-             plan_and_execute(pose)	    setPoseTarget(pose), then plan(plan)	MoveItErrorCode
-                                        execute(plan) (blocking)               	MoveItErrorCode
-             stop()	                    stop() (safe from another thread)	    nothing
-
-             Then map the error codes to your MotionOutcome:
-             plan() not SUCCESS → PLANNING_FAILED
-             execute() gives PREEMPTED → PREEMPTED
-             execute() gives anything else that isn’t SUCCESS → EXECUTION_FAILED
-             */
-
-            // To follow your stop contract
-            // check the stop flag before planning
-            // between planning and executing
-            // and before returning.
-
-            if (stop_requested_) {
-                return MotionOutcome::PREEMPTED;
-            }
-            return MotionOutcome::OK;
-    }
+    MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) override;
 
     // Must be safe to call from any thread. Makes a running
     // plan_and_execute return PREEMPTED.
-    void stop()
-    {
-        stop_requested_ = true;
-    }
+    void stop() override;
 
     // Clears a pending stop. Called by the node only when a new goal is accepted.
-    void reset_stop()
-    {
-        stop_requested_ = false;
-    }
+    void reset_stop() override;
+
+    // Creates the move_group_. If it's unavailable returns false
+    // To be used in on_activate()
+    bool ready() override;
 
 private:
+    std::string group_name_;
+    std::thread spin_thread_;
+    std::shared_ptr<rclcpp::Node> node_{nullptr};
     std::atomic<bool> stop_requested_{false};
-
+    std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_{nullptr};
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_{nullptr};
 };
 }  // namespace positronic_mission
 
-#endif  // POSITRONIC_MISSION__MOVEIT
+#endif  // POSITRONIC_MISSION__MOVEIT_BACKEND_HPP_

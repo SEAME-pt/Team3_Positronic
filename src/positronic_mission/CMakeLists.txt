@@ -49,6 +49,7 @@ install(
 add_library(mission_node_component SHARED
   src/mission_node.cpp
   src/pose_validation.cpp
+  src/moveit_backend.cpp
 )
 
 target_include_directories(mission_node_component PUBLIC

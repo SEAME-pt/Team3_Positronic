@@ -22,6 +22,7 @@
 #include <rclcpp/logging.hpp>
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_mission/motion_backend.hpp"
+#include "positronic_mission/moveit_backend.hpp"
 
 using namespace std::chrono_literals;
 
@@ -118,18 +119,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
             handle_accepted(goal_handle);
         });
 
-    // Fake backend
-    // Only uses Mock Backend for now. Need to update it to <MoveitBackend>();
-    // Or a not so clean idea. Keep both
-    // std::shared_ptr<MotionBackend> get_backend(const std::string & type) {
-    //      if type == "real" { return std::make_shared<MoveitBackend>() };
-    //      if type == "mock" { return std::make_shared<MockBackend>() };
-    //      return nullptr;
-    // }
     if (!backend_) {
-       // backend_ = std::make_shared<MockBackend>();
-       RCLCPP_ERROR(get_logger(), "No motion backend set");
-       return CallbackReturn::FAILURE;
+        backend_ = std::make_shared<MoveitBackend>("arm");
     }
 
     timer_ = create_wall_timer(100ms, [this]{heart_beat();});
@@ -165,15 +156,11 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
 {
     RCLCPP_INFO(get_logger(), "IN on_activate");
 
-    // State is a placeholder
-    // I need to check if the arm is actually state
-    // TODO (possible strategies):
-    // can read from /joint_states
-    // check move_group node
-    // controller status from ros2_control
+    if (!backend_->ready()) {
+        RCLCPP_ERROR(get_logger(), "MoveIt not available, staying inactive");
+        return CallbackReturn::FAILURE;
+    }
 
-    // For now. Only put into IDLE if the arm was INACTIVE.
-    // Does not override STOPPED and ERROR States
     State expected = State::INACTIVE;
     state_.compare_exchange_strong(expected, State::IDLE);
     LifecycleNode::on_activate(state);

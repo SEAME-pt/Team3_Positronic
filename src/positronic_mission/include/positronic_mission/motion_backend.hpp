@@ -27,6 +27,9 @@ public:
 
     // Clears a pending stop. Called by the node only when a new goal is accepted.
     virtual void reset_stop() = 0;
+
+    // Check if the move_groups is accessible to validade the backend connection
+    virtual bool ready() = 0;
 };
 }  // namespace positronic_mission
 

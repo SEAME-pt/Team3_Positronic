@@ -51,6 +51,11 @@ public:
         stop_requested_ = false;
     }
 
+    bool ready() override
+    {
+        return true;
+    }
+
 private:
     std::atomic<bool> stop_requested_{false};
 };
