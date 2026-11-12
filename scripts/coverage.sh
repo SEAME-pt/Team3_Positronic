@@ -10,6 +10,7 @@
 #   counted    C++ and Python under src/, including files no test opens (at 0 %)
 #   */test/*   test code covering itself would inflate the number
 #   */launch/* configuration, checked by running the simulation (.coveragerc)
+#   */setup.py packaging, not robot code (.coveragerc)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

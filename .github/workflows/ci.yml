@@ -64,7 +64,7 @@ jobs:
       # build/ of the steps around it is not touched.
       #   Counted:  C++ and Python under src/, including files no test runs (at 0 %)
       #   Excluded: */test/* (tests covering themselves), */launch/* (configuration, checked in
-      #             the simulation), see .coveragerc
+      #             the simulation), */setup.py (packaging), see .coveragerc
       # Report-only until #46 (Sprint 03): a package below 80 % marks this step red, but the job
       # still passes. Remove continue-on-error then.
       # The gate writes its table to GITHUB_STEP_SUMMARY. The container can't see the runner's
