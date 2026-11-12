@@ -1,0 +1,44 @@
+# Parameters of the safety supervisor on the real arm (#45). Read by supervised.launch.py.
+#
+# Every value here is also the default in the node (positronic_safety, safety_supervisor.cpp).
+# They are written out so the values the arm runs with are in one place, next to
+# jetson_controllers.yaml, and so the tests of this package can check the two files and the
+# URDF against each other (test_controllers_config.py, test_robot_description.py).
+safety_supervisor:
+  ros__parameters:
+    # The <ros2_control> block of positronic_real.urdf.xacro.
+    hardware_component: positronic_arm
+    controller_manager: /controller_manager
+    # Its goals are cancelled by a halt.
+    trajectory_action: /arm_controller/follow_joint_trajectory
+
+    # A resume activates these, after the hardware component. joint_state_broadcaster is in
+    # the list because the controller manager deactivates it too when the driver returns an
+    # error, and the supervisor reads the fault code from it.
+    controllers_to_start:
+      - joint_state_broadcaster
+      - arm_controller
+    # A halt deactivates these: EVERY controller of jetson_controllers.yaml that writes a
+    # command interface. One left active writes its old target again as soon as the hardware
+    # component is activated, and the arm moves to it.
+    controllers_to_stop:
+      - arm_controller
+      - forward_position_controller
+
+    # The mission node publishes at 10 Hz, so 200 ms tolerates one late heartbeat.
+    heartbeat_topic: /mission/heartbeat
+    heartbeat_timeout_ms: 200
+
+    # driver/fault_code, as joint_state_broadcaster publishes it at the control rate (30 Hz).
+    fault_topic: /dynamic_joint_states
+    fault_gpio: driver
+    fault_interface: fault_code
+    fault_timeout_ms: 200
+
+    # How long one request of a halt or of a resume may stay unanswered. A halt then sends its
+    # next request; a resume turns into a halt. Above what the driver needs to answer: 300 ms
+    # to deactivate, 1.3 s to activate.
+    halt_step_timeout_ms: 500
+    resume_step_timeout_ms: 3000
+    # Period of the supervisor's own check of the timeouts.
+    check_period_ms: 20

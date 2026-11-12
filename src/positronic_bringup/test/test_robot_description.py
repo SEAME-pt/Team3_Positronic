@@ -37,6 +37,10 @@
 #   Check that the <ros2_control> block has one <gpio name="driver"> with a fault_code state
 #   interface and no fault_code command interface, for both backends. Other interfaces on it
 #   are allowed (S3 adds a temperature, #115).
+# Follow-up prompt (#45):
+#   The safety supervisor does not depend on positronic_hardware: it takes the names of the
+#   hardware component and of the fault interface from config/safety_supervisor.yaml. Check
+#   that those names are the ones of the <ros2_control> block.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -46,6 +50,10 @@ import xml.etree.ElementTree as ElementTree
 from ament_index_python.packages import get_package_share_directory
 import pytest
 import xacro
+import yaml
+
+SUPERVISOR_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 'config', 'safety_supervisor.yaml')
 
 
 def xacro_file():
@@ -155,3 +163,15 @@ def test_driver_reports_the_fault_code(backend):
     commands = [command.get('name') for command in drivers[0].findall('command_interface')]
     assert 'fault_code' in states
     assert 'fault_code' not in commands
+
+
+def test_supervisor_reads_the_names_of_this_description():
+    """Check safety_supervisor.yaml against the <ros2_control> block (#45)."""
+    with open(SUPERVISOR_CONFIG) as file:
+        params = yaml.safe_load(file)['safety_supervisor']['ros__parameters']
+    block = expand().find('ros2_control')
+    assert params['hardware_component'] == block.get('name')
+    gpios = {gpio.get('name'): gpio for gpio in block.findall('gpio')}
+    assert params['fault_gpio'] in gpios
+    driver = gpios[params['fault_gpio']]
+    assert params['fault_interface'] in [s.get('name') for s in driver.findall('state_interface')]

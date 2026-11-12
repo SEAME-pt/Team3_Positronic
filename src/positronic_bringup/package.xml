@@ -21,6 +21,9 @@
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>positronic_hardware</exec_depend>
+  <!-- supervised.launch.py starts the safety supervisor and configures it (#45). -->
+  <exec_depend>positronic_safety</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
 
@@ -34,6 +37,9 @@
   <test_depend>python3-pytest</test_depend>
   <!-- test_controllers_config.py reads jetson_controllers.yaml. -->
   <test_depend>python3-yaml</test_depend>
+  <!-- test_launch_files.py builds the launch descriptions. -->
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
   <test_depend>builtin_interfaces</test_depend>
 
   <export>
