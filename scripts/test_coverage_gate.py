@@ -29,6 +29,8 @@
 #   $GITHUB_STEP_SUMMARY.
 #   Then: the gate is per package. One package below 80 % fails it even when the total is above,
 #   and the report marks each package PASS or FAIL.
+#   Then: .py files coverage.py did not see count at 0 % with coverage.py's statement count, so
+#   an untested Python package fails; setup.py is skipped; an unparsable file exits 2.
 
 """Unit tests for the coverage gate of issue #109 (no ROS 2 needed)."""
 
@@ -113,7 +115,7 @@ def test_one_package_below_fails_even_when_the_total_passes():
 
 def test_python_files_skip_test_and_launch(tmp_path):
     for rel in ('src/pkg/scripts/node.py', 'src/pkg/test/test_node.py',
-                'src/pkg/launch/sim.launch.py', 'src/pkg/pkg/helper.py'):
+                'src/pkg/launch/sim.launch.py', 'src/pkg/pkg/helper.py', 'src/pkg/setup.py'):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text('')
     found = gate.python_files(str(tmp_path / 'src'))
@@ -129,7 +131,7 @@ def test_report_lists_packages_total_and_verdict():
     assert '| positronic_hardware | 100 / 120 | 83.3 % | PASS |' in text
     assert '| positronic_mission | 0 / 40 | 0.0 % | FAIL |' in text
     assert '| **Total** (information) | **120 / 200** | **60.0 %** | |' in text
-    assert 'WARNING' in text and '- src/pkg/x.py' in text
+    assert 'Counted at 0 % (no test imports them):' in text and '- src/pkg/x.py' in text
     assert text.rstrip().endswith(
         'FAIL: 2 of 3 packages below 80 %: positronic_bringup, positronic_mission')
 
@@ -150,3 +152,42 @@ def test_main_exit_codes_and_step_summary(tmp_path, monkeypatch):
     assert gate.main([str(bad)] + no_src) == 1
     assert gate.main([str(empty)] + no_src) == 2
     assert gate.main([str(tmp_path / 'missing.info')] + no_src) == 2
+
+
+def test_statements_are_counted_like_coverage_py(tmp_path):
+    """A docstring is not a statement, and a statement over 3 lines counts once."""
+    path = tmp_path / 'node.py'
+    path.write_text('"""Docstring."""\n\n'
+                    'import os\n'
+                    'VALUES = [\n    1,\n    2,\n]\n'
+                    '# a comment\n'
+                    'if os.sep:  # pragma: no cover\n    print(VALUES)\n')
+    assert gate.statement_count(str(path)) == 2
+
+
+def test_untested_python_package_fails_the_gate(tmp_path, capsys):
+    """A package coverage.py never saw is counted at 0 % and fails, like untested C++."""
+    package = tmp_path / 'src' / 'positronic_vision' / 'positronic_vision'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / 'detector.py').write_text('a = 1\nb = 2\nc = 3\n')
+    (package.parent / 'setup.py').write_text('from setuptools import setup\nsetup()\n')
+    good = tmp_path / 'good.info'
+    good.write_text(record('src/a/a.cpp', 10, 10))
+
+    assert gate.main([str(good), '--src', str(tmp_path / 'src')]) == 1
+    out = capsys.readouterr().out
+    assert '| positronic_vision | 0 / 3 | 0.0 % | FAIL |' in out
+    assert '- src/positronic_vision/positronic_vision/detector.py' in out
+    assert 'setup.py' not in out and '__init__.py' not in out
+    assert '| **Total** (information) | **10 / 13** | **76.9 %** | |' in out
+
+
+def test_unparsable_python_file_is_an_error(tmp_path, capsys):
+    broken = tmp_path / 'src' / 'pkg' / 'broken.py'
+    broken.parent.mkdir(parents=True)
+    broken.write_text('def (:\n')
+    good = tmp_path / 'good.info'
+    good.write_text(record('src/a/a.cpp', 10, 10))
+    assert gate.main([str(good), '--src', str(tmp_path / 'src')]) == 2
+    assert 'cannot count the statements' in capsys.readouterr().err

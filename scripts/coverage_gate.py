@@ -31,6 +31,9 @@
 #   imports. Exit 1 below the threshold (80 % by default).
 #   Then: judge each package against the threshold instead of the total, so a well-tested
 #   package cannot hide one with no tests. The total stays in the report, for information.
+#   Then: count the .py files coverage.py did not see at 0 % in their package, with the number of
+#   statements coverage.py's own parser finds, so an untested Python package fails like an
+#   untested C++ one. Skip setup.py. A file that cannot be parsed is an error (exit 2).
 """Line coverage gate: every package of an lcov tracefile against a threshold (issue #109)."""
 
 # Each package must reach the threshold on its own. The total is for information: a big
@@ -49,6 +52,9 @@ import os
 import sys
 
 EXCLUDED_DIRS = ('test', 'launch', '__pycache__')  # keep in line with .coveragerc
+EXCLUDED_FILES = ('setup.py',)  # packaging, not robot code; also in .coveragerc
+# coverage.py's default exclusion, so a file counted here matches what coverage.py would count.
+NO_COVER = r'#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(cover|COVER)'
 
 
 @dataclasses.dataclass
@@ -135,7 +141,7 @@ def python_files(src_dir):
     for root, dirs, names in os.walk(src_dir):
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS)
         for name in sorted(names):
-            if name.endswith('.py'):
+            if name.endswith('.py') and name not in EXCLUDED_FILES:
                 full = os.path.join(root, name)
                 rel = os.path.relpath(full, os.path.dirname(os.path.abspath(src_dir)))
                 result.append(rel.replace(os.sep, '/'))
@@ -148,8 +154,36 @@ def unmeasured(files, python_paths):
     return [p for p in python_paths if p not in measured]
 
 
+def statement_count(full_path):
+    """Count the statements of a .py file the way coverage.py does (docstrings left out).
+
+    Raises ValueError when the file cannot be parsed.
+    """
+    from coverage.exceptions import NotPython
+    from coverage.parser import PythonParser
+    try:
+        parser = PythonParser(filename=full_path, exclude=NO_COVER)
+        parser.parse_source()
+    except (NotPython, SyntaxError, OSError) as error:
+        raise ValueError(f'cannot count the statements of {full_path}: {error}') from error
+    return len(parser.statements)
+
+
+def at_zero(paths, repo_dir):
+    """Return a FileCoverage at 0 % for each path that has statements (an empty file has none)."""
+    result = []
+    for path in paths:
+        found = statement_count(os.path.join(repo_dir, path))
+        if found:
+            result.append(FileCoverage(path, found, 0))
+    return result
+
+
 def report(files, threshold, worst_count, missing):
-    """Build the Markdown report and the verdict: (text, passed)."""
+    """Build the Markdown report and the verdict: (text, passed).
+
+    missing: the .py paths coverage.py did not see, already in files at 0 %.
+    """
     found, hit = total(files)
     failing = failing_packages(files, threshold)
     lines = ['## Line coverage', '', '| Package | Lines | Coverage | Gate |',
@@ -169,7 +203,7 @@ def report(files, threshold, worst_count, missing):
             lines.append(f'| {f.path} | {f.hit} / {f.found} | {percent(f.hit, f.found):.1f} % |')
 
     if missing:
-        lines += ['', 'WARNING: Python files neither measured nor excluded (not in the total):']
+        lines += ['', 'Counted at 0 % (no test imports them):']
         lines += [f'- {p}' for p in missing]
 
     if failing:
@@ -199,7 +233,14 @@ def main(argv=None):
         return 2
 
     missing = unmeasured(files, python_files(args.src)) if os.path.isdir(args.src) else []
-    text, passed = report(files, args.threshold, args.worst, missing)
+    repo_dir = os.path.dirname(os.path.abspath(args.src))
+    try:
+        counted = at_zero(missing, repo_dir)
+    except ValueError as error:
+        print(f'ERROR: {error}', file=sys.stderr)
+        return 2
+    files += counted
+    text, passed = report(files, args.threshold, args.worst, [f.path for f in counted])
     print(text, end='')
 
     summary = os.environ.get('GITHUB_STEP_SUMMARY')

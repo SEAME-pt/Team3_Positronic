@@ -4,8 +4,10 @@
 source = /ws/src
 # Excluded, and why:
 #   */test/*     test code covering itself would inflate the number
+#   */setup.py   packaging of ament_python packages, not robot code
 #   */launch/*   launch files are configuration (which nodes start, with which parameters),
 #                checked by running the simulation, not by unit tests
 omit =
     */test/*
     */launch/*
+    */setup.py

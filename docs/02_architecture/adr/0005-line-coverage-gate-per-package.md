@@ -30,9 +30,10 @@ workspace lets a well-tested package hide one without tests.
   information only. A package's number is lines hit / lines found, summed over its files, not an
   average of file percentages.
 - **Files no test runs count, at 0 %.** C++: an lcov `--initial` baseline. Python: `source` in
-  `.coveragerc`.
-- **Excluded:** `*/test/*` (test code covering itself) and `*/launch/*` (configuration, checked
-  by running the simulation). Generated code (`positronic_interfaces`) is in `build_cov/`, not
+  `.coveragerc`, and the gate counts any `.py` file coverage.py still missed at 0 %, with
+  coverage.py's own statement count, so an untested Python package fails like a C++ one.
+- **Excluded:** `*/test/*` (test code covering itself), `*/launch/*` (configuration, checked
+  by running the simulation) and `*/setup.py` (packaging). Generated code (`positronic_interfaces`) is in `build_cov/`, not
   `src/`, so it doesn't count either. Everything else under `src/` counts.
 - **Report-only until #46 (Sprint 03):** the CI step has `continue-on-error: true`. Below 80 %
   the step is red, but the job stays green. The table goes to the job summary page. #46 writes
@@ -55,8 +56,8 @@ workspace lets a well-tested package hide one without tests.
   both ways. Left out for now to keep the first gate simple (see "Revisit when").
 - **An HTML report (genhtml, uploaded as a CI artifact):** more to maintain. The table in the
   job summary and the worst-files list are enough to find what to test.
-- **Counting launch files:** they are configuration. coverage.py doesn't see Python files that
-  nothing imports, so they would need special handling for little value.
+- **Counting launch files:** they are configuration (which nodes start, with which parameters),
+  not logic a unit test can check. Running the simulation checks them.
 
 ## Consequences
 
