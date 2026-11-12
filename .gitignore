@@ -29,6 +29,8 @@ vgcore.*
 *.gcov
 *.info
 coverage/
+build_cov/
+install_cov/
 htmlcov/
 .coverage
 
