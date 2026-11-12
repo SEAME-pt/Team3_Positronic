@@ -30,6 +30,9 @@
 #   Then: cap the allowed speed at 15 deg/s, the most the real arm follows within the 5 deg
 #   trajectory tolerance of arm_controller (#33, docs/03_verification/jtc_on_the_arm), for both
 #   the check and the home move.
+#   Then: add --first-move, the opening goal of an arm session (safety protocol of #33): read the
+#   current pose, move joint 1 by 5 deg towards the middle of its range in 3 s, hold 1 s and come
+#   back in 3 s. No home move and no trajectory. The same limit and speed checks apply.
 """Check trajectory.yaml against the URDF and the arm's speed, then run it on arm_controller."""
 
 # Steps:
@@ -49,6 +52,7 @@
 # Run it inside the ROS 2 container, where rclpy and control_msgs exist:
 #   python3 docs/03_verification/sim_to_real/tools/run_trajectory.py
 #   python3 docs/03_verification/sim_to_real/tools/run_trajectory.py --check-only  # no ROS
+#   python3 docs/03_verification/sim_to_real/tools/run_trajectory.py --first-move   # 5 deg test
 # Exit code 0 when the trajectory ran to the end, 1 otherwise.
 
 import argparse
@@ -70,6 +74,11 @@ SETTLE_S = 2.0  # after home: the result says the plan ended, not that the servo
 SERVER_TIMEOUT_S = 5.0
 RESULT_MARGIN_S = 5.0  # the real arm lags the plan; wait this much past the last point
 NS_PER_S = 1_000_000_000
+# --first-move: "the current pose, one joint by 5 deg, back" (jtc_on_the_arm safety protocol)
+FIRST_MOVE_JOINT = 'joint2_to_joint1'
+FIRST_MOVE_ANGLE = math.radians(5.0)
+FIRST_MOVE_SEGMENT_S = 3.0  # 1.9 x 5 deg / 3 s = 3.2 deg/s at the peak, like #33's T1
+FIRST_MOVE_HOLD_S = 1.0
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.normpath(os.path.join(TOOLS_DIR, '..', '..', '..', '..'))
@@ -213,6 +222,26 @@ def home_duration(current, home, joint_names, limits):
     return max(HOME_MIN_DURATION_S, math.ceil(needed * 10.0) / 10.0)
 
 
+def first_move(current, joint_names, limits):
+    """Return a one-joint test trajectory from the current pose: out 5 deg, hold, back.
+
+    It has the shape check_trajectory reads, with the current pose as home. Joint 1 moves
+    towards the middle of its URDF range, so it never moves towards the nearer limit.
+    """
+    index = joint_names.index(FIRST_MOVE_JOINT)
+    lower, upper, _ = limits[FIRST_MOVE_JOINT]
+    direction = 1.0 if current[index] <= (lower + upper) / 2.0 else -1.0
+    out = list(current)
+    out[index] += direction * FIRST_MOVE_ANGLE
+    return {
+        'joint_names': list(joint_names),
+        'home': list(current),
+        'points': [(out, FIRST_MOVE_SEGMENT_S),
+                   (out, FIRST_MOVE_SEGMENT_S + FIRST_MOVE_HOLD_S),
+                   (list(current), 2 * FIRST_MOVE_SEGMENT_S + FIRST_MOVE_HOLD_S)],
+    }
+
+
 def split_seconds(seconds):
     """Split seconds into (sec, nanosec), the two integers of builtin_interfaces/Duration."""
     nanoseconds = round(seconds * NS_PER_S)
@@ -308,8 +337,11 @@ class Sender:
         self.goal_handle = None
 
 
-def send(trajectory, limits):
-    """Run home, settle, then the whole trajectory. Return the exit code."""
+def send(trajectory, limits, test_move=False):
+    """Run home, settle, then the whole trajectory. Return the exit code.
+
+    test_move: send only the 5 deg first move from the current pose instead.
+    """
     import rclpy
     from rclpy.signals import SignalHandlerOptions
 
@@ -328,6 +360,8 @@ def send(trajectory, limits):
         if current is None:
             print('No /joint_states with every joint: cannot size the move to home.')
             return 1
+        if test_move:
+            return send_first_move(sender, current, joint_names, limits)
         seconds = home_duration(current, trajectory['home'], joint_names, limits)
         print(f'Home in {seconds:.1f} s')
         home_goal = build_goal(joint_names, [(trajectory['home'], seconds)])
@@ -348,6 +382,23 @@ def send(trajectory, limits):
         rclpy.try_shutdown()
 
 
+def send_first_move(sender, current, joint_names, limits):
+    """Check and send the 5 deg first move from the current pose. Return the exit code."""
+    move = first_move(current, joint_names, limits)
+    problems = check_trajectory(move, limits)
+    if problems:
+        print('REFUSED first move from the current pose:')
+        print('\n'.join(f'  {problem}' for problem in problems))
+        return 1
+    index = joint_names.index(FIRST_MOVE_JOINT)
+    start, out = current[index], move['points'][0][0][index]
+    duration = move['points'][-1][1]
+    print(f'First move: {FIRST_MOVE_JOINT} {math.degrees(start):.1f} -> '
+          f'{math.degrees(out):.1f} -> {math.degrees(start):.1f} deg in {duration:.0f} s')
+    goal = build_goal(joint_names, move['points'])
+    return 0 if sender.run(goal, duration + RESULT_MARGIN_S) else 1
+
+
 def main(argv=None):
     """Check the trajectory, then send it unless --check-only. Return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -358,6 +409,9 @@ def main(argv=None):
                              "(default: the repo's mycobot_280_jn.urdf)")
     parser.add_argument('--check-only', action='store_true',
                         help='run the checks and print the peak speeds, send nothing')
+    parser.add_argument('--first-move', action='store_true',
+                        help='send only a 5 deg move of joint 1 from the current pose and back '
+                             '(the first goal of an arm session), no home, no trajectory')
     args = parser.parse_args(argv)
 
     with open(args.trajectory, encoding='utf-8') as trajectory_file:
@@ -375,7 +429,7 @@ def main(argv=None):
           f'{allowed_speed(name, limits):.3f} rad/s')
     if args.check_only:
         return 0
-    return send(trajectory, limits)
+    return send(trajectory, limits, test_move=args.first_move)
 
 
 if __name__ == '__main__':

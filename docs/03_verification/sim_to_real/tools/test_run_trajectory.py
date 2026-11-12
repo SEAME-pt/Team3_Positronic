@@ -31,6 +31,8 @@
 #   nanosec; and main --check-only exits 0 on the real file and 1 on a refused one.
 #   Then: the allowed speed is capped at 15 deg/s (#33). A segment between 15 deg/s and the
 #   30 % rule is refused, and the home move is sized to 15 deg/s.
+#   Then: the first move starts and ends at the current pose, moves only joint 1 by 5 deg
+#   towards the middle of its range, passes the checks, and is refused near a limit.
 
 """Unit tests for the trajectory checks of issue #37 (no ROS 2 needed)."""
 
@@ -233,3 +235,37 @@ def test_build_goal_puts_every_point_in_one_goal():
     assert list(goal.trajectory.joint_names) == JOINTS
     assert len(goal.trajectory.points) == 5
     assert goal.trajectory.points[-1].time_from_start.sec == 20
+
+
+REST_POSE = [0.2822, 0.0061, -0.0106, -0.2330, 0.0075, -0.0106]  # the arm at rest, #33
+
+
+def test_first_move_starts_and_ends_at_the_current_pose():
+    joint_limits = limits()
+    move = run.first_move(REST_POSE, JOINTS, joint_limits)
+    assert move['home'] == REST_POSE
+    assert move['points'][-1][0] == REST_POSE
+    assert [seconds for _, seconds in move['points']] == [3.0, 4.0, 7.0]
+
+
+def test_first_move_is_5_deg_of_joint_1_only_towards_the_middle():
+    joint_limits = limits()
+    out = run.first_move(REST_POSE, JOINTS, joint_limits)['points'][0][0]
+    assert math.degrees(out[0] - REST_POSE[0]) == pytest.approx(-5.0)  # rest is above the middle
+    assert out[1:] == REST_POSE[1:]
+    below = [-0.2822] + REST_POSE[1:]
+    out = run.first_move(below, JOINTS, joint_limits)['points'][0][0]
+    assert math.degrees(out[0] - below[0]) == pytest.approx(5.0)
+
+
+def test_first_move_passes_the_checks():
+    joint_limits = limits()
+    move = run.first_move(REST_POSE, JOINTS, joint_limits)
+    assert run.check_trajectory(move, joint_limits) == []
+
+
+def test_first_move_near_a_limit_is_refused():
+    joint_limits = limits()
+    upper = joint_limits['joint2_to_joint1'][1]
+    near = [upper - math.radians(2.0)] + REST_POSE[1:]
+    assert run.check_trajectory(run.first_move(near, JOINTS, joint_limits), joint_limits)

@@ -6,7 +6,7 @@ compares them per joint. The report is [`../sim_to_real_v1.md`](../sim_to_real_v
 | File | What it is |
 |---|---|
 | `trajectory.yaml` | The one trajectory both worlds run: home, 5 points, back home, 20 s. Radians. |
-| `run_trajectory.py` | Checks the file (URDF names, 10 deg inside the limits, peak speed at most 15 deg/s), moves to home, sends the trajectory as one goal, prints the result. Ctrl-C cancels the goal. `--check-only` sends nothing. |
+| `run_trajectory.py` | Checks the file (URDF names, 10 deg inside the limits, peak speed at most 15 deg/s), moves to home, sends the trajectory as one goal, prints the result. Ctrl-C cancels the goal. `--check-only` sends nothing. `--first-move` sends only the 5 deg test move from the current pose. |
 | `record_run.sh` | One run, one folder: `record_run.sh <sim\|real> <n>` waits for data, records `/joint_states` and `/arm_controller/controller_state` while `run_trajectory.py` runs, writes `run_info.txt`. A failed run is renamed `_FAILED`. |
 | `compare_runs.py` | Lines up two or more runs, prints per joint max, mean, signed mean, RMS and final gap in degrees, and each run's tracking error. `--plot` writes a PNG. |
 | `test_run_trajectory.py`, `test_compare_runs.py` | Unit tests, no ROS 2 needed: `python3 -m pytest docs/03_verification/sim_to_real/tools` |
@@ -36,8 +36,18 @@ about 30 s and ends with `error_code 0 Goal successfully reached!`.
 **This moves the arm.** Follow the safety protocol of
 [`../../jtc_on_the_arm/README.md`](../../jtc_on_the_arm/README.md) before the launch: two
 people, one with a hand on the power plug for the whole session, bench clear, a 5 deg test move
-first. `run_trajectory.py` moves to home before the trajectory: check that the arm rests near
-home, since that move comes first.
+first.
+
+The test move is the first goal of the session, without recording: joint 1 moves 5 deg from
+where the arm rests (towards the middle of its range) in 3 s, holds 1 s and comes back, 7 s in
+all. Nothing else moves.
+
+```bash
+python3 docs/03_verification/sim_to_real/tools/run_trajectory.py --first-move
+```
+
+Only then the recorded runs. Each one starts with a move to home (all joints at 0), at most
+15 deg/s: from the usual rest pose that is about 16 deg on joint 1 and 13 deg on joint 4.
 
 Record on the Jetson, inside the container, so Wi-Fi cannot drop messages:
 
