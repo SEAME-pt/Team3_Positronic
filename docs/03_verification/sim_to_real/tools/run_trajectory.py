@@ -407,17 +407,22 @@ def main(argv=None):
     parser.add_argument('--urdf', default=DEFAULT_URDF,
                         help='URDF with the joint limits '
                              "(default: the repo's mycobot_280_jn.urdf)")
-    parser.add_argument('--check-only', action='store_true',
-                        help='run the checks and print the peak speeds, send nothing')
-    parser.add_argument('--first-move', action='store_true',
-                        help='send only a 5 deg move of joint 1 from the current pose and back '
-                             '(the first goal of an arm session), no home, no trajectory')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--check-only', action='store_true',
+                      help='run the checks and print the peak speeds, send nothing')
+    mode.add_argument('--first-move', action='store_true',
+                      help='send only a 5 deg move of joint 1 from the current pose and back '
+                           '(the first goal of an arm session), no home, no trajectory')
     args = parser.parse_args(argv)
 
     with open(args.trajectory, encoding='utf-8') as trajectory_file:
         trajectory = load_trajectory(trajectory_file.read())
     with open(args.urdf, encoding='utf-8') as urdf:
         limits = urdf_joint_limits(urdf.read())
+
+    if args.first_move:
+        # Only the joint names come from the file; the first move is checked on its own.
+        return send(trajectory, limits, test_move=True)
 
     problems = check_trajectory(trajectory, limits)
     if problems:
@@ -429,7 +434,7 @@ def main(argv=None):
           f'{allowed_speed(name, limits):.3f} rad/s')
     if args.check_only:
         return 0
-    return send(trajectory, limits, test_move=args.first_move)
+    return send(trajectory, limits)
 
 
 if __name__ == '__main__':

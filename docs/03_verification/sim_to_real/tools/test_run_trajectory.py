@@ -269,3 +269,10 @@ def test_first_move_near_a_limit_is_refused():
     upper = joint_limits['joint2_to_joint1'][1]
     near = [upper - math.radians(2.0)] + REST_POSE[1:]
     assert run.check_trajectory(run.first_move(near, JOINTS, joint_limits), joint_limits)
+
+
+def test_first_move_and_check_only_cannot_be_combined(capsys):
+    """--check-only must never send: with both options argparse stops before anything runs."""
+    with pytest.raises(SystemExit):
+        run.main(['--check-only', '--first-move'])
+    assert 'not allowed with' in capsys.readouterr().err
