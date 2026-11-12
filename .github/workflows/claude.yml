@@ -22,7 +22,7 @@ on:
   issue_comment:
     types: [created]
 
-# The workflow's own GITHUB_TOKEN, nothing else (#<issue>).
+# The workflow's own GITHUB_TOKEN, nothing else (#118).
 permissions:
   contents: read
   pull-requests: write
