@@ -1,6 +1,6 @@
 # 0005. Line coverage gate: 80 % per package, report-only until #46
 
-2026-11-10, proposed, Felipe Suassuna (issue #109).
+2026-11-10, proposed, Wallace Gonçalves (issue #109).
 
 ## Context
 
