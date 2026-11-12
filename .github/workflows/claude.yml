@@ -1,0 +1,216 @@
+name: Claude review
+
+# A first-pass review by Claude, before the two human reviews. Someone with write access writes
+# "@claude" in a PR comment; Claude reads the PR's diff and the repo and the workflow posts one
+# comment with the findings, each with its suggested change.
+#
+# What it cannot do, by construction (not by asking it nicely):
+#   - run commands, edit files or use the web: it only has Read, Glob and Grep;
+#   - read CI: the token has no "actions" permission (CI already reports itself);
+#   - push: the token has read on contents;
+#   - approve or request changes: Claude has no tool that talks to GitHub. The step that posts
+#     the comment only runs `gh pr comment`. Its comment never counts towards the 2 approvals.
+#
+# The rules it reviews against are in CLAUDE.md at the repo root.
+# It runs on the team's Claude subscription, not on paid API credits: the secret
+# CLAUDE_CODE_OAUTH_TOKEN comes from `claude setup-token`, run by the seat that lends its usage
+# (<name of the seat owner>). Each review uses that seat's usage limits. The token lasts a year.
+# Pick a model for one run with "model:haiku", "model:sonnet" or "model:opus" in the comment;
+# otherwise the repository variable CLAUDE_REVIEW_MODEL, otherwise Sonnet.
+
+on:
+  issue_comment:
+    types: [created]
+
+# The workflow's own GITHUB_TOKEN, nothing else (#<issue>).
+permissions:
+  contents: read
+  pull-requests: write
+
+# One review per PR at a time. A second "@claude" waits instead of cancelling a paid run.
+concurrency:
+  group: claude-review-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    # issue_comment also fires on issues: keep PR comments only. The author_association check
+    # skips strangers before a runner starts; the action then checks write access itself.
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+        github.event.comment.author_association)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PR_NUMBER: ${{ github.event.issue.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # issue_comment runs on the default branch (dev). That is on purpose: CLAUDE.md and any
+      # Claude settings come from reviewed code, never from the PR being reviewed.
+      - uses: actions/checkout@v4
+
+      # Comment text goes through env, never into the script, so it can't inject shell.
+      - name: Pick the model
+        id: model
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+          DEFAULT_MODEL: ${{ vars.CLAUDE_REVIEW_MODEL || 'claude-sonnet-5-5' }}
+        run: |
+          case "$COMMENT" in
+            *model:haiku*) model=claude-haiku-5-5 ;;
+            *model:sonnet*) model=claude-sonnet-5-5 ;;
+            *model:opus*) model=claude-opus-5-5 ;;
+            *) model="$DEFAULT_MODEL" ;;
+          esac
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "Model: $model"
+
+      # What Claude reads, all inside the workspace (Claude can't read outside it):
+      #   .review/request.md  the comment that asked for the review
+      #   .review/pr.json     title, description, base branch, changed files
+      #   .review/pr.diff     the diff, which is what it reviews
+      #   .review/head/       the repo at the PR's head, for the code around the diff
+      # The CLAUDE.md files and .claude/ folders of the PR's head are removed, so the PR can't
+      # change the rules it is reviewed against. A change to them still shows in the diff.
+      - name: Get the PR
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          mkdir -p .review
+          printf '%s\n' "$COMMENT" > .review/request.md
+          gh pr view "$PR_NUMBER" \
+            --json number,title,body,author,baseRefName,headRefName,files > .review/pr.json
+          gh pr diff "$PR_NUMBER" > .review/pr.diff
+          git fetch --depth=1 origin "pull/$PR_NUMBER/head"
+          git worktree add --detach .review/head FETCH_HEAD
+          find .review/head \( -name CLAUDE.md -o -name .claude \) -prune -exec rm -rf {} +
+          echo "Diff: $(wc -l < .review/pr.diff) lines"
+
+      - name: Review
+        id: claude
+        uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed  # v1.0.271
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Do a first-pass review of pull request #${{ github.event.issue.number }} in
+            ${{ github.repository }}. Two people from the team review it after you.
+
+            Read, in this order:
+            1. CLAUDE.md, in the working directory: the rules of this repo and of this review.
+            2. .review/request.md: the comment that asked for this review. If it narrows the
+               focus (a file, a question), follow it.
+            3. .review/pr.json: the PR's title, description and changed files.
+            4. .review/pr.diff: the diff. This is what you review.
+            Use .review/head/ (the repo at the PR's head) for the code around the diff, and the
+            rest of the working directory (the base branch, dev) to compare with what was there.
+
+            You can only read files. You cannot run, build or test anything, see CI, or change
+            the PR, so don't ask for any of that and don't guess CI results.
+
+            Return your review as structured output; the workflow posts it as one comment.
+            - Every finding needs a concrete suggested change: the lines as they are and as they
+              should be, as a small unified diff ("-" old lines, "+" new lines). If you can't
+              write the change, it isn't a finding: leave it out.
+            - Order findings by severity: issue, then suggestion, then nit.
+            - summary: two or three sentences on the PR as a whole, with no praise and no list
+              of what the PR does (the author knows).
+            - No findings is a valid review. Don't invent findings to fill it.
+            - Never write "@" followed by a name: it would notify people.
+          # Read, Glob and Grep only. Everything else is denied, and .git is off limits too
+          # (it holds the job's token in its config).
+          claude_args: |
+            --model ${{ steps.model.outputs.model }}
+            --max-turns 30
+            --allowedTools "Read,Glob,Grep"
+            --disallowedTools "Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent,Read(./.git/**)"
+            --json-schema '{
+              "type": "object",
+              "properties": {
+                "summary": {"type": "string"},
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "severity": {"type": "string", "enum": ["issue", "suggestion", "nit"]},
+                      "file": {"type": "string"},
+                      "line": {"type": "integer"},
+                      "problem": {"type": "string"},
+                      "suggested_change": {"type": "string"}
+                    },
+                    "required": ["severity", "file", "problem", "suggested_change"]
+                  }
+                }
+              },
+              "required": ["summary", "findings"]
+            }'
+
+      # Model, turns and tokens of this run, in the job summary and in the comment's footer. On a
+      # subscription nothing is billed per run: the USD figure is what the same run would cost on
+      # the API, a way to compare models and runs, not a charge.
+      - name: Usage of this run
+        id: cost
+        if: ${{ !cancelled() && steps.claude.outputs.execution_file != '' }}
+        # Bookkeeping: if it breaks, the review is still posted.
+        continue-on-error: true
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          MODEL: ${{ steps.model.outputs.model }}
+        run: |
+          result=$(jq -c '[.[] | select(.type == "result")] | last // {}' "$EXECUTION_FILE")
+          cost=$(jq -r '.total_cost_usd // 0 | . * 10000 | round / 10000' <<< "$result")
+          turns=$(jq -r '.num_turns // "?"' <<< "$result")
+          {
+            echo "### Claude review: usage"
+            echo
+            echo "| Model | Turns | API-equivalent USD | Input | Cache write | Cache read | Output |"
+            echo "|---|---|---|---|---|---|---|"
+            jq -r --arg model "$MODEL" --arg cost "$cost" '
+              .usage as $u
+              | "| \($model) | \(.num_turns // "?") | \($cost) | \($u.input_tokens // "?") "
+                + "| \($u.cache_creation_input_tokens // "?") "
+                + "| \($u.cache_read_input_tokens // "?") | \($u.output_tokens // "?") |"
+            ' <<< "$result"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "footer=$MODEL, $turns turns (~\$$cost API-equivalent)" >> "$GITHUB_OUTPUT"
+
+      - name: Post the review
+        if: ${{ !cancelled() && steps.claude.outputs.structured_output != '' }}
+        env:
+          REVIEW: ${{ steps.claude.outputs.structured_output }}
+          FOOTER: ${{ steps.cost.outputs.footer }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -r --arg footer "$FOOTER" --arg run "$RUN_URL" '
+            "## Claude review (first pass)\n\n\(.summary)\n\n"
+            + (if (.findings | length) == 0 then "No findings.\n"
+               else [.findings | to_entries[]
+                 | .value as $f
+                 | "### \(.key + 1). `\($f.severity)` \($f.file)"
+                   + (if $f.line then ":\($f.line)" else "" end)
+                   + "\n\n\($f.problem)\n\n**Suggested change**\n\n"
+                   + "````diff\n\($f.suggested_change)\n````\n"]
+                 | join("\n")
+               end)
+            + "\n---\n<sub>Automated first pass, not an approval: it does not count towards the"
+            + " two reviews, and nothing here blocks the merge: fix it or reply why not."
+            + " \($footer) · [run](\($run))</sub>\n"
+          ' <<< "$REVIEW" > .review/comment.md
+          # GitHub refuses comments over 65536 characters.
+          if [ "$(wc -c < .review/comment.md)" -gt 60000 ]; then
+            head -c 60000 .review/comment.md > .review/cut.md
+            printf '\n\n(cut: too long for one comment, see the run)\n' >> .review/cut.md
+            mv .review/cut.md .review/comment.md
+          fi
+          gh pr comment "$PR_NUMBER" --body-file .review/comment.md
+
+      - name: Say it failed
+        if: ${{ failure() || (!cancelled() && steps.claude.outputs.structured_output == '') }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR_NUMBER" \
+            --body "Claude review failed, no review was posted. See the [run]($RUN_URL)."
