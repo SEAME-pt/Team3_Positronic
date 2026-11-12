@@ -48,6 +48,19 @@
 //   Check that link_timed_out() is false while replies arrive, true once the line has been
 //   silent past the timeout, false again when replies resume, and true when the arm never
 //   answers at all.
+// Follow-up prompt (servo over-temperature):
+//   The thread now asks for the servo temperatures (get_servo_temps, 0xE5) once a period, after
+//   the get_angles reply of a turn that sends no target, or before the send once the reading is
+//   older than max_age, and never while a stop or power on is pending. Two plausible readings in
+//   a row at or above the limit make the thread itself send a stop and then a power off, hold
+//   every target, refuse power_on() and send the power off again every period. With a transport
+//   that answers each request like the arm (get_angles with the recorded reply, 0xE5 with
+//   temperatures the test sets) and short guard times, check: the temperatures are read while
+//   idle; no temperature request goes out in a stream of turns that send, until it is overdue,
+//   and then it goes right after a get_angles, never after a send_angles; the cut (stop, then
+//   power off, the joint and value reported, power_on() refused with no frame, no target after
+//   it, the power off repeated); the cut while halted; implausible readings are ignored; and
+//   temperature_stale() when the arm never answers 0xE5 while the pose still updates.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -64,6 +77,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -87,6 +101,12 @@ using positronic_hardware::SerialTransport;
 constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::CommandId::STOP)};
 constexpr std::uint8_t POWER_ON_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
+constexpr std::uint8_t POWER_OFF_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_OFF)};
+constexpr std::uint8_t GET_ANGLES_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_ANGLES)};
+constexpr std::uint8_t TEMPS_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_SERVO_TEMPS)};
 
 /// A transport that answers every request with a fixed sequence of byte bursts, looping. It is
 /// thread-safe because SerialArm reads it from its poll thread.
@@ -565,4 +585,271 @@ TEST(PosixSerialPort, SecondOpenIsRefusedWhileTheFirstHoldsThePort)
   EXPECT_NO_THROW(PosixSerialPort(port.data(), 1000000));
 
   ::close(controller);
+}
+
+// ---------------------------------------------------------------------------
+// Servo over-temperature
+// ---------------------------------------------------------------------------
+
+namespace
+{
+using positronic_hardware::Overheat;
+using positronic_hardware::ServoTemperatures;
+using positronic_hardware::TemperatureGuard;
+
+/// The guard of the tests: the same rules, faster, so a test lasts a second, not a minute.
+TemperatureGuard fast_guard()
+{
+  TemperatureGuard guard{};
+  guard.period = std::chrono::milliseconds{100};
+  guard.max_age = std::chrono::milliseconds{300};
+  guard.stale_timeout = std::chrono::milliseconds{300};
+  return guard;
+}
+
+constexpr ServoTemperatures COOL{31, 33, 35, 30, 29, 28};
+constexpr ServoTemperatures J2_HOT{31, 61, 35, 30, 29, 28};
+
+/// A transport that answers each request like the arm: a get_angles with the recorded reply
+/// (servo noise included), a get_servo_temps with the temperatures the test sets, anything else
+/// with nothing. Every frame written is kept, in order.
+class ScriptedArm : public SerialTransport
+{
+public:
+  bool write(const std::uint8_t * data, std::size_t count) override
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
+    const std::uint8_t id{count == 5 ? *std::next(data, 3) : std::uint8_t{0}};
+    if (id == GET_ANGLES_ID) {
+      for (const auto & burst : recorded_bursts()) {
+        pending_.insert(pending_.end(), burst.begin(), burst.end());
+      }
+    } else if (id == TEMPS_ID && answer_temperatures_) {
+      pending_.insert(pending_.end(), {0xFE, 0xFE, 0x08, 0xE5});
+      pending_.insert(pending_.end(), temperatures_.begin(), temperatures_.end());
+      pending_.push_back(0xFA);
+    }
+    return true;
+  }
+
+  std::size_t read(std::uint8_t * dst, std::size_t max) override
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    const std::size_t n{std::min(max, pending_.size())};
+    std::copy_n(pending_.begin(), n, dst);
+    pending_.erase(pending_.begin(), std::next(pending_.begin(), static_cast<std::ptrdiff_t>(n)));
+    return n;
+  }
+
+  void set_temperatures(const ServoTemperatures & temperatures)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    temperatures_ = temperatures;
+  }
+
+  /// An arm whose firmware does not answer 0xE5.
+  void set_answer_temperatures(bool answer)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    answer_temperatures_ = answer;
+  }
+
+  std::vector<std::vector<std::uint8_t>> written()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return written_;
+  }
+
+private:
+  std::vector<std::vector<std::uint8_t>> written_;
+  std::vector<std::uint8_t> pending_;
+  ServoTemperatures temperatures_{COOL};
+  bool answer_temperatures_{true};
+  std::mutex mutex_;
+};
+
+/// The 5-byte request id of `frame`, or 0 for any other frame (send_angles).
+std::uint8_t request_id(const std::vector<std::uint8_t> & frame)
+{
+  return frame.size() == 5 ? frame[3] : std::uint8_t{0};
+}
+
+/// Waits until `done()` is true, or two seconds pass. Returns `done()`.
+template<typename Condition>
+bool wait_until(Condition done)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  return done();
+}
+
+/// Writes a new target every 5 ms for `duration`, so every turn of the thread has one to send.
+void stream_targets(SerialArm & arm, std::chrono::milliseconds duration)
+{
+  const auto end{std::chrono::steady_clock::now() + duration};
+  double j1{0.0};
+  while (std::chrono::steady_clock::now() < end) {
+    j1 += 0.001;
+    arm.write_angles(JointPositions{j1, 0.0, 0.0, 0.0, 0.0, 0.0});
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+}
+
+/// The frames between the first and the last send_angles of `frames`.
+std::vector<std::vector<std::uint8_t>> between_sends(
+  const std::vector<std::vector<std::uint8_t>> & frames)
+{
+  const auto is_send{[](const auto & frame) {return frame.size() == 18;}};
+  const auto first{std::find_if(frames.begin(), frames.end(), is_send)};
+  const auto last{std::find_if(frames.rbegin(), frames.rend(), is_send)};
+  if (first == frames.end()) {
+    return {};
+  }
+  return {first, last.base()};
+}
+}  // namespace
+
+TEST(SerialArmTemperature, ReadsTheTemperaturesWhileIdle)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+
+  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  EXPECT_EQ(arm.read_temperatures().value_or(ServoTemperatures{}), COOL);
+  EXPECT_FALSE(arm.temperature_stale());
+  EXPECT_FALSE(arm.overheat().has_value());
+  // Each temperature request follows a get_angles reply: the arm's input is free.
+  const auto frames{port.written()};
+  for (std::size_t i{1}; i < frames.size(); ++i) {
+    if (request_id(frames[i]) == TEMPS_ID) {
+      EXPECT_EQ(request_id(frames[i - 1]), GET_ANGLES_ID) << i;
+    }
+  }
+}
+
+TEST(SerialArmTemperature, NoTemperatureRequestInTurnsThatSendUntilItIsOverdue)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  TemperatureGuard guard{fast_guard()};
+  guard.max_age = std::chrono::seconds{5};  // never overdue during the stream
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, guard};
+  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+
+  stream_targets(arm, std::chrono::milliseconds{600});
+  const auto during{between_sends(port.written())};
+  ASSERT_FALSE(during.empty());
+  EXPECT_EQ(frames_with_id(during, TEMPS_ID).size(), 0U);
+}
+
+TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+
+  stream_targets(arm, std::chrono::milliseconds{1200});
+  const auto during{between_sends(port.written())};
+  // max_age 300 ms over a 1.2 s stream: a few readings, each right after a get_angles, so
+  // never inside the settle of a send.
+  EXPECT_GE(frames_with_id(during, TEMPS_ID).size(), 2U);
+  for (std::size_t i{1}; i < during.size(); ++i) {
+    if (request_id(during[i]) == TEMPS_ID) {
+      EXPECT_EQ(request_id(during[i - 1]), GET_ANGLES_ID) << i;
+    }
+  }
+  EXPECT_FALSE(arm.temperature_stale());
+}
+
+TEST(SerialArmTemperature, TwoHotReadingsStopTheArmAndCutItsPower)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_TRUE(wait_until([&port]() {return !send_angles_frames(port.written()).empty();}));
+
+  port.set_temperatures(J2_HOT);
+  ASSERT_TRUE(wait_until([&arm]() {return arm.overheat().has_value();}));
+  const Overheat trip{arm.overheat().value_or(Overheat{})};
+  EXPECT_EQ(trip.joint, 1U);
+  EXPECT_EQ(trip.celsius, 61);
+
+  // On the wire: a stop, then a power off, in that order.
+  const auto frames{port.written()};
+  const auto stop_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
+        return request_id(frame) == STOP_ID;
+  })};
+  ASSERT_NE(stop_at, frames.end());
+  const auto off_at{std::find_if(stop_at, frames.end(), [](const auto & frame) {
+        return request_id(frame) == POWER_OFF_ID;
+  })};
+  EXPECT_NE(off_at, frames.end());
+
+  // Nothing brings the servos back: power_on() fails at once without a frame, and a target
+  // from a controller still publishing never goes out.
+  const std::size_t sends_at_cut{send_angles_frames(port.written()).size()};
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_FALSE(arm.power_on());
+  EXPECT_LT(std::chrono::steady_clock::now() - start, SerialArm::POLL_PERIOD);
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 0U);
+  EXPECT_EQ(send_angles_frames(port.written()).size(), sends_at_cut);
+  // The power off is repeated every period (100 ms here).
+  EXPECT_GE(frames_with_id(port.written(), POWER_OFF_ID).size(), 3U);
+  // Cooling down does not undo the cut.
+  port.set_temperatures(COOL);
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  EXPECT_TRUE(arm.overheat().has_value());
+  EXPECT_FALSE(arm.power_on());
+}
+
+TEST(SerialArmTemperature, TheCutWorksWhileHalted)
+{
+  // An inactive component: halted, the servos still holding the pose, and heating.
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(arm.halt());
+
+  port.set_temperatures(J2_HOT);
+  ASSERT_TRUE(wait_until([&arm]() {return arm.overheat().has_value();}));
+  EXPECT_GE(frames_with_id(port.written(), POWER_OFF_ID).size(), 1U);
+}
+
+TEST(SerialArmTemperature, ImplausibleReadingsAreIgnored)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+
+  // 0 and 200 degC are not temperatures: no cut, and the last good reading stays.
+  port.set_temperatures(ServoTemperatures{0, 200, 200, 200, 200, 200});
+  std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  EXPECT_FALSE(arm.overheat().has_value());
+  EXPECT_EQ(arm.read_temperatures().value_or(ServoTemperatures{}), COOL);
+  EXPECT_EQ(frames_with_id(port.written(), POWER_OFF_ID).size(), 0U);
+  // And no good reading for longer than the stale timeout: the guard reports it is blind.
+  EXPECT_TRUE(arm.temperature_stale());
+}
+
+TEST(SerialArmTemperature, ReportsStaleWhenTheArmNeverAnswersTheTemperature)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  transport->set_answer_temperatures(false);
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+
+  std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  EXPECT_TRUE(arm.has_sample());  // the pose still updates
+  EXPECT_FALSE(arm.read_temperatures().has_value());
+  EXPECT_TRUE(arm.temperature_stale());
+  EXPECT_FALSE(arm.overheat().has_value());
 }

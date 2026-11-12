@@ -64,6 +64,15 @@
 //   ACTIVE; after a refusal the component configures and activates again; on_init refuses a
 //   joint without a revolute <limit> and swapped limits; on_activate refuses an arm that stands
 //   outside its limits.
+// Follow-up prompt (servo over-temperature):
+//   The plugin reads servo_temp_limit_c (whole degC, 30 to 60, default 60), refuses to activate
+//   without a first servo temperature or while a servo is within 5 degC of the limit, and
+//   read() returns ERROR once the serial thread has cut an overheated arm (stop, then power
+//   off). The pseudo-terminal arm now also answers get_servo_temps (0xE5) with temperatures
+//   the test sets, and records what it receives. Test: the parameter is accepted and its bad
+//   values rejected; activation is refused on a hot arm and on an arm that never answers 0xE5;
+//   and an arm that heats while active is cut (stop then power off on the wire), read()
+//   returns ERROR and the component ends in UNCONFIGURED.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -79,7 +88,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -231,8 +242,13 @@ int open_pseudo_terminal(std::array<char, 128> & port)
 constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8, 0xFF,
   0xEF, 0xFF, 0xC3, 0xFF, 0x85, 0x00, 0x2B, 0x00, 0x3D, 0xFA};
 
-/// Answers every request on the controller side of a pseudo-terminal with RECORDED_REPLY until
-/// stopped: a silent-free stand-in for the arm, enough for activate to succeed.
+/// The get_servo_temps request, as the serial thread writes it.
+constexpr std::array<std::uint8_t, 5> TEMPS_REQUEST{0xFE, 0xFE, 0x02, 0xE5, 0xFA};
+
+/// Answers the requests on the controller side of a pseudo-terminal until stopped: a stand-in
+/// for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures set with
+/// set_temperature() (all six servos alike), unless set_answer_temperatures(false); every other
+/// request gets RECORDED_REPLY. Everything received is kept for received().
 class ReplyingArm
 {
 public:
@@ -245,7 +261,24 @@ public:
             continue;
           }
           const ssize_t got{::read(controller, request.data(), request.size())};
-          if (got > 0) {
+          if (got <= 0) {
+            continue;
+          }
+          const std::uint8_t * const begin{request.data()};
+          const std::uint8_t * const end{std::next(begin, got)};
+          const bool asks_temperatures{
+            std::search(begin, end, TEMPS_REQUEST.begin(), TEMPS_REQUEST.end()) != end};
+          {
+            const std::lock_guard<std::mutex> lock{mutex_};
+            received_.insert(received_.end(), begin, end);
+          }
+          if (asks_temperatures && answer_temperatures_.load()) {
+            const std::uint8_t t{celsius_.load()};
+            const std::array<std::uint8_t, 11> reply{
+              0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t, 0xFA};
+            static_cast<void>(::write(controller, reply.data(), reply.size()));
+          }
+          if (!asks_temperatures || static_cast<std::size_t>(got) > TEMPS_REQUEST.size()) {
             static_cast<void>(::write(controller, RECORDED_REPLY.data(), RECORDED_REPLY.size()));
           }
         }
@@ -264,10 +297,44 @@ public:
   ReplyingArm(ReplyingArm &&) = delete;
   ReplyingArm & operator=(ReplyingArm &&) = delete;
 
+  /// The temperature every servo reports from now on, degC.
+  void set_temperature(std::uint8_t celsius)
+  {
+    celsius_.store(celsius);
+  }
+
+  /// False: a firmware without get_servo_temps, the request gets no reply at all.
+  void set_answer_temperatures(bool answer)
+  {
+    answer_temperatures_.store(answer);
+  }
+
+  /// Every byte the driver wrote to the arm so far.
+  std::vector<std::uint8_t> received()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return received_;
+  }
+
 private:
+  std::atomic<bool> answer_temperatures_{true};
+  std::atomic<std::uint8_t> celsius_{30};
   std::atomic<bool> stop_{false};
+  std::mutex mutex_;
+  std::vector<std::uint8_t> received_;
   std::thread thread_;
 };
+
+/// Index of the first `FE FE 02 id FA` in `bytes` at or after `from`, or bytes.size().
+std::size_t find_request(
+  const std::vector<std::uint8_t> & bytes, std::uint8_t id, std::size_t from = 0)
+{
+  const std::array<std::uint8_t, 5> frame{0xFE, 0xFE, 0x02, id, 0xFA};
+  const std::size_t first{std::min(from, bytes.size())};
+  const auto start{std::next(bytes.begin(), static_cast<std::ptrdiff_t>(first))};
+  return static_cast<std::size_t>(
+    std::distance(bytes.begin(), std::search(start, bytes.end(), frame.begin(), frame.end())));
+}
 
 class LoadRobotSystem : public ::testing::Test
 {
@@ -452,7 +519,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
   load(urdf_with(
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
-                         param("moving_period_ms", "40") + param("send_settle_ms", "25")));
+                         param("moving_period_ms", "40") + param("send_settle_ms", "25") +
+                         param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -475,6 +543,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"moving_period_ms", "66.5"},       // whole ms only
     {"send_settle_ms", "250"},          // longer than the #35 timeout
     {"send_settle_ms", "slow"},         // not a number
+    {"servo_temp_limit_c", "61"},       // the limit can only be lowered
+    {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
+    {"servo_temp_limit_c", "55.5"},     // whole degrees only
+    {"servo_temp_limit_c", "hot"},      // not a number
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -890,4 +962,83 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsCo
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 
   resource_manager_.reset();
+}
+
+TEST_F(LoadRobotSystem, ActivateRefusesAHotArm)
+{
+  // Every servo at 57 degC: under the 60 degC cut, but within the 5 degC cool-down margin. The
+  // servos are not powered on.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_temperature(57);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, ActivateRefusesAnArmThatDoesNotReportItsTemperature)
+{
+  // Firmware without get_servo_temps: the pose answers, the temperature never does. The
+  // driver does not run without its over-temperature guard.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_answer_temperatures(false);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
+{
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const std::size_t before_heat{arm->received().size()};
+
+  // The servos reach 61 degC. Two readings, one a second, then the serial thread cuts the arm
+  // on its own, and the next read() reports it.
+  arm->set_temperature(61);
+  hardware_interface::return_type result{hardware_interface::return_type::OK};
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+  while (result == hardware_interface::return_type::OK &&
+    std::chrono::steady_clock::now() < deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    result = read_once();
+  }
+  EXPECT_EQ(result, hardware_interface::return_type::ERROR);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+
+  // On the wire, after the heat: a stop, then a power off.
+  const std::vector<std::uint8_t> sent{arm->received()};
+  const std::size_t stop_at{find_request(sent, 0x29, before_heat)};
+  ASSERT_LT(stop_at, sent.size());
+  EXPECT_LT(find_request(sent, 0x11, stop_at), sent.size());
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
 }
