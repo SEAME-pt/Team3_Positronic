@@ -32,6 +32,8 @@
 #   tables in degrees. Optional PNG, six rows: positions left, differences right, matplotlib
 #   Agg, skipped with a note if matplotlib is missing. Warn when the runs used different
 #   trajectory files or a run is _FAILED.
+#   Then: t = 0 is the departure from home that goes more than 5 deg, so a move to home that
+#   only corrects the last run's 1 deg rest error is not taken for the trajectory (real_2).
 """Compare sim-to-real runs: per joint gap between two recordings of one trajectory (#37)."""
 
 # How the runs are lined up:
@@ -61,6 +63,9 @@ from run_trajectory import DEFAULT_TRAJECTORY, load_trajectory
 
 TOPIC = '/arm_controller/controller_state'
 START_THRESHOLD = 1e-4  # rad, "leaves the home pose"
+# The trajectory goes 20 to 30 deg from home; the move to home only corrects the rest error of
+# the last run (about 1 deg on the arm). Only a departure that goes this far is the trajectory.
+TRAJECTORY_DEPARTURE = math.radians(5.0)
 GRID_RATE_HZ = 100.0
 NS_PER_S = 1_000_000_000
 METRICS = ('max abs', 'mean abs', 'signed mean', 'RMS', 'final abs')
@@ -102,9 +107,14 @@ def ordered(run, joint_names):
                                feedback=run.feedback[:, columns])
 
 
-def find_start(stamp_ns, reference, home, threshold=START_THRESHOLD):
-    """Return the stamp (ns, float) where the reference leaves home, after it was at home.
+def find_start(stamp_ns, reference, home, threshold=START_THRESHOLD,
+               departure=TRAJECTORY_DEPARTURE):
+    """Return the stamp (ns, float) where the trajectory leaves home.
 
+    That is the last time the reference leaves home before it first goes further than
+    departure from it. A smaller excursion is the move to home, not the trajectory: on the
+    arm, a run that starts at home (the last run ended there) has the reference jump to the
+    arm's real pose, about 1 deg away, when the home goal arrives (real_2, real_3).
     Interpolated between the last sample at home and the first one away from it.
     """
     distance = np.max(np.abs(reference - np.asarray(home)), axis=1)
@@ -112,11 +122,12 @@ def find_start(stamp_ns, reference, home, threshold=START_THRESHOLD):
     if at_home.size == 0:
         raise ValueError('the reference never reaches the home pose: is this the same '
                          'trajectory.yaml?')
-    away = np.flatnonzero(distance[at_home[0]:] > threshold)
-    if away.size == 0:
+    far = np.flatnonzero(distance[at_home[0]:] > departure)
+    if far.size == 0:
         raise ValueError('the reference never leaves the home pose: the trajectory did not run')
-    after = at_home[0] + away[0]
-    before = after - 1
+    first_far = at_home[0] + far[0]
+    before = at_home[at_home < first_far][-1]
+    after = before + 1
     fraction = (threshold - distance[before]) / (distance[after] - distance[before])
     return float(stamp_ns[before]) + fraction * float(stamp_ns[after] - stamp_ns[before])
 

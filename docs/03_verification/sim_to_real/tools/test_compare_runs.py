@@ -29,6 +29,8 @@
 #   another order are matched by name, repeated stamps are dropped, tracking error is zero when
 #   feedback follows the reference, the table prints degrees, the run_info warnings, and main()
 #   end to end with read_bag replaced.
+#   Then: a run that starts at home, where the move to home only corrects about 1 deg, is lined
+#   up on the trajectory and not on that small move (real_2 and real_3 on the arm).
 
 """Unit tests for the sim-to-real comparison of issue #37 (no ROS 2 needed)."""
 
@@ -109,6 +111,18 @@ def test_find_start_is_interpolated_between_samples():
 def test_move_to_home_is_skipped():
     """The reference first moves to home; t = 0 is the trajectory leaving home, not that."""
     run = fake_run('real', before_home=[0.28, 0.0, 0.0, -0.23, 0.0, 0.0])
+    start_s = compare.find_start(run.stamp_ns, run.reference, HOME) / compare.NS_PER_S - 1000.0
+    assert start_s == pytest.approx(2.0, abs=0.01)
+
+
+def test_small_move_to_home_from_home_is_skipped():
+    """real_2: the reference starts at home, jumps 1 deg to the arm's pose, comes back, then the
+    trajectory starts. t = 0 is the trajectory, not the 1 deg jump."""
+    run = fake_run('real', rate_hz=30.0, start_s=2.0)
+    seconds = (run.stamp_ns - run.stamp_ns[0]) / compare.NS_PER_S
+    home_move = (seconds >= 0.5) & (seconds < 1.5)
+    run.reference[home_move] = np.outer(math.radians(1.0) * (1.5 - seconds[home_move]),
+                                        np.ones(6))
     start_s = compare.find_start(run.stamp_ns, run.reference, HOME) / compare.NS_PER_S - 1000.0
     assert start_s == pytest.approx(2.0, abs=0.01)
 

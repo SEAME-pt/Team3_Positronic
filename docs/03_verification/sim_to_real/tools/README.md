@@ -100,4 +100,6 @@ bags.
 | `ROS_DOMAIN_ID is '17', but sim uses 18.` | the shell was opened without `ROS_DOMAIN_ID=18` |
 | `No message on /joint_states for 30 s` | the launch is not running, still starting, or on another domain |
 | `REFUSED trajectory.yaml:` | a position or a speed is outside the limits; the lines below say which |
+| `The arm did not answer within 1000 ms` (driver log) | the arm's power is off, or its board needs a reset: power-cycle the arm, not the Jetson, and launch again. Check first that nothing else uses the port: `sudo fuser -v /dev/ttyTHS1` on the Jetson |
+| `ModuleNotFoundError: No module named 'control_msgs'` | `compare_runs.py` read a bag outside the container: run it in `make shell` |
 | `ERROR: the reference never leaves the home pose` | the trajectory did not run in that bag (cancelled before it started) |
