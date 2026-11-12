@@ -164,7 +164,7 @@ The bags are not in git (about 19 MB for the seven runs); the numbers and the fi
 | Rest pose before the session | | joint 1 at 0.5 deg (printed by `--first-move`) |
 | Operator | Felipe Suassuna | Felipe Suassuna, alone (see Safety) |
 | Image | `positronic-dev:jazzy` | `positronic-runtime:nano` |
-| Notes | | TODO: anything seen or heard during the runs |
+| Notes | | The arm shook a little and a joint lagged a little while moving; the operator did not find it alarming. Fits the 0.2 deg noise and the 1 to 4 deg tracking error measured above. |
 
 The trajectory: home (all joints at 0), then every joint moves out by 20 to 30 deg and back,
 up to three joints at once, one point every 4 s, 20 s in all. Highest peak 0.249 rad/s (14.3 deg/s),
@@ -215,8 +215,8 @@ under the 15 deg/s the real arm follows within `arm_controller`'s 5 deg trajecto
 Gazebo: no hardware.
 
 Real arm: one operator, alone, against the two-person rule of the safety protocol
-([`jtc_on_the_arm`](../jtc_on_the_arm/README.md)), with the power plug within reach.
-TODO: confirm. What moved: one `--first-move` (joint 1, 5 deg in 3 s, 3.2 deg/s peak), then
+([`jtc_on_the_arm`](../jtc_on_the_arm/README.md)), with the power plug within reach of the
+operator's hand for the whole session. What moved: one `--first-move` (joint 1, 5 deg in 3 s, 3.2 deg/s peak), then
 three runs of the trajectory, each with a move to home of 1 to 2.2 deg first, at most
 14.3 deg/s. Every goal ended in `SUCCEEDED`; nothing stopped a run. At the end
 `arm_controller` was set inactive before closing the launch.
