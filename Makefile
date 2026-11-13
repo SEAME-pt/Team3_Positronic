@@ -48,7 +48,7 @@ ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI
 TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test format format-check tidy tidy-strict doctor clean fclean
+.PHONY: help image shell build test coverage format format-check tidy tidy-strict doctor clean fclean
 
 help: ## Show this help
 	@grep -h -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -66,6 +66,11 @@ build: ## colcon build
 test: ## colcon test and show results
 	$(RUN) bash -c 'colcon test && colcon test-result --verbose'
 
+# Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
+# CI runs it as report-only (continue-on-error) until #46.
+coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below 80 %
+	$(RUN) bash -c 'bash scripts/coverage.sh && python3 scripts/coverage_gate.py'
+
 format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 	$(RUN) bash scripts/lint.sh --fix
 
@@ -82,8 +87,8 @@ doctor: ## Check the environment
 	$(ALLOW_X)
 	$(RUN) bash scripts/doctor.sh
 
-clean: ## Delete build/, install/ and log/
-	rm -rf build install log
+clean: ## Delete build/, install/, log/ and the coverage outputs
+	rm -rf build install log build_cov install_cov coverage
 
 fclean: clean ## Full clean: remove this project's containers, images and volumes
 	@docker compose down --rmi local -v --remove-orphans
