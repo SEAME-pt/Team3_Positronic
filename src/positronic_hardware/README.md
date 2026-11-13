@@ -182,10 +182,20 @@ move in progress, the supervisor (#45) included: only cutting the servo power do
 hardware stop button (#27) was closed without being built in M1, so today that means the power
 switch.
 
-**Who reads it.** The driver only exports `driver/fault_code` inside the controller manager;
-nothing publishes it to a topic yet. `joint_state_broadcaster` publishes joints only, and
-`jetson_controllers.yaml` has no gpio controller. Making it readable by the supervisor is part
-of #45.
+**Who reads it.** The safety supervisor (#45), on `/dynamic_joint_states`. `/joint_states`
+carries the joints only, but `joint_state_broadcaster` has no `joints` and `interfaces`
+parameters in `jetson_controllers.yaml`, so it claims every state interface and publishes them
+all on `/dynamic_joint_states` once per update (30 Hz), the `driver` gpio included. No gpio
+controller is needed. To see it without the arm:
+
+```bash
+ros2 launch positronic_bringup driver.launch.py backend:=fake &
+ros2 topic echo /dynamic_joint_states --once    # joint_names has "driver", fault_code 0.0
+```
+
+When `read()` or `write()` returns ERROR the controller manager deactivates every controller
+of the component, the broadcaster included, and the topic goes silent. So the supervisor also
+halts when it gets no valid fault code for 200 ms.
 
 **On the arm.** `hil_link_timeout` (built with the tests, never run by ctest) drives `SerialArm`
 on the real port through a transport that drops every reply, mid-motion, and prints one CSV line

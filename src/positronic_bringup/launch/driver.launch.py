@@ -44,10 +44,14 @@ Launch arguments:
   update_rate:=30             Hz, of the control loop and of /joint_states
   moving_period_ms:=50        ms of a serial-thread turn that sends a command
   send_settle_ms:=30          ms the thread waits after a send_angles before a get_angles
+  start_inactive:=false       true: the hardware component and arm_controller come up
+                              inactive, and only the safety supervisor makes them active
+                              (#45). supervised.launch.py sets it.
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -77,6 +81,13 @@ def generate_launch_description():
     update_rate = DeclareLaunchArgument(
         'update_rate', default_value='30',
         description='Hz of the control loop, and so of /joint_states.')
+    # false keeps the launch as it was: everything active, the arm can move at once. true is
+    # for the safety supervisor (#45): nothing can move the arm until it activates the hardware
+    # component and the controller.
+    start_inactive = DeclareLaunchArgument(
+        'start_inactive', default_value='false',
+        description='true: the hardware component and arm_controller come up inactive.')
+    inactive = LaunchConfiguration('start_inactive')
 
     controllers_yaml = PathJoinSubstitution(
         [FindPackageShare('positronic_bringup'), 'config', 'jetson_controllers.yaml'])
@@ -105,14 +116,26 @@ def generate_launch_description():
 
     # The controller_manager. It reads /robot_description, loads the hardware plugin, and on the
     # serial backend opens the port. The update_rate argument comes after the yaml, so it wins.
+    manager_parameters = [
+        controllers_yaml,
+        {'update_rate': ParameterValue(LaunchConfiguration('update_rate'), value_type=int)},
+    ]
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
         output='both',
-        parameters=[
-            controllers_yaml,
-            {'update_rate': ParameterValue(LaunchConfiguration('update_rate'), value_type=int)},
-        ])
+        parameters=manager_parameters,
+        condition=UnlessCondition(inactive))
+    # The same node, told to configure the hardware component and stop there: the port is
+    # open and the pose is published, but write() sends nothing until someone activates it.
+    control_node_inactive = Node(
+        package='controller_manager',
+        executable='ros2_control_node',
+        output='both',
+        parameters=manager_parameters + [
+            {'hardware_components_initial_state.inactive': ['positronic_arm']},
+        ],
+        condition=IfCondition(inactive))
 
     # Publishes /joint_states from the plugin's state interfaces, once per update.
     joint_state_broadcaster = Node(
@@ -125,7 +148,15 @@ def generate_launch_description():
         package='controller_manager',
         executable='spawner',
         output='both',
-        arguments=['arm_controller', '--param-file', controllers_yaml])
+        arguments=['arm_controller', '--param-file', controllers_yaml],
+        condition=UnlessCondition(inactive))
+    # Loaded and configured, not activated: it takes no trajectory goal yet.
+    arm_controller_inactive = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='both',
+        arguments=['arm_controller', '--param-file', controllers_yaml, '--inactive'],
+        condition=IfCondition(inactive))
 
     return LaunchDescription([
         backend,
@@ -134,8 +165,11 @@ def generate_launch_description():
         moving_period_ms,
         send_settle_ms,
         update_rate,
+        start_inactive,
         robot_state_publisher,
         control_node,
+        control_node_inactive,
         joint_state_broadcaster,
         arm_controller,
+        arm_controller_inactive,
     ])
