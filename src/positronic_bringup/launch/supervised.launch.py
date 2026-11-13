@@ -35,7 +35,7 @@ running and active (its heartbeat):
 After any halt the supervisor is INACTIVE again and the same command resumes. The state and
 the reason of the last halt are on /safety_supervisor/status.
 
-Both run on the Jetson, next to each other (ADR 0005). The parameters of the supervisor are
+Both run on the Jetson, next to each other (ADR 0006). The parameters of the supervisor are
 in config/safety_supervisor.yaml.
 
 Launch arguments: the ones of driver.launch.py, which this launch passes on (backend, port,
