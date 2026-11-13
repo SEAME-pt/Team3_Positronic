@@ -25,9 +25,14 @@ safety_supervisor:
       - arm_controller
       - forward_position_controller
 
-    # The mission node publishes at 10 Hz, so 200 ms tolerates one late heartbeat.
+    # Chosen from the heartbeat link campaign (docs/03_verification/heartbeat_link): the
+    # longest gap between two heartbeats on the lab Wi-Fi was 157 ms in the campaign (ros2
+    # tools running on the laptop included), and one of at least 204 ms with the real mission
+    # node; 300 ms is about 1.5 times the latter. It holds only with the mission node at 25 Hz
+    # and the Jetson's Wi-Fi power saving off: with power saving on, gaps of 0.2-0.4 s came
+    # every few seconds.
     heartbeat_topic: /mission/heartbeat
-    heartbeat_timeout_ms: 200
+    heartbeat_timeout_ms: 300
 
     # driver/fault_code, as joint_state_broadcaster publishes it at the control rate (30 Hz).
     fault_topic: /dynamic_joint_states

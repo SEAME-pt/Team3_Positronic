@@ -95,8 +95,11 @@ SafetySupervisor::SafetySupervisor(const rclcpp::NodeOptions & options)
   // FAULT_GPIO and FAULT_STATE in positronic_hardware.hpp.
   declare_parameter<std::string>("fault_gpio", "driver");
   declare_parameter<std::string>("fault_interface", "fault_code");
-  // The mission node publishes at 10 Hz: 200 ms tolerates one lost heartbeat.
-  declare_parameter<int>("heartbeat_timeout_ms", 200);
+  // Measured on the lab Wi-Fi (docs/03_verification/heartbeat_link): the longest gap between
+  // two heartbeats was 157 ms in the campaign, and one of at least 204 ms with the real mission
+  // node; 300 ms is about 1.5 times the latter. Assumes the mission node publishes at 25 Hz and
+  // the Jetson's Wi-Fi power saving is off.
+  declare_parameter<int>("heartbeat_timeout_ms", 300);
   // The fault code comes at the control rate, 30 Hz: 200 ms is six messages in a row lost.
   declare_parameter<int>("fault_timeout_ms", 200);
   // Above the 300 ms the driver waits for its stop to leave the port before it answers.
