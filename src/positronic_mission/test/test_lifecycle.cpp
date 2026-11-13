@@ -28,8 +28,8 @@
 using positronic_mission::GoToPose;
 using positronic_mission::MotionOutcome;
 using positronic_mission::State;
-using rclcpp_action::ResultCode;
 using positronic_mission::test::MissionNodeTest;
+using rclcpp_action::ResultCode;
 using LifeState = lifecycle_msgs::msg::State;
 
 TEST_F(MissionNodeTest, LifecycleTransitions)

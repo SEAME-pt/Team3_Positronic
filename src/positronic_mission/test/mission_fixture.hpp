@@ -32,11 +32,11 @@
 #include <optional>
 #include <thread>
 #include "lifecycle_msgs/msg/state.hpp"
+#include "mock_backend.hpp"
 #include "positronic_mission/mission_node.hpp"
+#include "positronic_mission/pose_validation.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
-#include "mock_backend.hpp"
-#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission::test
 {
@@ -173,8 +173,9 @@ protected:
     goal.target_pose = pose;
 
     auto options = rclcpp_action::Client<GoToPose>::SendGoalOptions();
-    options.feedback_callback =
-      [this](const GoalHandleClient::SharedPtr &, const std::shared_ptr<const GoToPose::Feedback> &) {
+    options.feedback_callback = [this](
+      const GoalHandleClient::SharedPtr &,
+      const std::shared_ptr<const GoToPose::Feedback> &) {
         ++feedback_count_;
       };
 

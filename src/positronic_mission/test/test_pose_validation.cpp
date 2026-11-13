@@ -20,8 +20,8 @@
 
 #include "mission_fixture.hpp"
 
-using positronic_mission::GoToPose;
 using geometry_msgs::msg::PoseStamped;
+using positronic_mission::GoToPose;
 
 // ======================= Pose Check =======================
 
