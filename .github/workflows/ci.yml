@@ -59,6 +59,26 @@ jobs:
       - name: Test
         run: make RUN="$RUN_DEV" test
 
+      # Line coverage of src/, C++ and Python (scripts/coverage.sh, scripts/coverage_gate.py).
+      # Each package must reach 80 %; the total is only shown. Own build in build_cov/, so the
+      # build/ of the steps around it is not touched.
+      #   Counted:  C++ and Python under src/, including files no test runs (at 0 %)
+      #   Excluded: */test/* (tests covering themselves), */launch/* (configuration, checked in
+      #             the simulation), */setup.py (packaging), see .coveragerc
+      # Report-only until #46 (Sprint 03): a package below 80 % marks this step red, but the job
+      # still passes. Remove continue-on-error then.
+      # The gate writes its table to GITHUB_STEP_SUMMARY. The container can't see the runner's
+      # file, so it writes into coverage/ (the repo is mounted at /ws) and the next step copies it.
+      - name: Coverage (report-only)
+        continue-on-error: true
+        run: >-
+          make coverage
+          RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md dev"
+
+      - name: Coverage report in the job summary
+        if: always()
+        run: cat coverage/summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No coverage report"
+
       # clang-tidy on the strict packages (TIDY_STRICT_FILES in the Makefile): any warning fails.
       # Needs the Build step above, which writes build/compile_commands.json
       - name: Static analysis (clang-tidy)

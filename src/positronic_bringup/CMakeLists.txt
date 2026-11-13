@@ -15,12 +15,16 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_robot_description test/test_robot_description.py)
   # The maths of the delay script, without ROS running (#24).
   ament_add_pytest_test(test_joint_states_delay test/test_joint_states_delay.py)
+  ament_add_pytest_test(test_joint_states_rate test/test_joint_states_rate.py)
+  # main() of the rate script, alone: it initialises rclpy itself, so it needs its own process.
+  ament_add_pytest_test(test_joint_states_rate_main test/test_joint_states_rate_main.py)
 endif()
 
 # Copy the folders to install/.
 install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
 # Scripts go to lib/, where `ros2 run` looks for executables.
-install(PROGRAMS scripts/joint_states_delay.py DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/joint_states_delay.py scripts/joint_states_rate.py
+  DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

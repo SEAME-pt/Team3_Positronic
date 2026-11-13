@@ -29,6 +29,7 @@ make doctor          # check the environment
 make shell           # shell in the container, repo mounted at /ws
 make build           # colcon build
 make test            # colcon test (unit tests + linters)
+make coverage        # line coverage of src/ per package, fails if one is below 80 % (report in coverage/)
 make tidy            # clang-tidy on src/ with our .clang-tidy (run make build first)
 make tidy-strict     # clang-tidy on hardware, protocol and mission, warnings are errors (CI runs this)
 make format-check    # ROS lint on src/ (uncrustify, cpplint, cppcheck, copyright...), changes nothing
@@ -54,9 +55,10 @@ from `make image`.
 3. In the editor's terminal (now inside the container, at `/ws`): `make build`.
 4. Open a `.cpp` in a package: `#include "rclcpp/rclcpp.hpp"` has no error and Ctrl+click opens the header.
 
-In the editor's terminal, `make build`, `make test`, `make format`, `make format-check`,
-`make tidy` and `make doctor` run directly in that container. Run `make image`, the `nano-*`
-targets, `git` and GUI apps (RViz through `make shell`) from a normal terminal on your machine.
+In the editor's terminal, `make build`, `make test`, `make coverage`, `make format`,
+`make format-check`, `make tidy` and `make doctor` run directly in that container. Run
+`make image`, the `nano-*` targets, `git` and GUI apps (RViz through `make shell`) from a normal
+terminal on your machine.
 
 After a Dockerfile change: `make image`, then stop the old container (`docker ps`,
 `docker kill <id>`) and reopen. Zed doesn't rebuild it on its own; VS Code has **Rebuild Container**.

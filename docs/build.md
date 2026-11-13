@@ -94,6 +94,13 @@ To build only one package, use `make shell` and run `colcon build --packages-sel
 **`make test`**: runs every package's tests plus linters and prints a summary. Read the last lines: they say how
 many tests failed. Run `make build` first, since the tests run against the last build.
 
+**`make coverage`**: measures which lines of `src/` (C++ and Python) the tests run. It builds and tests
+everything a second time with coverage on, in `build_cov/` and `install_cov/`, so your normal build
+is untouched; expect it to take about as long as `make build` plus `make test`. It prints one line per
+package and fails if any package is below 80 % (the total is only for information). The data goes to
+`coverage/`. CI runs it on every PR in report-only mode: the table is in the job summary and a
+failure doesn't block the merge yet (ADR 0005, #46).
+
 **`make format`**: rewrites C++ files in `src/` with clang-format (`.clang-format`), then ROS's uncrustify. It changes files, so check
 `git diff` afterwards. **`make format-check`** only reports problems, without changing anything; use
 it to check before pushing.
@@ -109,8 +116,8 @@ CI runs it, so run it before you push changes there. Needs `make build` first.
 With `ARM_IP=<jetson ip>` it also checks the Jetson is reachable. Run it first when something is
 broken.
 
-**`make clean`**: deletes `build/`, `install/` and `log/`. Use it when a build behaves strangely,
-then `make build` again.
+**`make clean`**: deletes `build/`, `install/` and `log/`, and the coverage outputs (`build_cov/`,
+`install_cov/`, `coverage/`). Use it when a build behaves strangely, then `make build` again.
 
 ## Jetson commands
 

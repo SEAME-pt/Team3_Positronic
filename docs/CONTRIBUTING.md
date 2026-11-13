@@ -272,6 +272,7 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | `make build` | `colcon build` |
 | `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`) |
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
+| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); report-only in CI for now |
 | Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
 
 **Why two formatters.** In `make test`, ROS checks C++ formatting with **uncrustify**, not clang-format. Our `.clang-format` is ROS's own clang-format config (`ament_clang_format`) plus a few options that make it agree with uncrustify. In a few places clang-format physically can't produce what uncrustify demands: the body of a lambda, the continuation lines of a wrapped `while`/`for` condition, and `case` blocks with braces. So `make format` runs clang-format first and uncrustify last. Uncrustify has the final word, and the result passes `make test`.

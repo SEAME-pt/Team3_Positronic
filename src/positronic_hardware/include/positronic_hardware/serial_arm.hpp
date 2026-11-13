@@ -83,9 +83,15 @@ public:
   /// follows a get_angles request before its reply is dropped by the arm.
   static constexpr std::chrono::milliseconds REPLY_TIMEOUT{50};
 
-  // REQUEST_TIMEOUT, from the contract, covers two turns of the worst case: a silent arm holds a
-  // turn for REPLY_TIMEOUT plus one VTIME read (0.1 s), ~150 ms, and the request may land just
-  // after a turn has started.
+  /// How long the thread sleeps after a read that returned no bytes, before it reads again.
+  /// The port returns at once (VTIME = 0), so without it the thread would spin while it waits
+  /// for a reply. 2 ms adds at most 2 ms to a reply that takes ~8 ms, at a few hundred cheap
+  /// reads per second on the Jetson.
+  static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
+
+  // REQUEST_TIMEOUT, from the contract, covers the worst case with a wide margin: a silent arm
+  // holds a turn for REPLY_TIMEOUT (~50 ms, the reads return at once), and the request may land
+  // just after a turn has started, so the frame is out within ~100 ms.
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
