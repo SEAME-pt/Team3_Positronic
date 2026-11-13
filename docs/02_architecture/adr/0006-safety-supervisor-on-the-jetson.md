@@ -1,4 +1,4 @@
-# 0005. The safety supervisor runs on the Jetson, next to the driver
+# 0006. The safety supervisor runs on the Jetson, next to the driver
 
 2026-11-11, proposed, Felipe Suassuna (issue #45).
 
