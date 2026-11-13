@@ -27,9 +27,8 @@ using positronic_mission::MotionOutcome;
 using positronic_mission::State;
 using rclcpp_action::ResultCode;
 namespace lc = lifecycle_msgs::msg;
-
-namespace positronic_mission::test
-{
+using positronic_mission::test::MissionNodeTest;
+using positronic_mission::test::WrappedResult;
 
 // Measures how long `fn` takes, in milliseconds
 template<typename Fn>
@@ -190,5 +189,3 @@ TEST_F(MissionNodeTest, DestroyMidGoalExitsQuickly)
   EXPECT_LT(ms, 1000) << "Destructor waited for the motion to finish";
   EXPECT_GE(mock_->stops, 1) << "Destructor didn't stop the backend";
 }
-
-}  // namespace positronic_mission::test

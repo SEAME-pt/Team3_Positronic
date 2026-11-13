@@ -26,9 +26,7 @@ using positronic_mission::GoToPose;
 using positronic_mission::MotionOutcome;
 using positronic_mission::State;
 using rclcpp_action::ResultCode;
-
-namespace positronic_mission::test
-{
+using positronic_mission::test::MissionNodeTest;
 
 // ======================= Execution =======================
 
@@ -250,4 +248,3 @@ TEST_F(MissionNodeTest, ResetRefusedWhileMoving)
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->result->code, GoToPose::Result::OK);
 }
-}  // namespace positronic_mission::test

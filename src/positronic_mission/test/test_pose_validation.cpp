@@ -21,9 +21,7 @@
 #include "mission_fixture.hpp"
 
 using positronic_mission::GoToPose;
-
-namespace positronic_mission::test
-{
+using geometry_msgs::msg::PoseStamped;
 
 // ======================= Pose Check =======================
 
@@ -90,4 +88,3 @@ TEST(PoseValidation, NonFiniteValidation)
   EXPECT_EQ(positronic_mission::validate_pose(q), "non numeric pose value");
   EXPECT_EQ(positronic_mission::validate_pose(r), "non numeric pose value");
 }
-}  // namespace positronic_mission::test

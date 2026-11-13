@@ -25,13 +25,14 @@
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_mission/motion_backend.hpp"
 
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 using positronic_mission::GoToPose;
 using positronic_mission::MotionOutcome;
 using positronic_mission::State;
 using rclcpp_action::ResultCode;
-
-namespace positronic_mission::test
-{
+using positronic_mission::test::MissionNodeTest;
+using LifeState = lifecycle_msgs::msg::State;
 
 TEST_F(MissionNodeTest, LifecycleTransitions)
 {
@@ -169,4 +170,3 @@ TEST_F(MissionNodeTest, Heartbeat)
       return heartbeat_count_.load() > tmp_count;
   }));
 }
-}  // namespace positronic_mission::test
