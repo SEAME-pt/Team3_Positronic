@@ -346,131 +346,19 @@ Decisions:
 ---
 
 ### 2026-11-10 (Tue) · day 7 of 10
-
-Scrum Master: 
-Meetings today: none
-
-**Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-Challenges:
-- 
-
-Decisions:
-- 
-
+    
+    --reuniao
 ---
 
 ### 2026-11-11 (Wed) · day 8 of 10
 
-Scrum Master: 
-Meetings today: Standup with facilators.
-
-**Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-Challenges:
-- 
-
-Decisions:
-- 
+- charles storm
 
 ---
 
 ### 2026-11-12 (Thu) · day 9 of 10
 
-Scrum Master: 
-Meetings today: none
-
-**Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
-
-**Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-**Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
-
-Challenges:
-- 
-
-Decisions:
-- 
+- technical visit
 
 ---
 
@@ -482,34 +370,34 @@ Meetings today: Sprint 2 review & retrospective
 Reminder: open the PR `docs(standups): sprint 02 week 2` today, then the `dev` to `main` release PR after the review.
 
 **Felipe**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: ends issue #45
+- Blocked: nothing
 
 **Leandro**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: ends issue 115 e fazer a apresentação de review
+- Blocked: nothin
 
 **Pedro**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: terminal o HIL
+- Blocked: nothing
 
 **Rui**, block A
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: preparar a parte da apresentação e ajudar com os testes
+- Blocked: nothing
 
 **Vinicius**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: terminar a issue #43
+- Blocked: nothing
 
 **Wallace**, block B
-- Done: 
-- Today: 
-- Blocked: 
+- Done: technical visit
+- Today: fazer o sprint planning
+- Blocked: nothing
 
 Challenges:
 - 
