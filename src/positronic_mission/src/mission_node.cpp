@@ -26,325 +26,329 @@
 
 using namespace std::chrono_literals;
 
-positronic_mission::MissionNode::MissionNode(
-    const rclcpp::NodeOptions & options)
-    : LifecycleNode("mission_node", options)
+positronic_mission::MissionNode::MissionNode(const rclcpp::NodeOptions & options)
+: LifecycleNode("mission_node", options)
 {
-    RCLCPP_INFO(get_logger(), "IN constructor");
+  RCLCPP_INFO(get_logger(), "IN constructor");
 }
 
 positronic_mission::MissionNode::~MissionNode()
 {
-    state_ = State::INACTIVE;
-    if (backend_) {
-        backend_->stop();
-    }
-    if (exec_thread_.joinable()) {
-        exec_thread_.join();
-    }
+  state_ = State::INACTIVE;
+  if (backend_) {
+    backend_->stop();
+  }
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
 }
 
 void positronic_mission::MissionNode::handle_reset(
-    const std::shared_ptr<StateTrigger::Request> & /* request */,
-    std::shared_ptr<StateTrigger::Response> response)
+  const std::shared_ptr<StateTrigger::Request> & /* request */,
+  std::shared_ptr<StateTrigger::Response> response)
 {
-    if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-        response->accepted = false;
-        response->message = "Refused: Arm is not activated";
-        return;
-    }
-    State expected = State::STOPPED;
-    if (state_.compare_exchange_strong(expected, State::IDLE)) {
-        response->accepted = true;
-        response->message = "Reset done";
-        return;
-    }
-    expected = State::ERROR;
-    if (state_.compare_exchange_strong(expected, State::IDLE)) {
-        response->accepted = true;
-        response->message = "Reset done";
-        return;
-    }
+  if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     response->accepted = false;
-    response->message = "Refused: State is not ERROR or STOPPED";
+    response->message = "Refused: Arm is not activated";
+    return;
+  }
+  State expected = State::STOPPED;
+  if (state_.compare_exchange_strong(expected, State::IDLE)) {
+    response->accepted = true;
+    response->message = "Reset done";
+    return;
+  }
+  expected = State::ERROR;
+  if (state_.compare_exchange_strong(expected, State::IDLE)) {
+    response->accepted = true;
+    response->message = "Reset done";
+    return;
+  }
+  response->accepted = false;
+  response->message = "Refused: State is not ERROR or STOPPED";
 }
 
 void positronic_mission::MissionNode::handle_emergency_stop(
-    const std::shared_ptr<StateTrigger::Request> & /* request */,
-    std::shared_ptr<StateTrigger::Response> response)
+  const std::shared_ptr<StateTrigger::Request> & /* request */,
+  std::shared_ptr<StateTrigger::Response> response)
 {
-    State state_now = state_.load();
-    // Set the arm to STOPPED, unless it is already in ERROR
-    while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
-    }
-    // Abort backend if it was executing
-    if (backend_) {
-        backend_->stop();
-    }
+  State state_now = state_.load();
+  // Set the arm to STOPPED, unless it is already in ERROR
+  while (state_now != State::ERROR && !state_.compare_exchange_weak(state_now, State::STOPPED)) {
+  }
+  // Abort backend if it was executing
+  if (backend_) {
+    backend_->stop();
+  }
 
-    response->accepted = true;
-    response->message = (state_now ==
-        State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
+  response->accepted = true;
+  response->message =
+    (state_now == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(
-    const rclcpp_lifecycle::State & /* state */)
+  const rclcpp_lifecycle::State & /* state */)
 {
-    auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
-    RCLCPP_INFO(get_logger(), "IN on_configure");
-    // Create everything here
-    publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
-    reset_state_ = create_service<StateTrigger>("/mission/reset",
-                    [this](const std::shared_ptr<StateTrigger::Request> & request,
-                        std::shared_ptr<StateTrigger::Response> response) {
-                        handle_reset(request, response);
-                    });
-    emergency_stop_ = create_service<StateTrigger>("/mission/stop",
-                        [this](const std::shared_ptr<StateTrigger::Request> & request,
-                            std::shared_ptr<StateTrigger::Response> response) {
-                            handle_emergency_stop(request, response);
-                        });
+  RCLCPP_INFO(get_logger(), "IN on_configure");
+  // Create everything here
+  publisher_ = create_publisher<Heartbeat>("/mission/heartbeat", qos);
+  reset_state_ = create_service<StateTrigger>(
+    "/mission/reset", [this](
+      const std::shared_ptr<StateTrigger::Request> & request,
+      std::shared_ptr<StateTrigger::Response> response) {
+      handle_reset(request, response);
+    });
+  emergency_stop_ = create_service<StateTrigger>(
+    "/mission/stop", [this](
+      const std::shared_ptr<StateTrigger::Request> & request,
+      std::shared_ptr<StateTrigger::Response> response) {
+      handle_emergency_stop(request, response);
+    });
 
-    mission_server_ = rclcpp_action::create_server<GoToPose>(
-        this, "/mission/go_to_pose",
-        [this](const rclcpp_action::GoalUUID & uuid,
-            const std::shared_ptr<const GoToPose::Goal> & goal) {
-            return handle_goal(uuid, goal);
-        },
-        [this](const std::shared_ptr<GoalHandle> & goal_handle) {
-            return handle_cancel(goal_handle);
-        },
-        [this](const std::shared_ptr<GoalHandle> & goal_handle) {
-            handle_accepted(goal_handle);
-        });
+  mission_server_ = rclcpp_action::create_server<GoToPose>(
+    this, "/mission/go_to_pose",
+    [this](
+      const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal) {
+      return handle_goal(uuid, goal);
+    },
+    [this](const std::shared_ptr<GoalHandle> & goal_handle) {
+      return handle_cancel(goal_handle);
+    },
+    [this](const std::shared_ptr<GoalHandle> & goal_handle) {
+      handle_accepted(goal_handle);
+    });
 
-    if (!backend_) {
-        backend_ = std::make_shared<MoveitBackend>("arm");
-    }
+  if (!backend_) {
+    backend_ = std::make_shared<MoveitBackend>("arm");
+  }
 
-    timer_ = create_wall_timer(100ms, [this]{heart_beat();});
-    timer_->cancel();
+  timer_ = create_wall_timer(40ms, [this] {
+        heart_beat();
+  });
+  timer_->cancel();
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 void positronic_mission::MissionNode::reset_ptrs()
 {
-    mission_server_ = nullptr;
-    publisher_ = nullptr;
-    reset_state_ = nullptr;
-    emergency_stop_ = nullptr;
-    timer_ = nullptr;
+  mission_server_ = nullptr;
+  publisher_ = nullptr;
+  reset_state_ = nullptr;
+  emergency_stop_ = nullptr;
+  timer_ = nullptr;
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(
-    const rclcpp_lifecycle::State & /* state */)
+  const rclcpp_lifecycle::State & /* state */)
 {
-    RCLCPP_INFO(get_logger(), "IN on_cleanup");
-    state_ = State::INACTIVE;
-    if (exec_thread_.joinable()) {
-        exec_thread_.join();
-    }
-    reset_ptrs();
+  RCLCPP_INFO(get_logger(), "IN on_cleanup");
+  state_ = State::INACTIVE;
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
+  reset_ptrs();
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_activate(
-    const rclcpp_lifecycle::State & state)
+  const rclcpp_lifecycle::State & state)
 {
-    RCLCPP_INFO(get_logger(), "IN on_activate");
+  RCLCPP_INFO(get_logger(), "IN on_activate");
 
-    if (!backend_->ready()) {
-        RCLCPP_ERROR(get_logger(), "MoveIt not available, staying inactive");
-        return CallbackReturn::FAILURE;
-    }
+  if (!backend_->ready()) {
+    RCLCPP_ERROR(get_logger(), "MoveIt not available, staying inactive");
+    return CallbackReturn::FAILURE;
+  }
 
-    State expected = State::INACTIVE;
-    state_.compare_exchange_strong(expected, State::IDLE);
-    LifecycleNode::on_activate(state);
+  State expected = State::INACTIVE;
+  state_.compare_exchange_strong(expected, State::IDLE);
+  LifecycleNode::on_activate(state);
 
-    timer_->reset();
+  timer_->reset();
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivate(
-    const rclcpp_lifecycle::State & state)
+  const rclcpp_lifecycle::State & state)
 {
-    RCLCPP_INFO(get_logger(), "IN on_deactivate");
+  RCLCPP_INFO(get_logger(), "IN on_deactivate");
 
-    // Get the current State
-    // Check if it's not ERROR. Then check if it didn't change from the last check
-    // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
-    // Using _weak because it can be faster on loops. Don't use it for single checks since it can spuriously fail!
-    State state_now = state_.load();
-    while ((state_now == State::IDLE || state_now == State::MOVING)
-        && !state_.compare_exchange_weak(state_now, State::INACTIVE)) {
-    }
-    if (backend_) {
-        backend_->stop();
-    }
-    if (exec_thread_.joinable()) {
-        exec_thread_.join();
-    }
-    timer_->cancel();
-    LifecycleNode::on_deactivate(state);
+  // Get the current State
+  // Check if it's not ERROR. Then check if it didn't change from the last check
+  // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
+  // Using _weak because it can be faster on loops. Don't use it for single checks since it can spuriously fail!
+  State state_now = state_.load();
+  while ((state_now == State::IDLE || state_now == State::MOVING) &&
+    !state_.compare_exchange_weak(state_now, State::INACTIVE))
+  {
+  }
+  if (backend_) {
+    backend_->stop();
+  }
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
+  timer_->cancel();
+  LifecycleNode::on_deactivate(state);
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
-    const rclcpp_lifecycle::State & /* state */)
+  const rclcpp_lifecycle::State & /* state */)
 {
-    RCLCPP_INFO(get_logger(), "IN on_shutdown");
+  RCLCPP_INFO(get_logger(), "IN on_shutdown");
 
-    state_ = State::INACTIVE;
-    if (backend_) {
-        backend_->stop();
-    }
-    if (exec_thread_.joinable()) {
-        exec_thread_.join();
-    }
+  state_ = State::INACTIVE;
+  if (backend_) {
+    backend_->stop();
+  }
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
 
-    reset_ptrs();
+  reset_ptrs();
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 void positronic_mission::MissionNode::heart_beat()
 {
-    auto msg = Heartbeat();
-    msg.stamp = now();
+  auto msg = Heartbeat();
+  msg.stamp = now();
 
-    // Update msg state from the actual state
-    msg.state = static_cast<uint8_t>(state_.load());
-    msg.node_name = get_name();
+  // Update msg state from the actual state
+  msg.state = static_cast<uint8_t>(state_.load());
+  msg.node_name = get_name();
 
-    publisher_->publish(msg);
+  publisher_->publish(msg);
 }
 
 rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
-    const rclcpp_action::GoalUUID & /* uuid */,
-    const std::shared_ptr<const GoToPose::Goal> & goal)
+  const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
 {
-    if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-        RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
-        return rclcpp_action::GoalResponse::REJECT;
-    }
-    std::string reason = validate_pose(goal->target_pose);
-    if (!reason.empty()) {
-        RCLCPP_WARN(get_logger(), "Rejected, %s" ,reason.c_str());
-        return rclcpp_action::GoalResponse::REJECT;
-    }
-    // This is a weird one
-    // compare_exchange_strong does
-    // if equals to first param, change value to second param, return true
-    // if different, set expected to old value, return false
-    State expected = State::IDLE;
-    if (!state_.compare_exchange_strong(expected, State::MOVING)) {
-        RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");
-        return rclcpp_action::GoalResponse::REJECT;
-    }
-    backend_->reset_stop();
+  if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  std::string reason = validate_pose(goal->target_pose);
+  if (!reason.empty()) {
+    RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  // This is a weird one
+  // compare_exchange_strong does
+  // if equals to first param, change value to second param, return true
+  // if different, set expected to old value, return false
+  State expected = State::IDLE;
+  if (!state_.compare_exchange_strong(expected, State::MOVING)) {
+    RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  backend_->reset_stop();
 
-    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse positronic_mission::MissionNode::handle_cancel(
-    const std::shared_ptr<GoalHandle> & /* goal_handle */)
+  const std::shared_ptr<GoalHandle> & /* goal_handle */)
 {
-    // Accepting all cancelations for now
-    RCLCPP_INFO(get_logger(), "Cancel requested");
-    if (backend_) {
-        backend_->stop();
-    }
-    return rclcpp_action::CancelResponse::ACCEPT;
+  // Accepting all cancelations for now
+  RCLCPP_INFO(get_logger(), "Cancel requested");
+  if (backend_) {
+    backend_->stop();
+  }
+  return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void positronic_mission::MissionNode::handle_accepted(
-    const std::shared_ptr<GoalHandle> & goal_handle)
+  const std::shared_ptr<GoalHandle> & goal_handle)
 {
-    // Join thread if a goal was finished. Before starting a second goal
-    if (exec_thread_.joinable()) {
-        exec_thread_.join();
-    }
-    // Needs to execute it in a thread to not block the node
-    auto exec_function = [this, goal_handle](){ execute(goal_handle); };
-    exec_thread_ = std::thread(exec_function);
+  // Join thread if a goal was finished. Before starting a second goal
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
+  // Needs to execute it in a thread to not block the node
+  auto exec_function = [this, goal_handle]() {
+      execute(goal_handle);
+    };
+  exec_thread_ = std::thread(exec_function);
 }
 
 void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> & goal_handle)
 {
-    RCLCPP_INFO(get_logger(), "Executing");
+  RCLCPP_INFO(get_logger(), "Executing");
 
-    // Read the received goal from the client
-    auto goal = goal_handle->get_goal();
+  // Read the received goal from the client
+  auto goal = goal_handle->get_goal();
 
-    // Create empty feedback and result, to be populated by me
-    auto feedback = std::make_shared<GoToPose::Feedback>();
-    auto result = std::make_shared<GoToPose::Result>();
-    feedback->stage = "executing";
-    goal_handle->publish_feedback(feedback);
+  // Create empty feedback and result, to be populated by me
+  auto feedback = std::make_shared<GoToPose::Feedback>();
+  auto result = std::make_shared<GoToPose::Result>();
+  feedback->stage = "executing";
+  goal_handle->publish_feedback(feedback);
 
-    // Blocking call made to Moveit
-    const MotionOutcome outcome = backend_->plan_and_execute(goal->target_pose);
+  // Blocking call made to Moveit
+  const MotionOutcome outcome = backend_->plan_and_execute(goal->target_pose);
 
-    if (!rclcpp::ok()) {
-        // Protection for the lower checks. If mission_node is shutdown
-        backend_->stop();
-        return ;
-    }
+  if (!rclcpp::ok()) {
+    // Protection for the lower checks. If mission_node is shutdown
+    backend_->stop();
+    return;
+  }
 
-    State expected = State::MOVING;
-    // Client cancel
-    if (outcome == MotionOutcome::PREEMPTED && goal_handle->is_canceling()) {
-        // If state is different than MOVING, don't touch it.
-        state_.compare_exchange_strong(expected, State::STOPPED);
-        // Cancel anyways because arm was or STOPPED or ERROR
-        result->code = GoToPose::Result::CANCELED;
-        goal_handle->canceled(result);
-        RCLCPP_INFO(get_logger(), "Goal canceled");
-        return ;
-    }
-    // Someone else changed the State (emergency stop, deactivate mission_node)
-    if (state_ != State::MOVING || outcome == MotionOutcome::PREEMPTED) {
-        state_.compare_exchange_strong(expected, State::STOPPED);
-        result->code = (expected ==
-            State::ERROR) ? GoToPose::Result::ERROR : GoToPose::Result::STOPPED;
-        goal_handle->abort(result);
-        RCLCPP_INFO(get_logger(), "Force stop activated");
-        return ;
-    }
-    // Planning failed
-    if (outcome == MotionOutcome::PLANNING_FAILED) {
-        state_.compare_exchange_strong(expected, State::IDLE);
-        result->code = GoToPose::Result::REJECTED;
-        goal_handle->abort(result);
-        RCLCPP_INFO(get_logger(), "Moveit planning failed");
-        return ;
-    }
-    // Execution failed
-    if (outcome == MotionOutcome::EXECUTION_FAILED) {
-        state_.compare_exchange_strong(expected, State::ERROR);
-        result->code = GoToPose::Result::ERROR;
-        goal_handle->abort(result);
-        RCLCPP_INFO(get_logger(), "Execution failed");
-        return ;
-    }
-    // Success
-    if (state_.compare_exchange_strong(expected, State::IDLE)) {
-        result->success = true;
-        result->code = GoToPose::Result::OK;
-        goal_handle->succeed(result);
-        RCLCPP_INFO(get_logger(), "Goal achieved");
+  State expected = State::MOVING;
+  // Client cancel
+  if (outcome == MotionOutcome::PREEMPTED && goal_handle->is_canceling()) {
+    // If state is different than MOVING, don't touch it.
+    state_.compare_exchange_strong(expected, State::STOPPED);
+    // Cancel anyways because arm was or STOPPED or ERROR
+    result->code = GoToPose::Result::CANCELED;
+    goal_handle->canceled(result);
+    RCLCPP_INFO(get_logger(), "Goal canceled");
+    return;
+  }
+  // Someone else changed the State (emergency stop, deactivate mission_node)
+  if (state_ != State::MOVING || outcome == MotionOutcome::PREEMPTED) {
+    state_.compare_exchange_strong(expected, State::STOPPED);
+    result->code = (expected == State::ERROR) ? GoToPose::Result::ERROR : GoToPose::Result::STOPPED;
+    goal_handle->abort(result);
+    RCLCPP_INFO(get_logger(), "Force stop activated");
+    return;
+  }
+  // Planning failed
+  if (outcome == MotionOutcome::PLANNING_FAILED) {
+    state_.compare_exchange_strong(expected, State::IDLE);
+    result->code = GoToPose::Result::REJECTED;
+    goal_handle->abort(result);
+    RCLCPP_INFO(get_logger(), "Moveit planning failed");
+    return;
+  }
+  // Execution failed
+  if (outcome == MotionOutcome::EXECUTION_FAILED) {
+    state_.compare_exchange_strong(expected, State::ERROR);
+    result->code = GoToPose::Result::ERROR;
+    goal_handle->abort(result);
+    RCLCPP_INFO(get_logger(), "Execution failed");
+    return;
+  }
+  // Success
+  if (state_.compare_exchange_strong(expected, State::IDLE)) {
+    result->success = true;
+    result->code = GoToPose::Result::OK;
+    goal_handle->succeed(result);
+    RCLCPP_INFO(get_logger(), "Goal achieved");
     // Just a backup check. Shouldn't be reachable
-    } else {
-        result->code = GoToPose::Result::STOPPED;
-        goal_handle->abort(result);
-        RCLCPP_INFO(get_logger(), "State changed after execution");
-    }
+  } else {
+    result->code = GoToPose::Result::STOPPED;
+    goal_handle->abort(result);
+    RCLCPP_INFO(get_logger(), "State changed after execution");
+  }
 }
 
 /* This is the topic to report errors. Future idea?
