@@ -98,6 +98,10 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
   ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
   target_include_directories(test_link_watchdog PRIVATE include)
+
+  # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
+  ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)
+  target_include_directories(test_servo_temperature PRIVATE include)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
