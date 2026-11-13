@@ -59,6 +59,7 @@ enum class CommandId : std::uint8_t
   GET_ANGLES = 0x20,          ///< Read the six joint angles.
   SEND_ANGLES = 0x22,         ///< Move the six joints to the given angles.
   STOP = 0x29,                ///< Stop the current motion.
+  GET_SERVO_TEMPS = 0xE5,     ///< Read the six servo temperatures, degC.
 };
 
 /// Joint angle in the wire unit: 0.01 deg, range +-327.67 deg.
@@ -66,6 +67,9 @@ using CentiDegrees = std::int16_t;
 
 /// Six joint angles in the wire unit.
 using JointAngles = std::array<CentiDegrees, NUM_JOINTS>;
+
+/// Six servo temperatures in degC, J1 first: one unsigned byte per servo on the wire.
+using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 
 /// Six joint angles in radians (REP 103), as seen outside the driver.
 using JointRadians = std::array<double, NUM_JOINTS>;

@@ -24,6 +24,9 @@
 //   byte-for-byte to its TX line in the 2026-10-16 capture, that LEN counts CMD + data +
 //   footer, and for send_angles: the two capture frames, the frame shape, int16 big-endian
 //   signed joints, the joint order, and that an out-of-range speed returns nullopt.
+// Follow-up prompt (servo over-temperature):
+//   get_servo_temps (0xE5) encodes to FE FE 02 E5 FA. Not in the 2026-10-16 capture: the
+//   bytes are the ones pymycobot 4.0.4 sends.
 
 #include <gtest/gtest.h>
 
@@ -72,6 +75,11 @@ TEST(Encode, PowerOff)
 TEST(Encode, Stop)
 {
   EXPECT_EQ(to_hex(bytes_of(pp::encode_stop())), "fe fe 02 29 fa");
+}
+
+TEST(Encode, GetServoTemps)
+{
+  EXPECT_EQ(to_hex(bytes_of(pp::encode_get_servo_temps())), "fe fe 02 e5 fa");
 }
 
 TEST(Encode, ReleaseAllServos)

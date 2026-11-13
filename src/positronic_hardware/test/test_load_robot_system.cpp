@@ -72,6 +72,22 @@
 //   gives fault 1 with the component still ACTIVE, the fault stays latched and no send_angles
 //   leaves when replies resume, deactivate and activate clear it and targets go out again; and
 //   on_activate refuses a link that went silent.
+// Follow-up prompt (servo over-temperature):
+//   The plugin reads servo_temp_limit_c (whole degC, 30 to 60, default 60), refuses to activate
+//   without a first servo temperature or while a servo is within 5 degC of the limit, and
+//   read() returns ERROR once the serial thread has cut an overheated arm (stop, then power
+//   off). The pseudo-terminal arm now also answers get_servo_temps (0xE5) with temperatures
+//   the test sets, and records what it receives. Test: the parameter is accepted and its bad
+//   values rejected; activation is refused on a hot arm and on an arm that never answers 0xE5;
+//   and an arm that heats while active is cut (stop then power off on the wire), read()
+//   returns ERROR and the component ends in UNCONFIGURED.
+// Follow-up prompt (overheat fault):
+//   An overheat now also latches driver/fault_code = 3 (FaultCode::OVERHEAT), written before
+//   read() returns ERROR. Test, in the same end-to-end run: after the cut and the ERROR, a
+//   configure shows fault 3 (it survives on_error), and once the arm reports a cool temperature
+//   again, activate clears it to 0. Then the arm the real way: it goes silent after the power
+//   off, so by the first read() after the cut the link has timed out too. The fault must still
+//   be 3, the cause, not 1, its consequence: read() checks the temperatures before the link.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -143,6 +159,7 @@ constexpr std::string_view FAULT_GPIO{
 /// header, so the test fails if someone renumbers them.
 constexpr double NO_FAULT{0.0};
 constexpr double LINK_TIMEOUT_FAULT{1.0};
+constexpr double OVERHEAT_FAULT{3.0};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -155,8 +172,8 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
 std::string good_joint(const std::string & name)
 {
   return joint_block(
-    name, std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} +
-    std::string{VELOCITY});
+    name,
+    std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
 }
 
 /// `text` with its one occurrence of `from` replaced by `to`. Used to edit the URDF limits.
@@ -210,8 +227,7 @@ std::string urdf_with(
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
     "<hardware><plugin>positronic_hardware/RobotSystem</plugin>" +
-    std::string{parameters} + "</hardware>" + joint_blocks + std::string{gpio} +
-    "</ros2_control>"};
+    std::string{parameters} + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
   urdf.insert(urdf.rfind("</robot>"), ros2_control);
   return urdf;
 }
@@ -234,7 +250,8 @@ int open_pseudo_terminal(std::array<char, 128> & port)
   if (controller < 0) {
     return -1;
   }
-  if (::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
+  if (
+    ::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
     ::ptsname_r(controller, port.data(), port.size()) != 0)
   {
     ::close(controller);
@@ -246,11 +263,21 @@ int open_pseudo_terminal(std::array<char, 128> & port)
 /// One get_angles reply as the arm sends it, recorded on the real arm (the pose the SerialArm
 /// tests decode). Written back for every request, so a power_on also gets a pose: the arm
 /// answers that one with an ack, but the thread only looks for poses.
-constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8, 0xFF,
-  0xEF, 0xFF, 0xC3, 0xFF, 0x85, 0x00, 0x2B, 0x00, 0x3D, 0xFA};
+constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8,
+  0xFF, 0xEF, 0xFF, 0xC3, 0xFF, 0x85,
+  0x00, 0x2B, 0x00, 0x3D, 0xFA};
 
-/// Answers every request on the controller side of a pseudo-terminal with RECORDED_REPLY until
-/// stopped: a silent-free stand-in for the arm, enough for activate to succeed. It keeps every
+/// The get_servo_temps request, as the serial thread writes it.
+constexpr std::array<std::uint8_t, 5> TEMPS_REQUEST{0xFE, 0xFE, 0x02, 0xE5, 0xFA};
+
+/// The power_off request: what the serial thread sends to cut an overheated arm.
+constexpr std::array<std::uint8_t, 5> POWER_OFF_REQUEST{0xFE, 0xFE, 0x02, 0x11, 0xFA};
+
+/// Answers the requests on the controller side of a pseudo-terminal until stopped: a silent-free
+/// stand-in for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures
+/// set with set_temperature() (all six servos alike), unless set_answer_temperatures(false);
+/// every other request gets RECORDED_REPLY. With set_silent_after_power_off(true) it answers
+/// nothing once a power_off has arrived, like the real arm with its servos off. It keeps every
 /// byte it receives, so a test can check what the driver put on the wire.
 class ReplyingArm
 {
@@ -264,11 +291,32 @@ public:
             continue;
           }
           const ssize_t got{::read(controller, request.data(), request.size())};
-          if (got > 0) {
-            {
-              const std::lock_guard<std::mutex> lock{mutex_};
-              received_.insert(received_.end(), request.begin(), std::next(request.begin(), got));
-            }
+          if (got <= 0) {
+            continue;
+          }
+          const std::uint8_t * const begin{request.data()};
+          const std::uint8_t * const end{std::next(begin, got)};
+          const bool asks_temperatures{
+            std::search(begin, end, TEMPS_REQUEST.begin(), TEMPS_REQUEST.end()) != end};
+          {
+            const std::lock_guard<std::mutex> lock{mutex_};
+            received_.insert(received_.end(), begin, end);
+          }
+          if (silent_after_power_off_.load() &&
+            std::search(begin, end, POWER_OFF_REQUEST.begin(), POWER_OFF_REQUEST.end()) != end)
+          {
+            powered_off_.store(true);
+          }
+          if (powered_off_.load()) {
+            continue;
+          }
+          if (asks_temperatures && answer_temperatures_.load()) {
+            const std::uint8_t t{celsius_.load()};
+            const std::array<std::uint8_t, 11> reply{0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t,
+              0xFA};
+            static_cast<void>(::write(controller, reply.data(), reply.size()));
+          }
+          if (!asks_temperatures || static_cast<std::size_t>(got) > TEMPS_REQUEST.size()) {
             static_cast<void>(::write(controller, RECORDED_REPLY.data(), RECORDED_REPLY.size()));
           }
         }
@@ -303,12 +351,52 @@ public:
   ReplyingArm(ReplyingArm &&) = delete;
   ReplyingArm & operator=(ReplyingArm &&) = delete;
 
+  /// The temperature every servo reports from now on, degC.
+  void set_temperature(std::uint8_t celsius)
+  {
+    celsius_.store(celsius);
+  }
+
+  /// False: a firmware without get_servo_temps, the request gets no reply at all.
+  void set_answer_temperatures(bool answer)
+  {
+    answer_temperatures_.store(answer);
+  }
+
+  /// True: from the first power_off on, no request gets a reply (the real arm, servos off).
+  void set_silent_after_power_off(bool silent)
+  {
+    silent_after_power_off_.store(silent);
+  }
+
+  /// Every byte the driver wrote to the arm so far.
+  std::vector<std::uint8_t> received()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return received_;
+  }
+
 private:
+  std::atomic<bool> answer_temperatures_{true};
+  std::atomic<bool> silent_after_power_off_{false};
+  std::atomic<bool> powered_off_{false};
+  std::atomic<std::uint8_t> celsius_{30};
   std::atomic<bool> stop_{false};
   std::mutex mutex_;
   std::vector<std::uint8_t> received_;
   std::thread thread_;
 };
+
+/// Index of the first `FE FE 02 id FA` in `bytes` at or after `from`, or bytes.size().
+std::size_t find_request(
+  const std::vector<std::uint8_t> & bytes, std::uint8_t id, std::size_t from = 0)
+{
+  const std::array<std::uint8_t, 5> frame{0xFE, 0xFE, 0x02, id, 0xFA};
+  const std::size_t first{std::min(from, bytes.size())};
+  const auto start{std::next(bytes.begin(), static_cast<std::ptrdiff_t>(first))};
+  return static_cast<std::size_t>(
+    std::distance(bytes.begin(), std::search(start, bytes.end(), frame.begin(), frame.end())));
+}
 
 class LoadRobotSystem : public ::testing::Test
 {
@@ -483,7 +571,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -494,7 +582,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
   load(urdf_with(
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
-                         param("moving_period_ms", "40") + param("send_settle_ms", "25")));
+                         param("moving_period_ms", "40") + param("send_settle_ms", "25") +
+                         param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -518,6 +607,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"moving_period_ms", "66.5"},       // whole ms only
     {"send_settle_ms", "250"},          // longer than the #35 timeout
     {"send_settle_ms", "slow"},         // not a number
+    {"servo_temp_limit_c", "61"},       // the limit can only be lowered
+    {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
+    {"servo_temp_limit_c", "55.5"},     // whole degrees only
+    {"servo_temp_limit_c", "hot"},      // not a number
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -687,10 +780,10 @@ TEST_F(LoadRobotSystem, InitRejectsAJointWithoutALimit)
 {
   // J1 made continuous, without its <limit>: ros2_control accepts it, the driver must not.
   const std::string description{replaced(
-      replaced(
-        read_description(), R"(<joint name="joint2_to_joint1" type="revolute">)",
-        R"(<joint name="joint2_to_joint1" type="continuous">)"),
-      J1_LIMIT, "")};
+    replaced(
+      read_description(), R"(<joint name="joint2_to_joint1" type="revolute">)",
+      R"(<joint name="joint2_to_joint1" type="continuous">)"),
+    J1_LIMIT, "")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -701,8 +794,8 @@ TEST_F(LoadRobotSystem, InitRejectsSwappedLimits)
 {
   // J2 with lower above upper: the check would refuse every command, so the driver stops here.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      R"(<limit effort="10.0" lower="2.4434" upper="-2.4434" velocity="2.618"/>)")};
+    read_description(), J2_LIMIT,
+    R"(<limit effort="10.0" lower="2.4434" upper="-2.4434" velocity="2.618"/>)")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -714,8 +807,8 @@ TEST_F(LoadRobotSystem, ActivateRefusesAnArmOutsideItsLimits)
   // J2 narrowed to [-0.2, 0.2] rad: the fake arm stands at 0.5 rad, outside. The first
   // command would be refused at once, so activation fails with the reason instead.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      R"(<limit effort="10.0" lower="-0.2" upper="0.2" velocity="2.618"/>)")};
+    read_description(), J2_LIMIT,
+    R"(<limit effort="10.0" lower="-0.2" upper="0.2" velocity="2.618"/>)")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
   ASSERT_TRUE(loaded_);
 
@@ -935,16 +1028,153 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsCo
   resource_manager_.reset();
 }
 
+TEST_F(LoadRobotSystem, ActivateRefusesAHotArm)
+{
+  // Every servo at 57 degC: under the 60 degC cut, but within the 5 degC cool-down margin. The
+  // servos are not powered on.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_temperature(57);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, ActivateRefusesAnArmThatDoesNotReportItsTemperature)
+{
+  // Firmware without get_servo_temps: the pose answers, the temperature never does. The
+  // driver does not run without its over-temperature guard.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_answer_temperatures(false);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
+{
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const std::size_t before_heat{arm->received().size()};
+
+  // The servos reach 61 degC. Two readings, one a second, then the serial thread cuts the arm
+  // on its own, and the next read() reports it.
+  arm->set_temperature(61);
+  hardware_interface::return_type result{hardware_interface::return_type::OK};
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+  while (result == hardware_interface::return_type::OK &&
+    std::chrono::steady_clock::now() < deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    result = read_once();
+  }
+  EXPECT_EQ(result, hardware_interface::return_type::ERROR);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+
+  // On the wire, after the heat: a stop, then a power off.
+  const std::vector<std::uint8_t> sent{arm->received()};
+  const std::size_t stop_at{find_request(sent, 0x29, before_heat)};
+  ASSERT_LT(stop_at, sent.size());
+  EXPECT_LT(find_request(sent, 0x11, stop_at), sent.size());
+
+  // #35: the overheat is latched as fault 3. It survives the on_error: a configure publishes it
+  // again for the supervisor. Only an activate clears it, and only a cool arm activates.
+  arm->set_temperature(30);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut)
+{
+  // The real arm stops answering once its servos are off, so after the cut the link times out
+  // too. Only the first fault is kept: read() must latch OVERHEAT, the cause, not LINK_TIMEOUT.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_silent_after_power_off(true);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  // No read() while the arm heats: wait for the power off on the wire, then let the silence run
+  // past the 200 ms link timeout. 400 ms is twice that, a margin for a loaded test machine; the
+  // cut is recorded right after the power off is written, well inside it.
+  // One copy of the bytes per look: two calls to received() can see different lengths.
+  const auto powered_off{[&arm]() {
+      const std::vector<std::uint8_t> sent{arm->received()};
+      return find_request(sent, 0x11) < sent.size();
+    }};
+  arm->set_temperature(61);
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+  while (!powered_off() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  ASSERT_TRUE(powered_off());
+  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+
+  // Both are true now: the arm was cut and the link timed out. The first read() reports the cut.
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
 TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
 {
   // #35: without its fault interface the supervisor would read nothing, so the driver refuses
   // to start, the same way it refuses a joint without its interfaces.
   const std::vector<std::string> bad{
-    "",                                                                      // no <gpio>
-    R"(<gpio name="arm"><state_interface name="fault_code"/></gpio>)",       // wrong name
-    R"(<gpio name="driver"><state_interface name="fault"/></gpio>)",         // wrong interface
+    "",                                                                 // no <gpio>
+    R"(<gpio name="arm"><state_interface name="fault_code"/></gpio>)",  // wrong name
+    R"(<gpio name="driver"><state_interface name="fault"/></gpio>)",    // wrong interface
     R"(<gpio name="driver"><state_interface name="fault_code"/>)"
-    R"(<command_interface name="fault_code"/></gpio>)",                      // a command too
+    R"(<command_interface name="fault_code"/></gpio>)",  // a command too
   };
   for (const auto & gpio : bad) {
     SCOPED_TRACE(gpio);
@@ -959,8 +1189,7 @@ TEST_F(LoadRobotSystem, InitAcceptsMoreDriverStatesAndOtherGpios)
 {
   // Only the fault is required: S3 adds driver states such as a temperature (#115), and other
   // gpios may come, without the driver refusing to start.
-  const std::string gpios{
-    R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+  const std::string gpios{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
     R"(<state_interface name="temperature_max"/></gpio>)"
     R"(<gpio name="gripper"><state_interface name="position"/></gpio>)"};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), gpios));

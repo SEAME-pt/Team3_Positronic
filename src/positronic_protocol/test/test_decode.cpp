@@ -25,6 +25,11 @@
 //   angles, int16 limits and payloads that contain header-like bytes; servo noise and
 //   byte-by-byte resync; and split or multiple frames, cutting the buffer at every
 //   position and streaming it in chunks of every size, the way the UART delivers it.
+// Follow-up prompt (servo over-temperature):
+//   decode_servo_temps_reply finds FE FE 08 E5 + six bytes + FA: a clean frame, one behind
+//   recorded servo noise, a frame cut at every position (NEED_MORE_DATA, then FOUND), the
+//   echo of the request and a get_angles reply are not temperatures, a temperatures reply is
+//   not a get_angles reply, and a wrong LEN is rejected.
 
 #include <gtest/gtest.h>
 
@@ -51,6 +56,11 @@ using test_helpers::view_of;
 /// get_angles reply from the capture: [0.87, 0, -0.61, -1.23, -0.08, 0] deg.
 const Bytes ANGLES_FRAME{parse_hex("fe fe 0e 20 00 57 00 00 ff c3 ff 85 ff f8 00 00 fa")};
 const pp::JointAngles ANGLES_VALUE{87, 0, -61, -123, -8, 0};
+
+/// get_servo_temps reply in the format pymycobot 4.0.4 decodes: J1..J6 = 31, 33, 35, 30, 29,
+/// 28 degC. Not recorded on the arm yet.
+const Bytes TEMPS_FRAME{parse_hex("fe fe 08 e5 1f 21 23 1e 1d 1c fa")};
+const pp::ServoTemperatures TEMPS_VALUE{31, 33, 35, 30, 29, 28};
 
 struct AckCase
 {
@@ -368,4 +378,67 @@ TEST(DecodeSplit, StreamingInChunksOfEverySize)
     }
     EXPECT_EQ(found, 1) << "chunk " << chunk;
   }
+}
+
+// ---------------------------------------------------------------------------
+// decode_servo_temps_reply (servo over-temperature)
+// ---------------------------------------------------------------------------
+
+TEST(DecodeTemps, CleanFrame)
+{
+  const auto result{pp::decode_servo_temps_reply(view_of(TEMPS_FRAME))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value, TEMPS_VALUE);
+  EXPECT_EQ(result.consumed, TEMPS_FRAME.size());
+  EXPECT_EQ(result.rejected, 0U);
+}
+
+TEST(DecodeTemps, BehindServoNoise)
+{
+  const Bytes rx{concat({SERVO_NOISE, TEMPS_FRAME, SERVO_NOISE})};
+  const auto result{pp::decode_servo_temps_reply(view_of(rx))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value, TEMPS_VALUE);
+  EXPECT_EQ(result.consumed, SERVO_NOISE.size() + TEMPS_FRAME.size());
+}
+
+TEST(DecodeTemps, EveryCutPosition)
+{
+  // A reply split by the UART: every prefix waits for more, the whole frame is found.
+  for (std::size_t cut{1}; cut < TEMPS_FRAME.size(); ++cut) {
+    const Bytes head{TEMPS_FRAME.begin(), TEMPS_FRAME.begin() + static_cast<std::ptrdiff_t>(cut)};
+    const auto result{pp::decode_servo_temps_reply(view_of(head))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NEED_MORE_DATA) << "cut " << cut;
+    EXPECT_EQ(result.consumed, 0U) << "cut " << cut;
+  }
+}
+
+TEST(DecodeTemps, EchoOfRequestIsNotAReply)
+{
+  const Bytes rx{concat({parse_hex("fe fe 02 e5 fa"), TEMPS_FRAME})};
+  const auto result{pp::decode_servo_temps_reply(view_of(rx))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value, TEMPS_VALUE);
+  EXPECT_EQ(result.rejected, 1U);
+}
+
+TEST(DecodeTemps, AnglesAndTemperaturesAreNotMixedUp)
+{
+  // Both replies can sit in the same buffer: each decoder finds only its own.
+  const Bytes rx{concat({ANGLES_FRAME, TEMPS_FRAME})};
+  const auto temps{pp::decode_servo_temps_reply(view_of(rx))};
+  ASSERT_EQ(temps.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(temps.value, TEMPS_VALUE);
+  EXPECT_EQ(pp::decode_get_angles_reply(view_of(TEMPS_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(
+    pp::decode_servo_temps_reply(view_of(ANGLES_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+}
+
+TEST(DecodeTemps, WrongLengthIsRejected)
+{
+  // Twelve data bytes (int16 per servo) is not the format we decode: rejected, not misread.
+  const Bytes rx{parse_hex("fe fe 0e e5 00 1f 00 21 00 23 00 1e 00 1d 00 1c fa")};
+  const auto result{pp::decode_servo_temps_reply(view_of(rx))};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.rejected, 1U);
 }

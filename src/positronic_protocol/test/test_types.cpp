@@ -25,6 +25,9 @@
 //   capture's TX lines, that the largest frame (send_angles) fits MAX_FRAME_SIZE, the
 //   speed range and the wire-unit size, that Frame/ByteView/Decoded default to empty, and
 //   that read_byte and view_of never read out of bounds, including at compile time.
+// Follow-up prompt (servo over-temperature):
+//   GET_SERVO_TEMPS is 0xE5. It is not in the capture, so it stays out of
+//   CommandIdsAppearInCapture until a capture records it on the arm.
 
 #include <gtest/gtest.h>
 
@@ -108,6 +111,7 @@ TEST(Types, CommandIdValues)
   EXPECT_EQ(id(pp::CommandId::GET_ANGLES), 0x20);
   EXPECT_EQ(id(pp::CommandId::SEND_ANGLES), 0x22);
   EXPECT_EQ(id(pp::CommandId::STOP), 0x29);
+  EXPECT_EQ(id(pp::CommandId::GET_SERVO_TEMPS), 0xE5);
 }
 
 TEST(Types, CommandIdsAppearInCapture)

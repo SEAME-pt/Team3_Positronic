@@ -43,6 +43,9 @@ constexpr std::size_t BYTES_NOT_IN_LEN{3};
 /// LEN of the get_angles reply: CMD + 12 data bytes + footer = 0x0E.
 constexpr std::uint8_t GET_ANGLES_LEN{static_cast<std::uint8_t>(2 * NUM_JOINTS + 2)};
 
+/// LEN of the get_servo_temps reply: CMD + 6 data bytes + footer = 0x08.
+constexpr std::uint8_t SERVO_TEMPS_LEN{static_cast<std::uint8_t>(NUM_JOINTS + 2)};
+
 /// LEN of an ack: CMD + 1 status byte + footer = 0x03.
 constexpr std::uint8_t ACK_LEN{3};
 
@@ -159,6 +162,20 @@ Decoded<JointAngles> decode_get_angles_reply(ByteView rx) noexcept
     for (auto & angle : result.value) {
       angle = read_int16_be(rx, index);
       index += 2;
+    }
+  }
+  return result;
+}
+
+Decoded<ServoTemperatures> decode_servo_temps_reply(ByteView rx) noexcept
+{
+  const Match match{find_frame(rx, Signature{SERVO_TEMPS_LEN, CommandId::GET_SERVO_TEMPS})};
+  auto result{from_match<ServoTemperatures>(match)};
+  if (match.status == DecodeStatus::FOUND) {
+    std::size_t index{match.start + DATA_OFFSET};
+    for (auto & celsius : result.value) {
+      celsius = detail::read_byte(rx, index);
+      ++index;
     }
   }
   return result;

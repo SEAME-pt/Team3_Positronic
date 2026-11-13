@@ -27,10 +27,16 @@ FE FE LEN CMD [DATA...] FA        LEN = N + 2 for N data bytes; the frame has LE
 | get_angles  | `0x20` | `FE FE 02 20 FA`                            | `FE FE 0E 20` + 6 x int16 + `FA` (17 B)|
 | send_angles | `0x22` | `FE FE 0F 22` + 6 x int16 + speed + `FA`    | `FE FE 03 22 01 FA`                    |
 | stop        | `0x29` | `FE FE 02 29 FA`                            | `FE FE 03 29 01 FA`                    |
+| get_servo_temps | `0xE5` | `FE FE 02 E5 FA`                        | `FE FE 08 E5` + 6 x uint8 degC + `FA` (11 B) |
 
 `release_all_servos` turns the torque off but keeps the servos powered: the arm goes limp
 (J2 and J3 drop under their own weight) and get_angles still answers, so it can be moved by
 hand. `power_off` also cuts the torque, but then get_angles gets no reply at all.
+
+`get_servo_temps` is not in the 2026-10-16 capture: its bytes are the ones pymycobot 4.0.4
+sends and decodes (one unsigned byte per servo, degC, J1 first), not yet confirmed on our arm.
+The decoder rejects any other length rather than misread it. To check an arm, with the driver
+stopped, on the Jetson host: `python3 -c "from pymycobot import MyCobot280; print(MyCobot280('/dev/ttyTHS1', 1000000).get_servo_temps())"` must print six temperatures, not `-1`.
 
 The servo bus (Feetech style, `FF FF id len ...`) shares the UART. Up to ~150 bytes of it
 arrive before a get_angles reply, and it keeps flowing while the arm moves. It contains
@@ -50,6 +56,7 @@ std::optional<pp::Frame> frame{pp::encode_send_angles(angles, 20)};  // nullopt 
 
 pp::Decoded<pp::JointAngles> reply{pp::decode_get_angles_reply(rx)};
 pp::Decoded<std::uint8_t> ack{pp::decode_ack(rx, pp::CommandId::STOP)};
+pp::Decoded<pp::ServoTemperatures> temps{pp::decode_servo_temps_reply(rx)};  // degC, J1 first
 
 std::optional<pp::JointAngles> wire{pp::to_centidegrees(radians)};  // ROS side -> wire
 pp::JointRadians state{pp::to_radians(reply.value)};                // wire -> ROS side
