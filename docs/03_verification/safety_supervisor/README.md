@@ -3,10 +3,9 @@
 How to show, with numbers, that the safety supervisor halts the real arm. What the supervisor
 is and how it decides: `src/positronic_safety/README.md`.
 
-**Status: run on the arm on 2026-11-13 (results in the last section).** The supervisor passed its tests without the arm (unit
-tests, the node against a fake controller manager, the launch with `backend:=fake`), and the
-procedure below had a dry run with `backend:=fake` (last section). The tests still have to be
-done on the arm, and the results written in the last section.
+**Status: run on the arm on 2026-11-13; results in the last section.** Before that, the
+supervisor passed its tests without the arm (unit tests, the node against a fake controller
+manager) and the procedure had a dry run with `backend:=fake`.
 
 ## Safety
 
@@ -119,13 +118,13 @@ answered.
 ### On the arm, 2026-11-13
 
 Raw: `2026-11-13_halts.csv` (one line per halt). Serial backend, two people, power saving off,
-**mission node at 10 Hz** (the 25 Hz change is not merged yet). No Gazebo run before it: the
+**mission node at 10 Hz** (the 25 Hz change is not merged yet) except the rerun of test 1. No Gazebo run before it: the
 stop path had run end to end against the controller manager with the fake backend, and Gazebo
 would add physics, not stop logic.
 
 | # | Trials | Result | Numbers | vs #45 |
 |---|---|---|---|---|
-| 1 | 1 | **Fail**: one `HEARTBEAT_LOST` after about 3 min with nothing wrong | 301.9 ms without a heartbeat | false halt |
+| 1 | 2 | 10 Hz: **fail**, one `HEARTBEAT_LOST` after about 3 min with nothing wrong (301.9 ms without a heartbeat). Rerun at 25 Hz (mission node timer changed locally to 40 ms, not committed): **pass**, 5 min, no halt | | 25 Hz: pass |
 | 2 | 15 (5 mid-motion: 1, 11, 12, 13, 15) | every stop halted; travel after the stop at most 0.53° | mid-motion: `halt_ms` 51-76, `rest_ms` 16, 91, 108, 251, 259 | **2 of 5 under 100 ms** |
 | 3 | 5 | every kill halted | heartbeat to halt 304-322 ms; `halt_ms` 60-106; last heartbeat to rest 315-507 ms | over 300 ms, as expected |
 | 4 | 1 | Wi-Fi off: `HEARTBEAT_LOST`, same as test 3 | 301.7 ms; the arm was not moving at that instant | halts |
@@ -141,8 +140,9 @@ turned the failed resume into a halt (`RESUME_FAILED`, first line of the CSV).
 
 What it means:
 
-- **The heartbeat timeout fails at 10 Hz** (test 1). The mission node must publish at 25 Hz,
-  then test 1 is repeated; if it still halts, the timeout goes up.
+- **The 300 ms timeout needs the mission node at 25 Hz** (test 1): it halted falsely at
+  10 Hz and held 5 minutes at 25 Hz. One 5-minute run is little evidence: repeat test 1, longer,
+  once the 25 Hz change is merged.
 - **100 ms to rest is not met** in 3 of 5 (test 2). The halt itself takes 51-76 ms; the rest
   is the arm settling. The criterion needs the measured numbers or a faster halt.
 - **300 ms from a kill to the halt is not possible** with a 300 ms timeout: 304-322 ms
