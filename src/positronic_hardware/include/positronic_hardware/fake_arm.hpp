@@ -36,6 +36,9 @@ public:
   /// The pose the fake arm reports, in radians.
   static constexpr JointPositions START_POSE{0.0, 0.5, 0.3, 0.0, 0.0, 0.0};
 
+  /// The servo temperatures the fake arm reports, in degC: a cool arm.
+  static constexpr ServoTemperatures TEMPERATURES{30, 30, 30, 30, 30, 30};
+
   /// Where the joints are now.
   [[nodiscard]] JointPositions read_angles() const override
   {
@@ -73,6 +76,24 @@ public:
 
   /// There is no serial line to go silent, so the fake link never times out.
   [[nodiscard]] bool link_timed_out() const override
+  {
+    return false;
+  }
+
+  /// The fake servos never warm up.
+  [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override
+  {
+    return TEMPERATURES;
+  }
+
+  /// So they never overheat either.
+  [[nodiscard]] std::optional<Overheat> overheat() const override
+  {
+    return std::nullopt;
+  }
+
+  /// And their temperature is always known.
+  [[nodiscard]] bool temperature_stale() const override
   {
     return false;
   }

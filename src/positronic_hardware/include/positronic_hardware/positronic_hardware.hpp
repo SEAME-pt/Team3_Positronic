@@ -35,6 +35,7 @@
 #include "positronic_hardware/fake_arm.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/serial_arm.hpp"
+#include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/velocity_estimator.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -88,6 +89,7 @@ private:
     int baud{1000000};
     double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
     SerialArm::Timing timing{};
+    int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
   };
 
   /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown
@@ -103,6 +105,15 @@ private:
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
+
+  /// on_activate's temperature check, before the servos get torque: waits for the first reading
+  /// and refuses an arm that was cut or is within ACTIVATE_COOLDOWN_C of the limit. False, with
+  /// the reason logged, when activation must not go on.
+  bool temperatures_allow_activation();
+
+  /// read()'s temperature check. ERROR, with one log line, when the serial thread has cut the
+  /// arm for an overheat, or when the component is active and the temperatures went stale.
+  hardware_interface::return_type check_temperatures();
 
   /// The interfaces of one joint, looked up once so read() and write() build no string: two
   /// states the plugin fills, one command the controller fills and the plugin sends.
