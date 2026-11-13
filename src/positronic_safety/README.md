@@ -56,7 +56,7 @@ and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`
 - **A dead serial line:** the halt goes through the driver; if its stop cannot reach the arm,
   the arm finishes its last move.
 - **The supervisor dying:** nothing stops the arm (the serial line is alive, so the driver's
-  link timeout does not fire). Fix: a dead-man check in the driver; until then, the power
+  link timeout does not fire). Fix: a dead-man check in the driver (#136); until then, the power
   switch. Shown on the arm (test 7).
 - **The heartbeat crosses the Wi-Fi:** the 300 ms limit holds only with the mission node at
   **25 Hz** and the Jetson's **Wi-Fi power saving off**
