@@ -4,8 +4,8 @@
 //
 // MockBackend to run with Gtest.
 
-#ifndef POSITRONIC_MISSION__TEST__MOCK_BACKEND_HPP_
-#define POSITRONIC_MISSION__TEST__MOCK_BACKEND_HPP_
+#ifndef MOCK_BACKEND_HPP_
+#define MOCK_BACKEND_HPP_
 
 #include <atomic>
 #include <chrono>
@@ -67,4 +67,4 @@ private:
 
 }  // namespace positronic_mission
 
-#endif  // POSITRONIC_MISSION___MOCK_BACKEND_HPP_
+#endif  // MOCK_BACKEND_HPP_

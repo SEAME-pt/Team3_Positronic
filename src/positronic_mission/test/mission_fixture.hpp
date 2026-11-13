@@ -6,11 +6,10 @@
 // Each TEST_F gets a fresh node, a fresh MockBackend and a fresh client,
 // with the node already configured and activated (state IDLE).
 
-#ifndef POSITRONIC_MISSION__TEST__MISSION_FIXTURE_HPP_
-#define POSITRONIC_MISSION__TEST__MISSION_FIXTURE_HPP_
+#ifndef MISSION_FIXTURE_HPP_
+#define MISSION_FIXTURE_HPP_
 
 #include <gtest/gtest.h>
-
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -18,12 +17,10 @@
 #include <memory>
 #include <optional>
 #include <thread>
-
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_mission/mission_node.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
-// MockBackend lives here for now. When you move it, change this to "mock_backend.hpp"
 #include "mock_backend.hpp"
 #include "positronic_mission/pose_validation.hpp"
 
@@ -32,7 +29,8 @@ namespace positronic_mission
 namespace test
 {
 
-using namespace std::chrono_literals;
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 using GoalHandleClient = rclcpp_action::ClientGoalHandle<GoToPose>;
 using WrappedResult = GoalHandleClient::WrappedResult;
 using PoseStamped = geometry_msgs::msg::PoseStamped;
@@ -267,4 +265,4 @@ protected:
 }  // namespace test
 }  // namespace positronic_mission
 
-#endif  // POSITRONIC_MISSION__TEST__MISSION_FIXTURE_HPP_
+#endif  // MISSION_FIXTURE_HPP_

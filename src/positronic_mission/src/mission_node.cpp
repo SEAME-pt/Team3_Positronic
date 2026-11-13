@@ -181,7 +181,8 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
   // Get the current State
   // Check if it's not ERROR. Then check if it didn't change from the last check
   // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
-  // Using _weak because it can be faster on loops. Don't use it for single checks since it can spuriously fail!
+  // Using _weak because it can be faster on loops.
+  // Don't use it for single checks since it can spuriously fail!
   State state_now = state_.load();
   while ((state_now == State::IDLE || state_now == State::MOVING) &&
     !state_.compare_exchange_weak(state_now, State::INACTIVE))

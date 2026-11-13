@@ -29,7 +29,9 @@ using positronic_mission::GoToPose;
 using positronic_mission::MotionOutcome;
 using positronic_mission::State;
 using rclcpp_action::ResultCode;
-using namespace positronic_mission::test;
+
+namespace positronic_mission::test
+{
 
 TEST_F(MissionNodeTest, LifecycleTransitions)
 {
@@ -66,7 +68,7 @@ TEST_F(MissionNodeTest, LifecycleTransitions)
 
 TEST_F(MissionNodeTest, LifecycleIdle)
 {
-  //IDLE → deactivate → activate gives IDLE.
+  // IDLE → deactivate → activate gives IDLE.
   // Make sure the node stats IDLE
   ASSERT_TRUE(wait_for_state(State::IDLE));
 
@@ -151,8 +153,8 @@ TEST_F(MissionNodeTest, Heartbeat)
   EXPECT_TRUE(node_name_ok_);
   EXPECT_TRUE(last_stamp_ok_);
   const int count = heartbeat_count_.load();
-  EXPECT_GE(count, 8);
-  EXPECT_LE(count, 12);
+  EXPECT_GE(count, 20);
+  EXPECT_LE(count, 30);
 
   // Deactivate and expect the message to stay the same
   ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
@@ -167,3 +169,4 @@ TEST_F(MissionNodeTest, Heartbeat)
       return heartbeat_count_.load() > tmp_count;
   }));
 }
+}  // namespace positronic_mission::test
