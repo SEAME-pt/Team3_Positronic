@@ -10,42 +10,79 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(positronic_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
 
 set(dependencies
   rclcpp
   std_msgs
   rclcpp_lifecycle
+  rclcpp_action
+  rclcpp_components
   positronic_interfaces
+  geometry_msgs
+  lifecycle_msgs
+  moveit_ros_planning_interface
 )
 
 include_directories(
   include
 )
 
-add_executable(mission_node src/mission_node.cpp)
-ament_target_dependencies(mission_node ${dependencies})
+# add_executable(mission_node src/mission_node.cpp)
+# ament_target_dependencies(mission_node ${dependencies})
 
 install(
   DIRECTORY include/
   DESTINATION include
 )
 
-install(
-  TARGETS mission_node
-  DESTINATION lib/${PROJECT_NAME}
+# install(
+#  TARGETS mission_node
+#  DESTINATION lib/${PROJECT_NAME}
+# )
+
+add_library(mission_node_component SHARED
+  src/mission_node.cpp
+  src/pose_validation.cpp
+  src/moveit_backend.cpp
+)
+
+target_include_directories(mission_node_component PUBLIC
+  include
+)
+
+ament_target_dependencies(mission_node_component
+  ${dependencies}
+)
+
+rclcpp_components_register_node(mission_node_component
+  PLUGIN "positronic_mission::MissionNode"
+  EXECUTABLE mission_node
+)
+
+install(TARGETS
+  mission_node_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
-  # set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
-  # set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
+  # find_package(ament_lint_auto REQUIRED)
+  # ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_ros REQUIRED)
+
+  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
+    ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
+    target_link_libraries(${test_name} mission_node_component)
+    ament_target_dependencies(${test_name} ${dependencies})
+  endforeach()
 endif()
 
 ament_package()
