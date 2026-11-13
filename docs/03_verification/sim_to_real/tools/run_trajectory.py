@@ -333,7 +333,7 @@ class Sender:
             return
         cancel_future = self.goal_handle.cancel_goal_async()
         rclpy.spin_until_future_complete(self.node, cancel_future, timeout_sec=2.0)
-        print('Cancel sent.' if cancel_future.done() else 'Cancel not confirmed: use the switch.')
+        print('Cancel sent.' if cancel_future.done() else 'Cancel not confirmed: pull the power plug.')
         self.goal_handle = None
 
 
