@@ -32,8 +32,15 @@ Test 2 had 15 trials; 10 hit the arm before it moved (speed at the stop near 0) 
 counted. Also seen: the driver refused to activate with J3 at 154° (limit ±150°), and the
 supervisor turned the failed resume into a halt (`RESUME_FAILED`, first CSV line).
 
-Not run: Gazebo (follow-up), and a serial link fault on the arm (needs a driver hook; covered by
-unit tests).
+## Gazebo, 2026-11-13
+
+`gazebo.launch.py`, the mission node, and the supervisor with `-p fault_topic:=/sim_fault`; a
+30 Hz script published `driver/fault_code` = 0 there, because Gazebo has no driver fault code.
+
+| Test | Result |
+|---|---|
+| Stop service mid-`T1` | `STOP_SERVICE`, `hardware_stopped` true, the arm stopped |
+| `kill -9` the mission node mid-`T1` | `HEARTBEAT_LOST`, `hardware_stopped` true, the arm stopped |
 
 ## What it means for #45
 
