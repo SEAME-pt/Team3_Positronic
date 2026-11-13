@@ -196,7 +196,8 @@ std::vector<std::vector<std::uint8_t>> send_angles_frames(
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
+    if (
+      frame.size() == 18 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x0F &&
       frame[3] == 0x22)
     {
       found.push_back(frame);
@@ -211,7 +212,8 @@ std::vector<std::vector<std::uint8_t>> frames_with_id(
 {
   std::vector<std::vector<std::uint8_t>> found{};
   for (const auto & frame : frames) {
-    if (frame.size() == 5 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x02 &&
+    if (
+      frame.size() == 5 && frame[0] == 0xFE && frame[1] == 0xFE && frame[2] == 0x02 &&
       frame[3] == id && frame[4] == 0xFA)
     {
       found.push_back(frame);
@@ -339,8 +341,25 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
   const auto sends{wait_for_sends(port, 1)};
   ASSERT_EQ(sends.size(), 1u);
-  const std::vector<std::uint8_t> expected{0xFE, 0xFE, 0x0F, 0x22, 0x02, 0x3D, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, SerialArm::SEND_SPEED, 0xFA};
+  const std::vector<std::uint8_t> expected{
+    0xFE,
+    0xFE,
+    0x0F,
+    0x22,
+    0x02,
+    0x3D,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    SerialArm::SEND_SPEED,
+    0xFA};
   EXPECT_EQ(sends.front(), expected);
 
   // The same command is not sent again: the arm already has it.
@@ -549,8 +568,8 @@ TEST(SerialArm, ReportsATimeoutWhileTheArmIsSilentAndClearsItWhenRepliesResume)
   EXPECT_TRUE(arm.link_timed_out());
 
   // The backend does not latch: keeping the fault is the plugin's job.
-  // With this transport a silent turn lasts about REPLY_TIMEOUT (50 ms), because read() returns
-  // at once instead of waiting VTIME like the real port; 200 ms leaves room for the next reply.
+  // A silent turn lasts about REPLY_TIMEOUT (50 ms): this transport, like the real port with
+  // VTIME = 0, returns at once. 200 ms leaves room for the next reply.
   port.set_silent(false);
   std::this_thread::sleep_for(std::chrono::milliseconds{200});
   EXPECT_FALSE(arm.link_timed_out());
@@ -702,7 +721,9 @@ void stream_targets(SerialArm & arm, std::chrono::milliseconds duration)
 std::vector<std::vector<std::uint8_t>> between_sends(
   const std::vector<std::vector<std::uint8_t>> & frames)
 {
-  const auto is_send{[](const auto & frame) {return frame.size() == 18;}};
+  const auto is_send{[](const auto & frame) {
+      return frame.size() == 18;
+    }};
   const auto first{std::find_if(frames.begin(), frames.end(), is_send)};
   const auto last{std::find_if(frames.rbegin(), frames.rend(), is_send)};
   if (first == frames.end()) {
@@ -718,7 +739,9 @@ TEST(SerialArmTemperature, ReadsTheTemperaturesWhileIdle)
   ScriptedArm & port{*transport};
   const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
 
-  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_temperatures().has_value();
+  }));
   EXPECT_EQ(arm.read_temperatures().value_or(ServoTemperatures{}), COOL);
   EXPECT_FALSE(arm.temperature_stale());
   EXPECT_FALSE(arm.overheat().has_value());
@@ -738,7 +761,9 @@ TEST(SerialArmTemperature, NoTemperatureRequestInTurnsThatSendUntilItIsOverdue)
   TemperatureGuard guard{fast_guard()};
   guard.max_age = std::chrono::seconds{5};  // never overdue during the stream
   SerialArm arm{std::move(transport), SerialArm::Timing{}, guard};
-  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_temperatures().has_value();
+  }));
 
   stream_targets(arm, std::chrono::milliseconds{600});
   const auto during{between_sends(port.written())};
@@ -751,7 +776,9 @@ TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
   auto transport{std::make_unique<ScriptedArm>()};
   ScriptedArm & port{*transport};
   SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
-  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_temperatures().has_value();
+  }));
 
   stream_targets(arm, std::chrono::milliseconds{1200});
   const auto during{between_sends(port.written())};
@@ -772,10 +799,14 @@ TEST(SerialArmTemperature, TwoHotReadingsStopTheArmAndCutItsPower)
   ScriptedArm & port{*transport};
   SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_TRUE(wait_until([&port]() {return !send_angles_frames(port.written()).empty();}));
+  ASSERT_TRUE(wait_until([&port]() {
+      return !send_angles_frames(port.written()).empty();
+  }));
 
   port.set_temperatures(J2_HOT);
-  ASSERT_TRUE(wait_until([&arm]() {return arm.overheat().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.overheat().has_value();
+  }));
   const Overheat trip{arm.overheat().value_or(Overheat{})};
   EXPECT_EQ(trip.joint, 1U);
   EXPECT_EQ(trip.celsius, 61);
@@ -816,11 +847,15 @@ TEST(SerialArmTemperature, TheCutWorksWhileHalted)
   auto transport{std::make_unique<ScriptedArm>()};
   ScriptedArm & port{*transport};
   SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
-  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_temperatures().has_value();
+  }));
   ASSERT_TRUE(arm.halt());
 
   port.set_temperatures(J2_HOT);
-  ASSERT_TRUE(wait_until([&arm]() {return arm.overheat().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.overheat().has_value();
+  }));
   EXPECT_GE(frames_with_id(port.written(), POWER_OFF_ID).size(), 1U);
 }
 
@@ -829,7 +864,9 @@ TEST(SerialArmTemperature, ImplausibleReadingsAreIgnored)
   auto transport{std::make_unique<ScriptedArm>()};
   ScriptedArm & port{*transport};
   const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
-  ASSERT_TRUE(wait_until([&arm]() {return arm.read_temperatures().has_value();}));
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_temperatures().has_value();
+  }));
 
   // 0 and 200 degC are not temperatures: no cut, and the last good reading stays.
   port.set_temperatures(ServoTemperatures{0, 200, 200, 200, 200, 200});

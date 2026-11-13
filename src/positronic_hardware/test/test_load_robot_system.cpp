@@ -64,6 +64,14 @@
 //   ACTIVE; after a refusal the component configures and activates again; on_init refuses a
 //   joint without a revolute <limit> and swapped limits; on_activate refuses an arm that stands
 //   outside its limits.
+// Follow-up prompt (#35):
+//   The plugin exports driver/fault_code from a <gpio name="driver"> and latches a link timeout
+//   there. Test that: the interface is exported; on_init refuses a missing driver gpio, a missing
+//   fault_code state and a fault_code command, and accepts extra driver states and other gpios;
+//   the code is 0 while the link is alive; on a pseudo-terminal, an arm that stops answering
+//   gives fault 1 with the component still ACTIVE, the fault stays latched and no send_angles
+//   leaves when replies resume, deactivate and activate clear it and targets go out again; and
+//   on_activate refuses a link that went silent.
 // Follow-up prompt (servo over-temperature):
 //   The plugin reads servo_temp_limit_c (whole degC, 30 to 60, default 60), refuses to activate
 //   without a first servo temperature or while a servo is within 5 degC of the limit, and
@@ -137,6 +145,13 @@ constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
 constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
 /// ros2_control's clamping limiter off, as in positronic_real.urdf.xacro (#34).
 constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
+/// The fault <gpio> the supervisor reads (#35), exactly as in positronic_real.urdf.xacro.
+constexpr std::string_view FAULT_GPIO{
+  R"(<gpio name="driver"><state_interface name="fault_code"/></gpio>)"};
+/// The values of FaultCode the supervisor relies on: written out here, not taken from the
+/// header, so the test fails if someone renumbers them.
+constexpr double NO_FAULT{0.0};
+constexpr double LINK_TIMEOUT_FAULT{1.0};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -149,8 +164,8 @@ std::string joint_block(const std::string & name, std::string_view interfaces)
 std::string good_joint(const std::string & name)
 {
   return joint_block(
-    name, std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} +
-    std::string{VELOCITY});
+    name,
+    std::string{LIMITS_OFF} + std::string{COMMAND} + std::string{POSITION} + std::string{VELOCITY});
 }
 
 /// `text` with its one occurrence of `from` replaced by `to`. Used to edit the URDF limits.
@@ -194,17 +209,17 @@ std::string param(std::string_view name, std::string_view value)
 constexpr std::string_view FAKE_BACKEND{"<param name=\"backend\">fake</param>"};
 
 /// `description` (the arm's URDF by default) with a <ros2_control> block that uses RobotSystem
-/// for `joint_blocks`, with `parameters` in its <hardware> tag.
+/// for `joint_blocks`, with `parameters` in its <hardware> tag and `gpio` after the joints.
 std::string urdf_with(
   const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND,
-  const std::string & description = read_description())
+  const std::string & description = read_description(), std::string_view gpio = FAULT_GPIO)
 {
   std::string urdf{description};
   const std::string ros2_control{
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
     "<hardware><plugin>positronic_hardware/RobotSystem</plugin>" +
-    std::string{parameters} + "</hardware>" + joint_blocks + "</ros2_control>"};
+    std::string{parameters} + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
   urdf.insert(urdf.rfind("</robot>"), ros2_control);
   return urdf;
 }
@@ -227,7 +242,8 @@ int open_pseudo_terminal(std::array<char, 128> & port)
   if (controller < 0) {
     return -1;
   }
-  if (::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
+  if (
+    ::grantpt(controller) != 0 || ::unlockpt(controller) != 0 ||
     ::ptsname_r(controller, port.data(), port.size()) != 0)
   {
     ::close(controller);
@@ -239,16 +255,18 @@ int open_pseudo_terminal(std::array<char, 128> & port)
 /// One get_angles reply as the arm sends it, recorded on the real arm (the pose the SerialArm
 /// tests decode). Written back for every request, so a power_on also gets a pose: the arm
 /// answers that one with an ack, but the thread only looks for poses.
-constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8, 0xFF,
-  0xEF, 0xFF, 0xC3, 0xFF, 0x85, 0x00, 0x2B, 0x00, 0x3D, 0xFA};
+constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0xFF, 0xF8,
+  0xFF, 0xEF, 0xFF, 0xC3, 0xFF, 0x85,
+  0x00, 0x2B, 0x00, 0x3D, 0xFA};
 
 /// The get_servo_temps request, as the serial thread writes it.
 constexpr std::array<std::uint8_t, 5> TEMPS_REQUEST{0xFE, 0xFE, 0x02, 0xE5, 0xFA};
 
-/// Answers the requests on the controller side of a pseudo-terminal until stopped: a stand-in
-/// for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures set with
-/// set_temperature() (all six servos alike), unless set_answer_temperatures(false); every other
-/// request gets RECORDED_REPLY. Everything received is kept for received().
+/// Answers the requests on the controller side of a pseudo-terminal until stopped: a silent-free
+/// stand-in for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures
+/// set with set_temperature() (all six servos alike), unless set_answer_temperatures(false);
+/// every other request gets RECORDED_REPLY. It keeps every byte it receives, so a test can check
+/// what the driver put on the wire.
 class ReplyingArm
 {
 public:
@@ -274,8 +292,8 @@ public:
           }
           if (asks_temperatures && answer_temperatures_.load()) {
             const std::uint8_t t{celsius_.load()};
-            const std::array<std::uint8_t, 11> reply{
-              0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t, 0xFA};
+            const std::array<std::uint8_t, 11> reply{0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t,
+              0xFA};
             static_cast<void>(::write(controller, reply.data(), reply.size()));
           }
           if (!asks_temperatures || static_cast<std::size_t>(got) > TEMPS_REQUEST.size()) {
@@ -284,6 +302,22 @@ public:
         }
       }}
   {
+  }
+
+  /// True if a send_angles frame (FE FE 0F 22 ...) arrived since this arm started.
+  bool received_send_angles()
+  {
+    constexpr std::array<std::uint8_t, 4> HEADER{0xFE, 0xFE, 0x0F, 0x22};
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return std::search(received_.begin(), received_.end(), HEADER.begin(), HEADER.end()) !=
+           received_.end();
+  }
+
+  /// True once the driver has sent anything at all.
+  bool received_anything()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return !received_.empty();
   }
 
   ~ReplyingArm()
@@ -449,17 +483,18 @@ TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, ExportsExactlyTheTwelveStates)
+TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesAndTheFaultCode)
 {
   auto & resource_manager{load(urdf_with(all_good_joints()))};
   ASSERT_TRUE(loaded_);
 
   std::vector<std::string> expected;
-  expected.reserve(2 * JOINTS.size());
+  expected.reserve(2 * JOINTS.size() + 1);
   for (const auto & joint : JOINTS) {
     expected.push_back(joint + "/position");
     expected.push_back(joint + "/velocity");
   }
+  expected.emplace_back("driver/fault_code");
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
   std::sort(expected.begin(), expected.end());
@@ -508,7 +543,7 @@ TEST_F(LoadRobotSystem, InitRejectsVelocityCommandInterface)
   // J1 asks for a velocity command: the arm only takes angles, so nothing could honour it.
   constexpr std::string_view VELOCITY_COMMAND{"<command_interface name=\"velocity\"/>"};
   load(urdf_with(joints_with_one_bad(
-      0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
+    0, std::string{VELOCITY_COMMAND} + std::string{POSITION} + std::string{VELOCITY})));
 
   EXPECT_FALSE(loaded_);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -540,6 +575,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"velocity_filter_alpha", "fast"},  // not a number
     {"velocity_filter_alpha", "nan"},   // from_chars reads it, the range check must not
     {"moving_period_ms", "10"},         // below the arm's own busy time
+    {"moving_period_ms", "150"},        // too close to the 200 ms link timeout (#35)
     {"moving_period_ms", "66.5"},       // whole ms only
     {"send_settle_ms", "250"},          // longer than the #35 timeout
     {"send_settle_ms", "slow"},         // not a number
@@ -716,10 +752,10 @@ TEST_F(LoadRobotSystem, InitRejectsAJointWithoutALimit)
 {
   // J1 made continuous, without its <limit>: ros2_control accepts it, the driver must not.
   const std::string description{replaced(
-      replaced(
-        read_description(), R"(<joint name="joint2_to_joint1" type="revolute">)",
-        R"(<joint name="joint2_to_joint1" type="continuous">)"),
-      J1_LIMIT, "")};
+    replaced(
+      read_description(), R"(<joint name="joint2_to_joint1" type="revolute">)",
+      R"(<joint name="joint2_to_joint1" type="continuous">)"),
+    J1_LIMIT, "")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -730,8 +766,8 @@ TEST_F(LoadRobotSystem, InitRejectsSwappedLimits)
 {
   // J2 with lower above upper: the check would refuse every command, so the driver stops here.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      R"(<limit effort="10.0" lower="2.4434" upper="-2.4434" velocity="2.618"/>)")};
+    read_description(), J2_LIMIT,
+    R"(<limit effort="10.0" lower="2.4434" upper="-2.4434" velocity="2.618"/>)")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
 
   EXPECT_FALSE(loaded_);
@@ -743,8 +779,8 @@ TEST_F(LoadRobotSystem, ActivateRefusesAnArmOutsideItsLimits)
   // J2 narrowed to [-0.2, 0.2] rad: the fake arm stands at 0.5 rad, outside. The first
   // command would be refused at once, so activation fails with the reason instead.
   const std::string description{replaced(
-      read_description(), J2_LIMIT,
-      R"(<limit effort="10.0" lower="-0.2" upper="0.2" velocity="2.618"/>)")};
+    read_description(), J2_LIMIT,
+    R"(<limit effort="10.0" lower="-0.2" upper="0.2" velocity="2.618"/>)")};
   load(urdf_with(all_good_joints(), FAKE_BACKEND, description));
   ASSERT_TRUE(loaded_);
 
@@ -1040,5 +1076,148 @@ TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
 
   resource_manager_.reset();
   arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
+{
+  // #35: without its fault interface the supervisor would read nothing, so the driver refuses
+  // to start, the same way it refuses a joint without its interfaces.
+  const std::vector<std::string> bad{
+    "",                                                                 // no <gpio>
+    R"(<gpio name="arm"><state_interface name="fault_code"/></gpio>)",  // wrong name
+    R"(<gpio name="driver"><state_interface name="fault"/></gpio>)",    // wrong interface
+    R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+    R"(<command_interface name="fault_code"/></gpio>)",  // a command too
+  };
+  for (const auto & gpio : bad) {
+    SCOPED_TRACE(gpio);
+    load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), gpio));
+
+    EXPECT_FALSE(loaded_);
+    EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  }
+}
+
+TEST_F(LoadRobotSystem, InitAcceptsMoreDriverStatesAndOtherGpios)
+{
+  // Only the fault is required: S3 adds driver states such as a temperature (#115), and other
+  // gpios may come, without the driver refusing to start.
+  const std::string gpios{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+    R"(<state_interface name="temperature_max"/></gpio>)"
+    R"(<gpio name="gripper"><state_interface name="position"/></gpio>)"};
+  load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), gpios));
+
+  EXPECT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)
+{
+  // The fake arm never times out: once active, every read() reports "no fault".
+  load(urdf_with(all_good_joints()));
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+}
+
+TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsIt)
+{
+  // #35, end to end through the resource manager, on a pseudo-terminal like the real UART.
+  // The test sleeps because SerialArm reads the real clock; the exact 200 ms boundary is
+  // tested without sleeps in test_link_watchdog.cpp.
+  constexpr std::chrono::milliseconds PAST_THE_TIMEOUT{300};
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+
+  // The arm goes silent mid-run. The port stays open, so the driver's writes still succeed:
+  // only the replies are missing, like a line that drops the arm's answers.
+  arm.reset();
+  std::this_thread::sleep_for(PAST_THE_TIMEOUT);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+  // Reported, not an ERROR: the component stays ACTIVE for the supervisor to act on.
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  // The arm answers again and a controller asks for a new J1. The fault stays latched and no
+  // target reaches the wire, even though the link would carry it now.
+  arm = std::make_unique<ReplyingArm>(controller);
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 0.1));
+  for (int cycle{0}; cycle < 10; ++cycle) {
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+    ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+  }
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+  EXPECT_TRUE(arm->received_anything());  // the driver kept asking for angles
+  EXPECT_FALSE(arm->received_send_angles());
+
+  // Only a deactivate and an activate clear it, and then targets go out again.
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 0.1));
+  bool sent{false};
+  for (int cycle{0}; cycle < 20 && !sent; ++cycle) {
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    sent = arm->received_send_angles();
+  }
+  EXPECT_TRUE(sent);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, ActivateRefusesASilentLink)
+{
+  // has_sample() stays true after the first reply, so a link that died later must be caught
+  // by on_activate itself, before power_on.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+
+  arm.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();
   ::close(controller);
 }

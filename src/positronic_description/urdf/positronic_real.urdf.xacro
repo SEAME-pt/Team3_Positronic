@@ -63,6 +63,11 @@
     <xacro:real_arm_joint name="joint5_to_joint4"/>
     <xacro:real_arm_joint name="joint6_to_joint5"/>
     <xacro:real_arm_joint name="joint6output_to_joint6"/>
+    <!-- #35: what the driver reports to the supervisor (#45), as driver/fault_code. 0 = no
+         fault; any other value is a latched fault, see FaultCode in positronic_hardware.hpp. -->
+    <gpio name="driver">
+      <state_interface name="fault_code"/>
+    </gpio>
   </ros2_control>
 
 </robot>

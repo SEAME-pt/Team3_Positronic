@@ -102,6 +102,10 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
   ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)
   target_include_directories(test_servo_temperature PRIVATE include)
+  # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
+  # moves the real arm (see the header of the file).
+  add_executable(hil_link_timeout test/hil_link_timeout.cpp)
+  target_link_libraries(hil_link_timeout ${PROJECT_NAME})
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

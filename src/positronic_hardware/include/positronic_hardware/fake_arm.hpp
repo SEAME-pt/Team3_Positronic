@@ -58,9 +58,7 @@ public:
   }
 
   /// Nothing to interrupt here either.
-  void request_halt() override
-  {
-  }
+  void request_halt() override {}
 
   /// The fake arm has no servos to power.
   [[nodiscard]] bool power_on() override

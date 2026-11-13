@@ -104,11 +104,18 @@ public:
   /// follows a get_angles request before its reply is dropped by the arm.
   static constexpr std::chrono::milliseconds REPLY_TIMEOUT{50};
 
-  // REQUEST_TIMEOUT, from the contract, covers the worst turn a request can land in. A silent
-  // arm holds a turn for REPLY_TIMEOUT plus one VTIME read (0.1 s), ~150 ms. An arm that answers
-  // get_angles (up to 20 ms) but not the temperature request holds it for that plus
-  // TEMPERATURE_REPLY_TIMEOUT and one VTIME read, ~170 ms. The request goes out at the start of
-  // the next turn, and no temperature request is written while one is pending.
+  /// How long the thread sleeps after a read that returned no bytes, before it reads again.
+  /// The port returns at once (VTIME = 0), so without it the thread would spin while it waits
+  /// for a reply. 2 ms adds at most 2 ms to a reply that takes ~8 ms, at a few hundred cheap
+  /// reads per second on the Jetson.
+  static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
+
+  // REQUEST_TIMEOUT, from the contract, covers the worst turn a request can land in, with a
+  // margin: a silent arm holds a turn for REPLY_TIMEOUT (~50 ms, the reads return at once). An
+  // arm that answers get_angles (up to 20 ms) but not the temperature request holds it for that
+  // plus TEMPERATURE_REPLY_TIMEOUT, ~70 ms. The request may land just after a turn has started,
+  // so the frame is out within ~120 ms, and no temperature request is written while one is
+  // pending.
 
   /// How long a temperature request waits for its reply, like REPLY_TIMEOUT for get_angles.
   static constexpr std::chrono::milliseconds TEMPERATURE_REPLY_TIMEOUT{50};

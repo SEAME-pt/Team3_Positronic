@@ -97,8 +97,8 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   ::cfsetospeed(&tty, speed.value());
   tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);  // ignore modem lines, enable receiver.
   tty.c_cflag &= static_cast<tcflag_t>(~CRTSCTS);        // no hardware flow control.
-  tty.c_cc[VMIN] = 0;   // read() returns what is there, even if that is nothing,
-  tty.c_cc[VTIME] = 1;  // after at most 0.1 s, so the thread can check stop_.
+  tty.c_cc[VMIN] = 0;   // read() returns at once with what is there, even if that is nothing;
+  tty.c_cc[VTIME] = 0;  // no wait: poll_loop's REPLY_TIMEOUT bounds a silent turn (#35).
 
   if (::tcsetattr(fd_, TCSANOW, &tty) != 0) {
     const int error{errno};
@@ -108,9 +108,9 @@ PosixSerialPort::PosixSerialPort(const std::string & port, int baud_rate)
   }
 
   // open() used O_NONBLOCK so it would not block waiting for carrier. Clear it now that the
-  // port is configured: VMIN/VTIME only take effect in blocking mode. Left on, read() would
-  // return immediately and miss the reply (which arrives a few ms after the request), picking
-  // it up only on the next cycle. Cleared, read() waits up to VTIME (0.1 s) for the bytes.
+  // port is configured, back to a normal blocking descriptor. With VMIN = VTIME = 0 a read
+  // returns at once either way; poll_loop keeps reading until the reply completes or
+  // REPLY_TIMEOUT passes, so a reply that arrives a few ms after the request is not missed.
   const int flags{::fcntl(fd_, F_GETFL, 0)};
   if (flags < 0 || ::fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
     const int error{errno};
@@ -150,22 +150,24 @@ bool PosixSerialPort::write(const std::uint8_t * data, std::size_t count)
 std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
 {
   const ssize_t n{::read(fd_, dst, max)};
-  if (n <= 0) {  // 0 = nothing within VTIME; <0 with EAGAIN = same. Both mean "no bytes now".
+  if (n <= 0) {  // 0 = nothing there (VTIME = 0); <0 with EAGAIN = same. Both mean "no bytes now".
     return 0;
   }
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(
-  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard)
+SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard)
 : SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard}
 {
 }
 
 SerialArm::SerialArm(
   std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard)
-: transport_{std::move(transport)}, timing_{timing}, guard_{guard},
-  temperature_watchdog_{guard.stale_timeout}, detector_{guard.limit_c}
+: transport_{std::move(transport)},
+  timing_{timing},
+  guard_{guard},
+  temperature_watchdog_{guard.stale_timeout},
+  detector_{guard.limit_c}
 {
   // The first temperature request is due at once, so on_activate finds a reading, and the
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
@@ -469,9 +471,9 @@ void SerialArm::poll_loop()
       while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
         const std::size_t got{transport_->read(chunk.data(), chunk.size())};
         if (got == 0) {
-          // A real port blocks up to VTIME before returning 0; a test transport returns at
-          // once, so yield instead of spinning.
-          std::this_thread::sleep_for(std::chrono::milliseconds{1});
+          // The real port (VTIME = 0) and the test transports both return at once: back off
+          // instead of spinning on the Jetson's CPU.
+          std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
           continue;
         }
         if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
@@ -487,8 +489,7 @@ void SerialArm::poll_loop()
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
     const std::optional<JointPositions> target{*command_.readFromRT()};
-    const bool new_target{
-      replied && !halted_.load() && target.has_value() && target != last_sent};
+    const bool new_target{replied && !halted_.load() && target.has_value() && target != last_sent};
 
     if (replied) {
       watch_temperatures(new_target, last_sent);

@@ -33,6 +33,10 @@
 #   #34: check that every joint of the <ros2_control> block turns ros2_control's limiter off
 #   with <limits enable="false"/>, for both backends, and that every one of them still has a
 #   <limit> in the URDF for the plugin to read.
+# Follow-up prompt (#35):
+#   Check that the <ros2_control> block has one <gpio name="driver"> with a fault_code state
+#   interface and no fault_code command interface, for both backends. Other interfaces on it
+#   are allowed (S3 adds a temperature, #115).
 # Follow-up prompt (servo over-temperature):
 #   The xacro now also passes servo_temp_limit_c (default 60) to the plugin.
 
@@ -143,3 +147,15 @@ def test_every_commanded_joint_has_a_urdf_limit():
         limit = urdf_joints[joint.get('name')].find('limit')
         assert limit is not None, joint.get('name')
         assert float(limit.get('lower')) < float(limit.get('upper')), joint.get('name')
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_driver_reports_the_fault_code(backend):
+    """Check that the driver gpio has a fault_code state and no fault_code command (#35)."""
+    drivers = [gpio for gpio in expand(backend=backend).findall('ros2_control/gpio')
+               if gpio.get('name') == 'driver']
+    assert len(drivers) == 1
+    states = [state.get('name') for state in drivers[0].findall('state_interface')]
+    commands = [command.get('name') for command in drivers[0].findall('command_interface')]
+    assert 'fault_code' in states
+    assert 'fault_code' not in commands
