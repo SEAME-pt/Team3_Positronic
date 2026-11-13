@@ -351,7 +351,8 @@ std::optional<ServoTemperatures> SerialArm::ask_temperatures()
   while (!stop_.load() && std::chrono::steady_clock::now() < deadline) {
     const std::size_t got{transport_->read(chunk.data(), chunk.size())};
     if (got == 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+      // Same as the get_angles reply in poll_loop: the port returns at once, back off.
+      std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
       continue;
     }
     temperature_buffer_.insert(

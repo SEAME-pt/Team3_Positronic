@@ -588,6 +588,10 @@ CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_
 return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
   update_states(period.seconds());
+  // First, before the link check: the power off of an overheat cut silences the arm, so a link
+  // timeout can follow the cut, and only the first fault is kept. The cause must win. Also
+  // before the fault is written, so OVERHEAT is on the interface in the cycle that returns ERROR.
+  const return_type temperatures{check_temperatures()};
   // #35: a link that goes silent while active is a fault. While inactive nothing can move the
   // arm, and on_activate refuses a silent link anyway.
   const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
@@ -596,9 +600,10 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
-  // anyone reading it sees the latched value.
+  // anyone reading it sees the latched value. The overheat is the exception: it returns ERROR
+  // as well, because the arm is already cut and must not be driven again before a configure.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
-  return check_temperatures();
+  return temperatures;
 }
 
 bool RobotSystem::temperatures_allow_activation()
@@ -645,7 +650,9 @@ return_type RobotSystem::check_temperatures()
   // is not called again until it is configured. Same rule as the #34 refusal in write().
   if (const std::optional<Overheat> cut{arm_->overheat()}) {
     // The serial thread has already sent the stop and the power off, on its own: nothing is
-    // left to do here but report it. on_error asks for a stop again, which changes nothing.
+    // left to do here but report it, through the fault (#35) and the ERROR. on_error asks for a
+    // stop again, which changes nothing.
+    raise_fault(FaultCode::OVERHEAT);
     RCLCPP_ERROR(
       get_logger(),
       "Servo overheated: joint '%s' at %d degC (limit %d degC). The arm was "
@@ -721,10 +728,14 @@ void RobotSystem::raise_fault(FaultCode code)
   // included: only cutting the servo power does.
   arm_->request_halt();
   // Logged once, at the transition, like a refusal (#34): read() does not log on later cycles.
-  RCLCPP_ERROR(
-    get_logger(),
-    "Fault %d: no valid reply from the arm for over %d ms. Targets held until the next activate.",
-    static_cast<int>(code), static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count()));
+  // An overheat is logged by check_temperatures(), which knows the joint and the value.
+  if (code == FaultCode::LINK_TIMEOUT) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Fault %d: no valid reply from the arm for over %d ms. Targets held until the next "
+      "activate.",
+      static_cast<int>(code), static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count()));
+  }
 }
 
 void RobotSystem::refuse(const CommandCheck & check)

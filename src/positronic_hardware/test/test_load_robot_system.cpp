@@ -81,6 +81,13 @@
 //   values rejected; activation is refused on a hot arm and on an arm that never answers 0xE5;
 //   and an arm that heats while active is cut (stop then power off on the wire), read()
 //   returns ERROR and the component ends in UNCONFIGURED.
+// Follow-up prompt (overheat fault):
+//   An overheat now also latches driver/fault_code = 3 (FaultCode::OVERHEAT), written before
+//   read() returns ERROR. Test, in the same end-to-end run: after the cut and the ERROR, a
+//   configure shows fault 3 (it survives on_error), and once the arm reports a cool temperature
+//   again, activate clears it to 0. Then the arm the real way: it goes silent after the power
+//   off, so by the first read() after the cut the link has timed out too. The fault must still
+//   be 3, the cause, not 1, its consequence: read() checks the temperatures before the link.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -152,6 +159,7 @@ constexpr std::string_view FAULT_GPIO{
 /// header, so the test fails if someone renumbers them.
 constexpr double NO_FAULT{0.0};
 constexpr double LINK_TIMEOUT_FAULT{1.0};
+constexpr double OVERHEAT_FAULT{3.0};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -262,11 +270,15 @@ constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0x
 /// The get_servo_temps request, as the serial thread writes it.
 constexpr std::array<std::uint8_t, 5> TEMPS_REQUEST{0xFE, 0xFE, 0x02, 0xE5, 0xFA};
 
+/// The power_off request: what the serial thread sends to cut an overheated arm.
+constexpr std::array<std::uint8_t, 5> POWER_OFF_REQUEST{0xFE, 0xFE, 0x02, 0x11, 0xFA};
+
 /// Answers the requests on the controller side of a pseudo-terminal until stopped: a silent-free
 /// stand-in for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures
 /// set with set_temperature() (all six servos alike), unless set_answer_temperatures(false);
-/// every other request gets RECORDED_REPLY. It keeps every byte it receives, so a test can check
-/// what the driver put on the wire.
+/// every other request gets RECORDED_REPLY. With set_silent_after_power_off(true) it answers
+/// nothing once a power_off has arrived, like the real arm with its servos off. It keeps every
+/// byte it receives, so a test can check what the driver put on the wire.
 class ReplyingArm
 {
 public:
@@ -289,6 +301,14 @@ public:
           {
             const std::lock_guard<std::mutex> lock{mutex_};
             received_.insert(received_.end(), begin, end);
+          }
+          if (silent_after_power_off_.load() &&
+            std::search(begin, end, POWER_OFF_REQUEST.begin(), POWER_OFF_REQUEST.end()) != end)
+          {
+            powered_off_.store(true);
+          }
+          if (powered_off_.load()) {
+            continue;
           }
           if (asks_temperatures && answer_temperatures_.load()) {
             const std::uint8_t t{celsius_.load()};
@@ -343,6 +363,12 @@ public:
     answer_temperatures_.store(answer);
   }
 
+  /// True: from the first power_off on, no request gets a reply (the real arm, servos off).
+  void set_silent_after_power_off(bool silent)
+  {
+    silent_after_power_off_.store(silent);
+  }
+
   /// Every byte the driver wrote to the arm so far.
   std::vector<std::uint8_t> received()
   {
@@ -352,6 +378,8 @@ public:
 
 private:
   std::atomic<bool> answer_temperatures_{true};
+  std::atomic<bool> silent_after_power_off_{false};
+  std::atomic<bool> powered_off_{false};
   std::atomic<std::uint8_t> celsius_{30};
   std::atomic<bool> stop_{false};
   std::mutex mutex_;
@@ -1073,6 +1101,64 @@ TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
   const std::size_t stop_at{find_request(sent, 0x29, before_heat)};
   ASSERT_LT(stop_at, sent.size());
   EXPECT_LT(find_request(sent, 0x11, stop_at), sent.size());
+
+  // #35: the overheat is latched as fault 3. It survives the on_error: a configure publishes it
+  // again for the supervisor. Only an activate clears it, and only a cool arm activates.
+  arm->set_temperature(30);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut)
+{
+  // The real arm stops answering once its servos are off, so after the cut the link times out
+  // too. Only the first fault is kept: read() must latch OVERHEAT, the cause, not LINK_TIMEOUT.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_silent_after_power_off(true);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  // No read() while the arm heats: wait for the power off on the wire, then let the silence run
+  // past the 200 ms link timeout. 400 ms is twice that, a margin for a loaded test machine; the
+  // cut is recorded right after the power off is written, well inside it.
+  // One copy of the bytes per look: two calls to received() can see different lengths.
+  const auto powered_off{[&arm]() {
+      const std::vector<std::uint8_t> sent{arm->received()};
+      return find_request(sent, 0x11) < sent.size();
+    }};
+  arm->set_temperature(61);
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+  while (!powered_off() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  ASSERT_TRUE(powered_off());
+  std::this_thread::sleep_for(std::chrono::milliseconds{400});
+
+  // Both are true now: the arm was cut and the link timed out. The first read() reports the cut.
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
 
   resource_manager_.reset();
   arm.reset();
