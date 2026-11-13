@@ -54,7 +54,7 @@ data is fed. The stop must not depend on what was just broken.
 
 ## Revisit when
 
-- The driver gets a dead-man check of its own (it stops when the supervisor goes silent):
+- The driver gets a dead-man check of its own (#136, it stops when the supervisor goes silent):
   then the supervisor dying is covered, and this ADR needs a line saying so.
 - The measurements on the arm (`docs/03_verification/safety_supervisor/`) show false halts or
   a halt slower than the criteria of #45.
