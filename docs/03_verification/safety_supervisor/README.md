@@ -20,7 +20,7 @@ under 0.02 rad/s; `speed_deg_s` fastest joint at the trigger; `travel_deg` motio
 
 | # | Test | Trials | Result |
 |---|---|---|---|
-| 1 | 5 min, nothing wrong | 2 | 10 Hz: **one false `HEARTBEAT_LOST`** after ~3 min. 25 Hz (local change, not committed): no halt |
+| 1 | 5 min, nothing wrong | 2 | 10 Hz: **one false `HEARTBEAT_LOST`** after ~3 min. 25 Hz (the rate the mission node publishes since #45): no halt |
 | 2 | Stop service mid-motion | 5 counted | all halted; `halt_ms` 51-76; `rest_ms` 16, 91, 108, 251, 259; travel ≤ 0.53° |
 | 3 | `kill -9` the mission node | 5 | all halted, 304-322 ms after the last heartbeat |
 | 4 | Laptop Wi-Fi off | 1 | `HEARTBEAT_LOST`, 301.7 ms |
@@ -44,7 +44,8 @@ supervisor turned the failed resume into a halt (`RESUME_FAILED`, first CSV line
 
 ## What it means for #45
 
-- The 300 ms timeout needs the mission node at **25 Hz**; repeat test 1, longer, after that change.
+- The 300 ms timeout needs the mission node at 25 Hz, which it publishes since #45 (at 10 Hz it
+  halted falsely once).
 - "At rest within 100 ms of a stop" is met 2 times of 5: the halt takes 51-76 ms, the rest is
   the arm settling. New target or a faster halt: team decision.
 - "Halt within 300 ms of a kill" cannot hold with a 300 ms timeout: 304-322 ms measured.

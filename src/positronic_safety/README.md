@@ -59,6 +59,6 @@ and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`
   link timeout does not fire). Fix: a dead-man check in the driver; until then, the power
   switch. Shown on the arm (test 7).
 - **The heartbeat crosses the Wi-Fi:** the 300 ms limit holds only with the mission node at
-  **25 Hz** (still 10 Hz: a follow-up) and the Jetson's **Wi-Fi power saving off**
+  **25 Hz** and the Jetson's **Wi-Fi power saving off**
   (`docs/03_verification/heartbeat_link`). Detection takes up to 320 ms.
 - **`driver.launch.py` alone** starts everything active with no supervisor.

@@ -27,8 +27,7 @@ node, the supervisor (then at 200 ms) halted once on a gap of **at least 204 ms*
 only 1.2 times, so the team chose **300 ms** (about 1.5 times) and kept 25 Hz. A 15-minute run
 with the supervisor active at 300 ms had zero halts.
 
-**It depends on:** the mission node at **25 Hz** (still 10 Hz in `positronic_mission`; on the
-arm, 10 Hz gave a false halt and 25 Hz none, see `../safety_supervisor/`), and the Jetson's
+**It depends on:** the mission node at **25 Hz** and the Jetson's
 **Wi-Fi power saving off** (`sudo iwconfig wlan0 power off`, lost at reboot; with it on, gaps
 of 0.2-0.4 s came every few seconds).
 
