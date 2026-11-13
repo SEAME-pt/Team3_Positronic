@@ -1,7 +1,7 @@
 # positronic_safety
 
 The safety supervisor of the arm (#45): a lifecycle node on the Jetson, next to the driver
-(ADR 0005), started by `positronic_bringup/launch/supervised.launch.py`.
+(ADR 0006), started by `positronic_bringup/launch/supervised.launch.py`.
 
 - **ACTIVE**: the arm may move and is watched.
 - Any trigger runs the one halt path, then the supervisor **deactivates itself**.
