@@ -26,6 +26,8 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <thread>
+#include <utility>
 #include <rclcpp/node_options.hpp>
 #include <rclcpp/rate.hpp>
 #include <rclcpp/service.hpp>
@@ -33,8 +35,6 @@
 #include <rclcpp_action/server.hpp>
 #include <rclcpp_action/server_goal_handle.hpp>
 #include <rclcpp_action/types.hpp>
-#include <thread>
-#include <utility>
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_interfaces/msg/heartbeat.hpp"
