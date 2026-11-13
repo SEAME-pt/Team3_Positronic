@@ -219,7 +219,8 @@ Real arm: one operator, alone, against the two-person rule of the safety protoco
 operator's hand for the whole session. What moved: one `--first-move` (joint 1, 5 deg in 3 s, 3.2 deg/s peak), then
 three runs of the trajectory, each with a move to home of 1 to 2.2 deg first, at most
 14.3 deg/s. Every goal ended in `SUCCEEDED`; nothing stopped a run. At the end
-`arm_controller` was set inactive before closing the launch.
+`arm_controller` was set inactive before closing the launch. Future sessions for #53 follow
+the two-person rule.
 
 ## Next for #53
 
