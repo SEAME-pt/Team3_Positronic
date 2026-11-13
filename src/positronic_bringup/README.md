@@ -15,6 +15,8 @@ Files:
 - `config/ros2_controllers.yaml`: controller_manager at 100 Hz, `joint_state_broadcaster` and
   `arm_controller` (a `JointTrajectoryController`). Same file on the real arm: the hardware
   plugin is in the xacro, not here.
+- `config/safety_supervisor.yaml`: parameters of the safety supervisor in
+  `supervised.launch.py` (#45); what each one does is in the `positronic_safety` README.
 - `rviz/mirror.rviz`: RViz config of the mirror launch: grid, robot model, fixed frame `world`.
 - `scripts/joint_states_delay.py`: prints every second the number of `/joint_states` messages, the
   average and the maximum delay, as laptop time minus the message stamp.

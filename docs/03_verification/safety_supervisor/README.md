@@ -3,9 +3,10 @@
 How to show, with numbers, that the safety supervisor halts the real arm. What the supervisor
 is and how it decides: `src/positronic_safety/README.md`.
 
-**Status: not run yet.** The supervisor passed its tests without the arm (unit tests, the node
-against a fake controller manager, the launch with `backend:=fake`). Everything below still
-has to be done on the arm, and the results written in the last section.
+**Status: not run on the arm yet.** The supervisor passed its tests without the arm (unit
+tests, the node against a fake controller manager, the launch with `backend:=fake`), and the
+procedure below had a dry run with `backend:=fake` (last section). The tests still have to be
+done on the arm, and the results written in the last section.
 
 ## Safety
 
@@ -24,6 +25,16 @@ These tests move the real arm and stop it on purpose.
   goal is sent.
 
 ## Setup
+
+Two conditions the heartbeat timeout depends on (`docs/03_verification/heartbeat_link`): the
+mission node publishes at **25 Hz** (it still publishes at 10 Hz in `positronic_mission`:
+change it first), and the Jetson's **Wi-Fi power saving is off**. From a laptop host terminal,
+before every session (it comes back on after a reboot):
+
+```bash
+ssh nano 'iwconfig wlan0 | grep -i "power management"'   # must say off
+ssh -t nano 'sudo iwconfig wlan0 power off'              # if it says on
+```
 
 On the Jetson (from a laptop, with the `nano` alias of `docs/build.md`):
 
@@ -52,16 +63,16 @@ The trajectory for every test is `T1.yaml` of `docs/03_verification/jtc_on_the_a
 that folder's README says. After each halt: check the arm stands still, then activate the
 supervisor again.
 
-Try the whole setup once with `backend:=fake` in the dev container before going to the arm:
-`halt_latency.py` has unit tests for its maths, but has not run against ROS yet.
+Try the whole setup once with `backend:=fake` before going to the arm, as the dry run in the
+last section did.
 
 ## Tests
 
 | # | What to do, mid-trajectory unless said | Expected | Criterion of #45 |
 |---|---|---|---|
-| 1 | Nothing: let the arm stand, ACTIVE, for 5 minutes, while someone runs `ros2 topic list`, `ros2 node list` and `ros2 topic echo` now and then | No halt. Count the HEARTBEAT_LOST halts | none; decides the heartbeat margin (see below) |
+| 1 | Nothing: let the arm stand, ACTIVE, for 5 minutes, while someone runs `ros2 topic list`, `ros2 node list` and `ros2 topic echo` now and then | No halt. Count the HEARTBEAT_LOST halts | none; confirms the 300 ms heartbeat timeout on the arm |
 | 2 | `ros2 service call /safety_supervisor/stop std_srvs/srv/Trigger`, 5 times | STOP_SERVICE, `hardware_stopped` 1 | `rest_ms` under 100 |
-| 3 | `kill -9` the mission node, 5 times | HEARTBEAT_LOST | `heartbeat_to_halt_ms + rest_ms` under 300 |
+| 3 | `kill -9` the mission node, 5 times | HEARTBEAT_LOST | `heartbeat_to_halt_ms + rest_ms`: about 320 ms of detection plus the braking. Report the numbers; the #45 line "300 ms" needs rewriting |
 | 4 | Take the laptop off the network (Wi-Fi off) | HEARTBEAT_LOST, same as test 3 | same as test 3 |
 | 5 | Arm standing: `ros2 control switch_controllers --deactivate joint_state_broadcaster` | FAULT_DATA_LOST: the supervisor lost sight of the driver | halts |
 | 6 | After a halt, wait one minute with the mission node alive | Still stopped; only `ros2 lifecycle set /safety_supervisor activate` resumes | stays stopped |
@@ -81,14 +92,31 @@ silent line. Injecting it on the arm needs a hook in the driver: a follow-up iss
   stops about 8 degrees after the request. If `rest_ms` is over 100 with `halt_ms` of a few
   ms, the time is the arm braking, not the supervisor, and the criterion has to be rewritten
   with the measured number.
-- **Test 1 may show false halts.** On 2026-11-11, with the fake backend in a VM, the
-  supervisor halted 2 s after activation: `No mission heartbeat for 206 ms (limit 200 ms)`,
-  while a `ros2` command-line tool was starting. The mission node publishes at 10 Hz, so
-  200 ms tolerates one late heartbeat. If test 1 halts, the fix to propose is a faster
-  heartbeat (25 Hz gives five periods inside 200 ms), not a longer timeout, which would cost
-  the 300 ms of test 3.
+- **Test 1 should show no false halts.** The heartbeat link campaign
+  (`docs/03_verification/heartbeat_link`) measured a longest gap of 157 ms, and one of at least
+  204 ms with the real mission node, so the timeout is 300 ms. A false halt here means the
+  conditions above are not met, or the link is worse on that day: write it down with the
+  time.
 
 ## Results
+
+### Dry run, 2026-11-12, `backend:=fake`
+
+The setup above with the fake backend and the heartbeat timeout then in force (200 ms), one
+trial per trigger, to check the procedure and `halt_latency.py` against ROS. The fake joints
+do not move, so `rest_ms`, `speed_deg_s` and `travel_deg` mean nothing here.
+
+| Trigger | `hardware_stopped` | `halt_ms` | `heartbeat_to_halt_ms` |
+|---|---|---|---|
+| `STOP_SERVICE` | 1 | 42.1 | 44.5 |
+| `HEARTBEAT_LOST` | 1 | 66.7 | 211.0 |
+| `FAULT_DATA_LOST` | 1 | 47.3 | 89.0 |
+
+The hardware-inactive request, the first of the halt, was answered within 1 to 2 ms (the
+supervisor's log); `halt_ms` is the whole halt, from the trigger to the three requests
+answered.
+
+### On the arm
 
 Not run yet. Put the raw `halts.csv` in this folder, named `YYYY-MM-DD_halts.csv`, and a table
 here: per test, the number of trials, min / mean / max of `halt_ms` and `rest_ms`, and pass or

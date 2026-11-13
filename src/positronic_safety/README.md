@@ -16,7 +16,7 @@ It runs on the Jetson, next to the driver (ADR 0005), started by
 | Trigger | Reason in the status | How it is seen |
 |---|---|---|
 | Stop request | `STOP_SERVICE` | `~/stop` (`std_srvs/Trigger`) |
-| Mission heartbeat lost | `HEARTBEAT_LOST` | no message on `/mission/heartbeat` for 200 ms |
+| Mission heartbeat lost | `HEARTBEAT_LOST` | no message on `/mission/heartbeat` for 300 ms |
 | Driver fault | `DRIVER_FAULT` | `driver/fault_code` other than 0 on `/dynamic_joint_states` (#35) |
 | Fault data lost or bad | `FAULT_DATA_LOST` | no usable fault code for 200 ms: topic silent, gpio missing, NaN |
 | Supervisor deactivated | `DEACTIVATED` | a person ran `ros2 lifecycle set ... deactivate` (or shutdown) |
@@ -73,7 +73,7 @@ the reason for each. An empty name or a timeout that is not positive makes `conf
 | `trajectory_action` | `/arm_controller/follow_joint_trajectory` |
 | `controllers_to_start` | `joint_state_broadcaster`, `arm_controller` |
 | `controllers_to_stop` | `arm_controller`, `forward_position_controller` |
-| `heartbeat_topic`, `heartbeat_timeout_ms` | `/mission/heartbeat`, 200 |
+| `heartbeat_topic`, `heartbeat_timeout_ms` | `/mission/heartbeat`, 300 |
 | `fault_topic`, `fault_gpio`, `fault_interface`, `fault_timeout_ms` | `/dynamic_joint_states`, `driver`, `fault_code`, 200 |
 | `halt_step_timeout_ms`, `resume_step_timeout_ms` | 500, 3000 |
 | `check_period_ms` | 20 |
@@ -112,9 +112,15 @@ Passing tests do not prove it on the arm: the fault-injection procedure and its 
 - **The supervisor dying.** Nothing stops the arm for it: the serial line is alive, so the
   driver's link timeout does not fire, and the hardware button (#27) was not built. The fix
   is a dead-man check in the driver; until then, the power switch.
-- **The heartbeat margin.** The mission node publishes at 10 Hz and the limit is 200 ms: one
-  late heartbeat is tolerated, two are a halt. A halt 2 s after activation was seen with the
-  fake backend while a `ros2` tool started (206 ms of silence). To be measured on the arm.
+- **The heartbeat crosses the Wi-Fi.** The 300 ms limit comes from the measurements on the
+  lab Wi-Fi (`docs/03_verification/heartbeat_link`): longest gap 157 ms in the campaign, and
+  one of at least 204 ms with the real mission node. It holds only with **the mission node at
+  25 Hz** (it still publishes at 10 Hz: a follow-up) and **Wi-Fi power saving off on the Jetson**
+  (`sudo iwconfig wlan0 power off`, lost at every reboot). With power saving on, the
+  supervisor halted by itself within seconds. A dead mission node is detected within 320 ms
+  (the limit plus the 20 ms check period), 20 ms over the #45 criterion "halt within 300 ms".
+  A cable for the commanding laptop, or calmer DDS discovery on the Wi-Fi, may allow a shorter
+  limit: to be measured with the same scripts.
 - **`driver.launch.py` alone** starts everything active with no supervisor. The arm is only
   guarded when started with `supervised.launch.py`.
 - **The numbers on the arm** (time to halt, time to rest) are not measured yet.

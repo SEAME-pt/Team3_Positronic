@@ -1,0 +1,3 @@
+# Raw recordings of record_gaps.py: megabytes each, so they stay out of git and are
+# attached to the pull request instead (README, "Raw data").
+*.csv
