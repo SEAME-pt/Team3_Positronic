@@ -1,0 +1,193 @@
+# Copyright 2026 Positronic
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+# AI-generated (Claude, Anthropic).
+# Prompt:
+#   Write a pytest suite for coverage_gate.py that needs no ROS 2 and no real build: write small
+#   lcov tracefiles in memory. Cover: SF/LF/LH parsed per record, absolute (C++) and relative
+#   (Python) paths both grouped by the package after src/, the total is a sum and not an average
+#   of percentages, the worst files are lowest first and skip files at 100 %, the threshold
+#   passes exactly at 80 % and fails just below it, .py files under test/ and launch/ are not
+#   reported as unmeasured but others are, and main() exits 0, 1 or 2 and writes the report to
+#   $GITHUB_STEP_SUMMARY.
+#   Then: the gate is per package. One package below 80 % fails it even when the total is above,
+#   and the report marks each package PASS or FAIL.
+#   Then: .py files coverage.py did not see count at 0 % with coverage.py's statement count, so
+#   an untested Python package fails; setup.py is skipped; an unparsable file exits 2.
+
+"""Unit tests for the coverage gate of issue #109 (no ROS 2 needed)."""
+
+import coverage_gate as gate
+
+
+def record(path, found, hit):
+    return f'TN:\nSF:{path}\nDA:1,1\nLF:{found}\nLH:{hit}\nend_of_record\n'
+
+
+TRACEFILE = (
+    record('/ws/src/positronic_hardware/src/serial_arm.cpp', 100, 90)
+    + record('/ws/src/positronic_hardware/include/positronic_hardware/fake_arm.hpp', 20, 10)
+    + record('/ws/src/positronic_mission/src/mission_node.cpp', 40, 0)
+    + record('src/positronic_bringup/scripts/joint_states_delay.py', 40, 20)
+)
+
+
+def test_parse_reads_each_record():
+    files = gate.parse_tracefile(TRACEFILE)
+    assert [(f.path, f.found, f.hit) for f in files] == [
+        ('src/positronic_hardware/src/serial_arm.cpp', 100, 90),
+        ('src/positronic_hardware/include/positronic_hardware/fake_arm.hpp', 20, 10),
+        ('src/positronic_mission/src/mission_node.cpp', 40, 0),
+        ('src/positronic_bringup/scripts/joint_states_delay.py', 40, 20),
+    ]
+
+
+def test_package_is_the_folder_after_the_first_src():
+    assert gate.package_of('/ws/src/positronic_hardware/src/serial_arm.cpp') == \
+        'positronic_hardware'
+    assert gate.package_of('src/positronic_bringup/scripts/x.py') == 'positronic_bringup'
+    assert gate.package_of('/usr/include/c++/13/vector') == '(outside src)'
+
+
+def test_by_package_sums_the_files_of_a_package():
+    packages = gate.by_package(gate.parse_tracefile(TRACEFILE))
+    assert packages == {
+        'positronic_hardware': (120, 100),
+        'positronic_mission': (40, 0),
+        'positronic_bringup': (40, 20),
+    }
+
+
+def test_total_is_a_sum_not_an_average():
+    files = gate.parse_tracefile(
+        record('src/a/big.cpp', 90, 90) + record('src/a/small.cpp', 10, 0))
+    found, hit = gate.total(files)
+    assert (found, hit) == (100, 90)
+    assert gate.percent(hit, found) == 90.0  # the average of 100 % and 0 % would be 50 %
+
+
+def test_worst_files_lowest_first_and_full_files_left_out():
+    files = gate.parse_tracefile(TRACEFILE + record('src/positronic_protocol/src/units.cpp', 5, 5))
+    worst = gate.worst_files(files, 10)
+    assert [f.path for f in worst] == [
+        'src/positronic_mission/src/mission_node.cpp',
+        'src/positronic_bringup/scripts/joint_states_delay.py',  # 50 %, 20 missed
+        'src/positronic_hardware/include/positronic_hardware/fake_arm.hpp',  # 50 %, 10 missed
+        'src/positronic_hardware/src/serial_arm.cpp',
+    ]
+    assert len(gate.worst_files(files, 2)) == 2
+
+
+def test_threshold_passes_exactly_at_80_and_fails_below():
+    assert gate.passes(100, 80, 80)
+    assert not gate.passes(100, 79, 80)
+    assert not gate.passes(743, 582, 80)  # the first measurement, 78.3 %
+
+
+def test_one_package_below_fails_even_when_the_total_passes():
+    files = gate.parse_tracefile(
+        record('src/big/a.cpp', 1000, 1000) + record('src/small/b.cpp', 50, 0))
+    found, hit = gate.total(files)
+    assert gate.passes(found, hit, 80)  # the total, 1000 / 1050 = 95.2 %, would pass
+    assert gate.failing_packages(files, 80) == ['small']
+    text, passed = gate.report(files, 80, 10, [])
+    assert not passed
+    assert '| big | 1000 / 1000 | 100.0 % | PASS |' in text
+    assert '| small | 0 / 50 | 0.0 % | FAIL |' in text
+
+
+def test_python_files_skip_test_and_launch(tmp_path):
+    for rel in ('src/pkg/scripts/node.py', 'src/pkg/test/test_node.py',
+                'src/pkg/launch/sim.launch.py', 'src/pkg/pkg/helper.py', 'src/pkg/setup.py'):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text('')
+    found = gate.python_files(str(tmp_path / 'src'))
+    assert found == ['src/pkg/pkg/helper.py', 'src/pkg/scripts/node.py']
+
+    files = gate.parse_tracefile(record('src/pkg/scripts/node.py', 10, 5))
+    assert gate.unmeasured(files, found) == ['src/pkg/pkg/helper.py']
+
+
+def test_report_lists_packages_total_and_verdict():
+    text, passed = gate.report(gate.parse_tracefile(TRACEFILE), 80, 10, ['src/pkg/x.py'])
+    assert not passed
+    assert '| positronic_hardware | 100 / 120 | 83.3 % | PASS |' in text
+    assert '| positronic_mission | 0 / 40 | 0.0 % | FAIL |' in text
+    assert '| **Total** (information) | **120 / 200** | **60.0 %** | |' in text
+    assert 'Counted at 0 % (no test imports them):' in text and '- src/pkg/x.py' in text
+    assert text.rstrip().endswith(
+        'FAIL: 2 of 3 packages below 80 %: positronic_bringup, positronic_mission')
+
+
+def test_main_exit_codes_and_step_summary(tmp_path, monkeypatch):
+    summary = tmp_path / 'summary.md'
+    monkeypatch.setenv('GITHUB_STEP_SUMMARY', str(summary))
+    good = tmp_path / 'good.info'
+    good.write_text(record('src/a/a.cpp', 10, 9))
+    bad = tmp_path / 'bad.info'
+    bad.write_text(TRACEFILE)
+    empty = tmp_path / 'empty.info'
+    empty.write_text('')
+    no_src = ['--src', str(tmp_path / 'nothing')]
+
+    assert gate.main([str(good)] + no_src) == 0
+    assert 'PASS: every package at or above 80 %' in summary.read_text()
+    assert gate.main([str(bad)] + no_src) == 1
+    assert gate.main([str(empty)] + no_src) == 2
+    assert gate.main([str(tmp_path / 'missing.info')] + no_src) == 2
+
+
+def test_statements_are_counted_like_coverage_py(tmp_path):
+    """A docstring is not a statement, and a statement over 3 lines counts once."""
+    path = tmp_path / 'node.py'
+    path.write_text('"""Docstring."""\n\n'
+                    'import os\n'
+                    'VALUES = [\n    1,\n    2,\n]\n'
+                    '# a comment\n'
+                    'if os.sep:  # pragma: no cover\n    print(VALUES)\n')
+    assert gate.statement_count(str(path)) == 2
+
+
+def test_untested_python_package_fails_the_gate(tmp_path, capsys):
+    """A package coverage.py never saw is counted at 0 % and fails, like untested C++."""
+    package = tmp_path / 'src' / 'positronic_vision' / 'positronic_vision'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / 'detector.py').write_text('a = 1\nb = 2\nc = 3\n')
+    (package.parent / 'setup.py').write_text('from setuptools import setup\nsetup()\n')
+    good = tmp_path / 'good.info'
+    good.write_text(record('src/a/a.cpp', 10, 10))
+
+    assert gate.main([str(good), '--src', str(tmp_path / 'src')]) == 1
+    out = capsys.readouterr().out
+    assert '| positronic_vision | 0 / 3 | 0.0 % | FAIL |' in out
+    assert '- src/positronic_vision/positronic_vision/detector.py' in out
+    assert 'setup.py' not in out and '__init__.py' not in out
+    assert '| **Total** (information) | **10 / 13** | **76.9 %** | |' in out
+
+
+def test_unparsable_python_file_is_an_error(tmp_path, capsys):
+    broken = tmp_path / 'src' / 'pkg' / 'broken.py'
+    broken.parent.mkdir(parents=True)
+    broken.write_text('def (:\n')
+    good = tmp_path / 'good.info'
+    good.write_text(record('src/a/a.cpp', 10, 10))
+    assert gate.main([str(good), '--src', str(tmp_path / 'src')]) == 2
+    assert 'cannot count the statements' in capsys.readouterr().err

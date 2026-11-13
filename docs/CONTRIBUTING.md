@@ -47,11 +47,13 @@ You only need this for a personal copy. In Claude, go to **Projects → Create p
 
 ### 1.4 Claude Code (terminal / IDE)
 
-The repo has **no `CLAUDE.md`**, so the team context lives in one place, the Project. When you use Claude Code inside the repo, start the session with:
+The repo has a short **[`CLAUDE.md`](../CLAUDE.md)** at the root. It exists for the `@claude` PR review (README, "Workflow"): the review rules, what a test must cover, what not to comment on. Claude Code also reads it when you work in the repo, but it is not the team context, which still lives in one place, the Project. When you use Claude Code inside the repo, start the session with:
 
 > *"Read `docs/CONTRIBUTING.md` and `README.md` and follow them."*
 
 For questions that need the full context (program, hardware, decisions), use the Project chat.
+
+`CLAUDE.md` summarises this file and stays under 100 lines. When a rule here changes, change it there in the same PR if it is one it repeats. *Why: the review bot is told to follow `CLAUDE.md`, so a rule changed only here would still be reviewed the old way.*
 
 ### 1.5 Getting the most out of it
 
@@ -196,6 +198,7 @@ PRs stay **under 400 changed lines**. Generated files and meshes don't count. *W
 - **Check:** correctness, safety (limits, units, timeouts), tests, naming and style, docs, and that the PR does only what its issue asks.
 - The person who **opened a thread resolves it** once they're satisfied.
 - Review within **one working day**. *Why: a PR waiting two days blocks a whole pair.*
+- **Optional first pass:** before requesting reviewers, the author can comment `@claude` on the PR for an automated review (README, "Workflow"). It is not one of the two approvals and none of its points block the merge: the author fixes them or replies why not, and the human reviewers decide.
 
 ### 2.7 Squash merging: how
 
@@ -272,6 +275,7 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | `make build` | `colcon build` |
 | `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`) |
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
+| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); report-only in CI for now |
 | Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
 
 **Why two formatters.** In `make test`, ROS checks C++ formatting with **uncrustify**, not clang-format. Our `.clang-format` is ROS's own clang-format config (`ament_clang_format`) plus a few options that make it agree with uncrustify. In a few places clang-format physically can't produce what uncrustify demands: the body of a lambda, the continuation lines of a wrapped `while`/`for` condition, and `case` blocks with braces. So `make format` runs clang-format first and uncrustify last. Uncrustify has the final word, and the result passes `make test`.
