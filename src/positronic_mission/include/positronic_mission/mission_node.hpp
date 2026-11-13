@@ -103,13 +103,13 @@ private:
   void execute(const std::shared_ptr<GoalHandle> & goal_handle);
   void handle_reset(
     const std::shared_ptr<StateTrigger::Request> & request,
-    std::shared_ptr<StateTrigger::Response> response);
+    const std::shared_ptr<StateTrigger::Response> & response);
   void handle_emergency_stop(
     const std::shared_ptr<StateTrigger::Request> & request,
-    std::shared_ptr<StateTrigger::Response> response);
+    const std::shared_ptr<StateTrigger::Response> & response);
 
+  // Mission Node action server
   rclcpp_action::Server<GoToPose>::SharedPtr mission_server_{nullptr};
-  // rclcpp_action::Client<typename ActionT>::SharedPtr mission_client_;
 
   // Heartbeat of the Node
   rclcpp_lifecycle::LifecyclePublisher<Heartbeat>::SharedPtr publisher_{nullptr};

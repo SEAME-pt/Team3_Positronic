@@ -30,8 +30,8 @@ namespace positronic_mission
 {
 using moveit::core::MoveItErrorCode;
 
-MoveitBackend::MoveitBackend(const std::string & group_name)
-: group_name_(group_name)
+MoveitBackend::MoveitBackend(std::string group_name)
+: group_name_(std::move(group_name))
 {
   node_ = std::make_shared<rclcpp::Node>(
     "positronic_mission_moveit",
@@ -47,7 +47,7 @@ MoveitBackend::MoveitBackend(const std::string & group_name)
 
 MoveitBackend::~MoveitBackend()
 {
-  stop();
+  MoveitBackend::stop();
   executor_->cancel();
   if (spin_thread_.joinable()) {
     spin_thread_.join();

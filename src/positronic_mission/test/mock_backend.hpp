@@ -44,7 +44,7 @@ public:
   std::atomic<int> calls{0};
   std::atomic<int> stops{0};
 
-  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped &) override
+  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & /* pose */) override
   {
     ++calls;
     if (stop_requested_) {

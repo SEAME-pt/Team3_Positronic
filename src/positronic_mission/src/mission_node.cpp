@@ -45,7 +45,7 @@ positronic_mission::MissionNode::~MissionNode()
 
 void positronic_mission::MissionNode::handle_reset(
   const std::shared_ptr<StateTrigger::Request> & /* request */,
-  std::shared_ptr<StateTrigger::Response> response)
+  const std::shared_ptr<StateTrigger::Response> & response)
 {
   if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     response->accepted = false;
@@ -70,7 +70,7 @@ void positronic_mission::MissionNode::handle_reset(
 
 void positronic_mission::MissionNode::handle_emergency_stop(
   const std::shared_ptr<StateTrigger::Request> & /* request */,
-  std::shared_ptr<StateTrigger::Response> response)
+  const std::shared_ptr<StateTrigger::Response> & response)
 {
   State state_now = state_.load();
   // Set the arm to STOPPED, unless it is already in ERROR
@@ -97,13 +97,13 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
   reset_state_ = create_service<StateTrigger>(
     "/mission/reset", [this](
       const std::shared_ptr<StateTrigger::Request> & request,
-      std::shared_ptr<StateTrigger::Response> response) {
+      const std::shared_ptr<StateTrigger::Response> & response) {
       handle_reset(request, response);
     });
   emergency_stop_ = create_service<StateTrigger>(
     "/mission/stop", [this](
       const std::shared_ptr<StateTrigger::Request> & request,
-      std::shared_ptr<StateTrigger::Response> response) {
+      const std::shared_ptr<StateTrigger::Response> & response) {
       handle_emergency_stop(request, response);
     });
 
@@ -237,7 +237,7 @@ rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
     RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
     return rclcpp_action::GoalResponse::REJECT;
   }
-  std::string reason = validate_pose(goal->target_pose);
+  const std::string reason = validate_pose(goal->target_pose);
   if (!reason.empty()) {
     RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
     return rclcpp_action::GoalResponse::REJECT;

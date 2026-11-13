@@ -38,9 +38,7 @@
 #include "mock_backend.hpp"
 #include "positronic_mission/pose_validation.hpp"
 
-namespace positronic_mission
-{
-namespace test
+namespace positronic_mission::test
 {
 
 using std::chrono_literals::operator""ms;
@@ -80,12 +78,12 @@ protected:
     stop_client_ = client_node_->create_client<StateTrigger>("/mission/stop");
     reset_client_ = client_node_->create_client<StateTrigger>("/mission/reset");
     heartbeat_sub_ = client_node_->create_subscription<Heartbeat>(
-      "/mission/heartbeat", rclcpp::QoS(10).best_effort(), [this](const Heartbeat::SharedPtr msg) {
-        last_state_ = msg->state;
-        if (msg->node_name != "mission_node") {
+      "/mission/heartbeat", rclcpp::QoS(10).best_effort(), [this](const Heartbeat & msg) {
+        last_state_ = msg.state;
+        if (msg.node_name != "mission_node") {
           node_name_ok_ = false;
         }
-        const int64_t stamp = rclcpp::Time(msg->stamp).nanoseconds();
+        const int64_t stamp = rclcpp::Time(msg.stamp).nanoseconds();
         if (stamp <= last_stamp_ns_) {
           last_stamp_ok_ = false;
         }
@@ -176,7 +174,7 @@ protected:
 
     auto options = rclcpp_action::Client<GoToPose>::SendGoalOptions();
     options.feedback_callback =
-      [this](GoalHandleClient::SharedPtr, const std::shared_ptr<const GoToPose::Feedback>) {
+      [this](const GoalHandleClient::SharedPtr &, const std::shared_ptr<const GoToPose::Feedback> &) {
         ++feedback_count_;
       };
 
@@ -216,7 +214,7 @@ protected:
     return call_trigger(reset_client_);
   }
 
-  StateTrigger::Response::SharedPtr call_trigger(
+  static StateTrigger::Response::SharedPtr call_trigger(
     const rclcpp::Client<StateTrigger>::SharedPtr & client)
   {
     auto future = client->async_send_request(std::make_shared<StateTrigger::Request>());
@@ -276,7 +274,6 @@ protected:
   std::atomic<int> feedback_count_{0};
 };
 
-}  // namespace test
-}  // namespace positronic_mission
+}  // namespace positronic_mission::test
 
 #endif  // MISSION_FIXTURE_HPP_

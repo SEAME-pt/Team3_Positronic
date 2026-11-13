@@ -41,7 +41,7 @@ namespace positronic_mission
 class MoveitBackend : public MotionBackend
 {
 public:
-  explicit MoveitBackend(const std::string & group_name);
+  explicit MoveitBackend(std::string group_name);
   ~MoveitBackend() override;
   MoveitBackend(const MoveitBackend &) = delete;
   MoveitBackend & operator=(const MoveitBackend &) = delete;

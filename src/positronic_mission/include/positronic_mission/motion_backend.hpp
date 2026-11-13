@@ -29,7 +29,7 @@
 namespace positronic_mission
 {
 
-enum class MotionOutcome
+enum class MotionOutcome : std::uint8_t
 {
   OK,
   PLANNING_FAILED,
@@ -42,7 +42,12 @@ enum class MotionOutcome
 class MotionBackend
 {
 public:
+  MotionBackend() = default;
   virtual ~MotionBackend() = default;
+  MotionBackend(const MotionBackend &) = delete;
+  MotionBackend & operator=(const MotionBackend &) = delete;
+  MotionBackend(MotionBackend &&) = delete;
+  MotionBackend & operator=(MotionBackend &&) = delete;
 
   // Blocking. Called from the execute thread.
   virtual MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) = 0;

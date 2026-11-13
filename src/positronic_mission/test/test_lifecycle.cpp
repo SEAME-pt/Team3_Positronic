@@ -25,8 +25,6 @@
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_mission/motion_backend.hpp"
 
-using std::chrono_literals::operator""ms;
-using std::chrono_literals::operator""s;
 using positronic_mission::GoToPose;
 using positronic_mission::MotionOutcome;
 using positronic_mission::State;
@@ -120,7 +118,7 @@ TEST_F(MissionNodeTest, LifecycleStopWhileInactive)
 
   // Start from inactive State
   ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
-  std::this_thread::sleep_for(100ms);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   // Call Emergency Stop
   auto stop = call_stop();
@@ -150,7 +148,7 @@ TEST_F(MissionNodeTest, LifecycleFullClean)
 TEST_F(MissionNodeTest, Heartbeat)
 {
   heartbeat_count_ = 0;
-  std::this_thread::sleep_for(1000ms);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   EXPECT_TRUE(node_name_ok_);
   EXPECT_TRUE(last_stamp_ok_);
   const int count = heartbeat_count_.load();
@@ -159,9 +157,9 @@ TEST_F(MissionNodeTest, Heartbeat)
 
   // Deactivate and expect the message to stay the same
   ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
-  std::this_thread::sleep_for(100ms);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
   const int tmp_count = heartbeat_count_.load();
-  std::this_thread::sleep_for(500ms);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
   EXPECT_EQ(heartbeat_count_.load(), tmp_count);
 
   // Resumes and expect the message to increase

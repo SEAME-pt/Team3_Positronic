@@ -35,7 +35,7 @@ template<typename Fn>
 static int64_t elapsed_ms(Fn && fn)
 {
   const auto start = std::chrono::steady_clock::now();
-  fn();
+  std::forward<Fn>(fn)();
   return std::chrono::duration_cast<std::chrono::milliseconds>(
            std::chrono::steady_clock::now() - start)
          .count();
@@ -147,9 +147,11 @@ TEST_F(MissionNodeTest, DeactivateMidGoalAbortsQuickly)
   // The goal was aborted
   auto result = wait_result(handle);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->code, ResultCode::ABORTED);
-  EXPECT_EQ(result->result->code, GoToPose::Result::STOPPED);
-
+  if (result.has_value())
+  {
+      EXPECT_EQ(result->code, ResultCode::ABORTED);
+      EXPECT_EQ(result->result->code, GoToPose::Result::STOPPED);
+  }
   // Deactivated from MOVING -> INACTIVE, so activate gives IDLE
   last_state_ = 255;
   ASSERT_EQ(node_->activate().id(), lc::State::PRIMARY_STATE_ACTIVE);
