@@ -16,6 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Heartbeat.msg"
   "action/GoToPose.action"
   "srv/StateTrigger.srv"
+  "msg/SafetyStatus.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs lifecycle_msgs
 )
 
