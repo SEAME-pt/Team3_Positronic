@@ -3,7 +3,7 @@
 How to show, with numbers, that the safety supervisor halts the real arm. What the supervisor
 is and how it decides: `src/positronic_safety/README.md`.
 
-**Status: not run on the arm yet.** The supervisor passed its tests without the arm (unit
+**Status: run on the arm on 2026-11-13 (results in the last section).** The supervisor passed its tests without the arm (unit
 tests, the node against a fake controller manager, the launch with `backend:=fake`), and the
 procedure below had a dry run with `backend:=fake` (last section). The tests still have to be
 done on the arm, and the results written in the last section.
@@ -116,8 +116,34 @@ The hardware-inactive request, the first of the halt, was answered within 1 to 2
 supervisor's log); `halt_ms` is the whole halt, from the trigger to the three requests
 answered.
 
-### On the arm
+### On the arm, 2026-11-13
 
-Not run yet. Put the raw `halts.csv` in this folder, named `YYYY-MM-DD_halts.csv`, and a table
-here: per test, the number of trials, min / mean / max of `halt_ms` and `rest_ms`, and pass or
-fail against the criterion.
+Raw: `2026-11-13_halts.csv` (one line per halt). Serial backend, two people, power saving off,
+**mission node at 10 Hz** (the 25 Hz change is not merged yet). No Gazebo run before it: the
+stop path had run end to end against the controller manager with the fake backend, and Gazebo
+would add physics, not stop logic.
+
+| # | Trials | Result | Numbers | vs #45 |
+|---|---|---|---|---|
+| 1 | 1 | **Fail**: one `HEARTBEAT_LOST` after about 3 min with nothing wrong | 301.9 ms without a heartbeat | false halt |
+| 2 | 15 (5 mid-motion: 1, 11, 12, 13, 15) | every stop halted; travel after the stop at most 0.53° | mid-motion: `halt_ms` 51-76, `rest_ms` 16, 91, 108, 251, 259 | **2 of 5 under 100 ms** |
+| 3 | 5 | every kill halted | heartbeat to halt 304-322 ms; `halt_ms` 60-106; last heartbeat to rest 315-507 ms | over 300 ms, as expected |
+| 4 | 1 | Wi-Fi off: `HEARTBEAT_LOST`, same as test 3 | 301.7 ms; the arm was not moving at that instant | halts |
+| 5 | 1 | `FAULT_DATA_LOST` | `halt_ms` 63 | halts |
+| 6 | 1 | stayed stopped about 3 min with the mission node alive | | pass |
+| 7 | 1 | supervisor killed mid-move: **the arm finished its move** | | the written limit |
+
+Trials 2-10 of test 2 hit the arm before or without motion (speed at the stop near 0) and are
+not counted; trial 14 too.
+
+Also seen: the driver refused to activate with J3 at 154° (limit ±150°), and the supervisor
+turned the failed resume into a halt (`RESUME_FAILED`, first line of the CSV).
+
+What it means:
+
+- **The heartbeat timeout fails at 10 Hz** (test 1). The mission node must publish at 25 Hz,
+  then test 1 is repeated; if it still halts, the timeout goes up.
+- **100 ms to rest is not met** in 3 of 5 (test 2). The halt itself takes 51-76 ms; the rest
+  is the arm settling. The criterion needs the measured numbers or a faster halt.
+- **300 ms from a kill to the halt is not possible** with a 300 ms timeout: 304-322 ms
+  measured. The criterion needs rewriting.
