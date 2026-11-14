@@ -101,7 +101,7 @@ NANO_IMAGE    := positronic-runtime:nano
 # The packages the Jetson builds, plus whatever they depend on (colcon --packages-up-to).
 # MoveIt, Gazebo and RViz run on laptops only, so a package that needs them to build stays out
 # of this list. CI builds exactly this list in the runtime image (make nano-packages).
-NANO_PACKAGES := positronic_hardware positronic_bringup positronic_safety
+NANO_PACKAGES := positronic_hardware positronic_bringup positronic_hil positronic_safety 
 ROS_DOMAIN_ID ?= 17
 export ROS_DOMAIN_ID
 
