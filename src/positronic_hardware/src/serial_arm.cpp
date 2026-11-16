@@ -158,7 +158,8 @@ SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing)
 }
 
 SerialArm::SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing)
-: transport_{std::move(transport)}, timing_{timing}
+: transport_{std::move(transport)},
+  timing_{timing}
 {
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
