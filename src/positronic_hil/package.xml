@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>positronic_hil</name>
+  <version>0.0.0</version>
+  <description>Hardware-in-the-loop</description>
+  <maintainer email="example@seame.pt">dev</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>builtin_interfaces</test_depend>
+
+  <test_depend>ros2launch</test_depend>
+  <test_depend>positronic_bringup</test_depend>
+  <test_depend>controller_manager</test_depend>
+  <test_depend>controller_manager_msgs</test_depend>
+  <test_depend>lifecycle_msgs</test_depend>
+  <test_depend>control_msgs</test_depend>
+  <test_depend>trajectory_msgs</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
