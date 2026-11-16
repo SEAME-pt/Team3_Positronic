@@ -126,11 +126,26 @@ Measured this sprint: command write timing, final joint error 3.1°–4.9°,
 dead-link stop 194–201 ms, supervisor halt 51–106 ms, safe stop frame 6–16 ms,
 sim-to-real worst peak 3.57°.
 
-Went well: <...>
+### Went well
 
-Went badly: <...>
+- All six goals were delivered, and each one has a measurement behind it. The raw data of
+  every run is under `docs/03_verification/`, one folder per issue.
+- The interface between #35 (link timeout), #36 (lifecycle) and #45 (supervisor) was agreed
+  in the first week, before the code. That is what let the supervisor land inside the sprint.
+- The first motion of the arm from ROS 2 (#32) came on day 4, early enough for #33, #34 and
+  #37 to run on hardware in the second week.
 
-Actions: <...>
+### Went badly
+
+- The dependencies between issues were not studied at planning. #34 waited for #32, #35 for
+  #36, #37 for #33, and #33 for the first motion, so the second week carried most of the
+  hardware work and the pairs waited for each other.
+
+### Actions
+
+- At planning, draw the dependencies between the issues before assigning them: which issue
+  needs which, which files they share, and the order of the PRs. Sprint 3 planning (16 Nov)
+  already lists the shared files and "one PR at a time" on each issue.
 
 ## Sprint 3 goals, draft
 
