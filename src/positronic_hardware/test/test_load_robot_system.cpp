@@ -302,7 +302,8 @@ public:
             const std::lock_guard<std::mutex> lock{mutex_};
             received_.insert(received_.end(), begin, end);
           }
-          if (silent_after_power_off_.load() &&
+          if (
+            silent_after_power_off_.load() &&
             std::search(begin, end, POWER_OFF_REQUEST.begin(), POWER_OFF_REQUEST.end()) != end)
           {
             powered_off_.store(true);

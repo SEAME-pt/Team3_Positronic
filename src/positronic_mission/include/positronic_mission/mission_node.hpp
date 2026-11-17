@@ -28,22 +28,24 @@
 #include <memory>
 #include <thread>
 #include <utility>
-#include <rclcpp/node_options.hpp>
-#include <rclcpp/rate.hpp>
-#include <rclcpp/service.hpp>
-#include <rclcpp_action/client.hpp>
-#include <rclcpp_action/server.hpp>
-#include <rclcpp_action/server_goal_handle.hpp>
-#include <rclcpp_action/types.hpp>
+
 #include "lifecycle_msgs/msg/state.hpp"
+#include "rclcpp/node_options.hpp"
+#include "rclcpp/rate.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp/service.hpp"
+#include "rclcpp_action/client.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "rclcpp_action/server.hpp"
+#include "rclcpp_action/server_goal_handle.hpp"
+#include "rclcpp_action/types.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_interfaces/msg/heartbeat.hpp"
 #include "positronic_interfaces/srv/state_trigger.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "positronic_mission/pose_validation.hpp"
-#include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
-#include "rclcpp_lifecycle/lifecycle_node.hpp"
 
 namespace positronic_mission
 {

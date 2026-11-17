@@ -117,9 +117,9 @@ TEST(SupervisorLogic, HaltIsHardwareThenGoalsThenControllers)
 
 TEST(SupervisorLogic, EveryTriggerTakesTheSameHaltPath)
 {
-  const std::array<Reason, 6> triggers{
-    Reason::STOP_SERVICE, Reason::HEARTBEAT_LOST, Reason::DRIVER_FAULT,
-    Reason::FAULT_DATA_LOST, Reason::DEACTIVATED, Reason::RESUME_FAILED};
+  const std::array<Reason, 6> triggers{Reason::STOP_SERVICE, Reason::HEARTBEAT_LOST,
+    Reason::DRIVER_FAULT, Reason::FAULT_DATA_LOST,
+    Reason::DEACTIVATED, Reason::RESUME_FAILED};
   for (const Reason trigger : triggers) {
     SupervisorLogic logic = monitoring_logic();
     EXPECT_EQ(run_to_end(logic, logic.halt(trigger)), HALT_STEPS) << to_string(trigger);
@@ -141,15 +141,15 @@ TEST(SupervisorLogic, HardwareStoppedFollowsTheFirstHaltStepOnly)
 {
   SupervisorLogic stopped = monitoring_logic();
   Order order = stopped.halt(Reason::STOP_SERVICE);
-  order = stopped.step_done(order.ticket, true);    // hardware inactive: done
-  order = stopped.step_done(order.ticket, false);   // cancel goals: failed
-  order = stopped.step_done(order.ticket, false);   // controllers off: failed
+  order = stopped.step_done(order.ticket, true);   // hardware inactive: done
+  order = stopped.step_done(order.ticket, false);  // cancel goals: failed
+  order = stopped.step_done(order.ticket, false);  // controllers off: failed
   EXPECT_EQ(order.step, Step::NONE);
   EXPECT_TRUE(stopped.hardware_stopped());
 
   SupervisorLogic unknown = monitoring_logic();
   order = unknown.halt(Reason::STOP_SERVICE);
-  order = unknown.step_done(order.ticket, false);   // hardware inactive: failed
+  order = unknown.step_done(order.ticket, false);  // hardware inactive: failed
   order = unknown.step_done(order.ticket, true);
   order = unknown.step_done(order.ticket, true);
   EXPECT_EQ(order.step, Step::NONE);
@@ -221,9 +221,9 @@ TEST(SupervisorLogic, FailedControllerActivationBecomesAHalt)
 {
   SupervisorLogic logic;
   Order order = logic.resume();
-  order = logic.step_done(order.ticket, true);    // hardware active: done
+  order = logic.step_done(order.ticket, true);  // hardware active: done
   ASSERT_EQ(order.step, Step::CONTROLLERS_ON);
-  order = logic.step_done(order.ticket, false);   // controllers on: failed
+  order = logic.step_done(order.ticket, false);  // controllers on: failed
   EXPECT_EQ(order.step, Step::HARDWARE_INACTIVE);
   EXPECT_EQ(logic.mode(), Mode::HALTING);
   EXPECT_EQ(logic.reason(), Reason::RESUME_FAILED);
@@ -306,7 +306,7 @@ TEST(SupervisorLogic, TicketsNeverRepeat)
   run(logic.halt(Reason::STOP_SERVICE));
   run(logic.resume());
 
-  ASSERT_EQ(tickets.size(), 7U);  // 2 resume + 3 halt + 2 resume
+  ASSERT_EQ(tickets.size(), 7U);   // 2 resume + 3 halt + 2 resume
   EXPECT_EQ(tickets.front(), 1U);  // 0 means "no request"
   for (std::size_t i = 1; i < tickets.size(); ++i) {
     EXPECT_GT(tickets[i], tickets[i - 1]);
@@ -334,15 +334,22 @@ TEST(SupervisorLogic, EveryValueHasItsOwnName)
   EXPECT_EQ(modes.count("UNKNOWN"), 0U);
 
   const std::set<std::string_view> reasons{
-    to_string(Reason::NONE), to_string(Reason::STOP_SERVICE), to_string(Reason::HEARTBEAT_LOST),
-    to_string(Reason::DRIVER_FAULT), to_string(Reason::FAULT_DATA_LOST),
-    to_string(Reason::DEACTIVATED), to_string(Reason::RESUME_FAILED)};
+    to_string(Reason::NONE),
+    to_string(Reason::STOP_SERVICE),
+    to_string(Reason::HEARTBEAT_LOST),
+    to_string(Reason::DRIVER_FAULT),
+    to_string(Reason::FAULT_DATA_LOST),
+    to_string(Reason::DEACTIVATED),
+    to_string(Reason::RESUME_FAILED)};
   EXPECT_EQ(reasons.size(), 7U);
   EXPECT_EQ(reasons.count("UNKNOWN"), 0U);
 
   const std::set<std::string_view> steps{
-    to_string(Step::NONE), to_string(Step::HARDWARE_INACTIVE), to_string(Step::CANCEL_GOALS),
-    to_string(Step::CONTROLLERS_OFF), to_string(Step::HARDWARE_ACTIVE),
+    to_string(Step::NONE),
+    to_string(Step::HARDWARE_INACTIVE),
+    to_string(Step::CANCEL_GOALS),
+    to_string(Step::CONTROLLERS_OFF),
+    to_string(Step::HARDWARE_ACTIVE),
     to_string(Step::CONTROLLERS_ON)};
   EXPECT_EQ(steps.size(), 6U);
   EXPECT_EQ(steps.count("UNKNOWN"), 0U);
