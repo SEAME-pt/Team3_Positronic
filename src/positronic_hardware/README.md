@@ -31,8 +31,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
                                            └─ PosixSerialPort   /dev/ttyTHS1, raw 8N1, exclusive
 ```
 
-- One turn of the serial thread: a pending stop or power on first, if any; then `get_angles`,
-  up to 50 ms for the reply; then, once a second, `get_servo_temps` (see Servo
+- One turn of the serial thread: a pending stop or power on first, if any, waiting for its ack;
+  then `get_angles`, up to 50 ms for the reply; then, once a second, `get_servo_temps` (see Servo
   over-temperature); then, if the arm answered and there is a new target, one
   `send_angles` and a settle of `send_settle_ms`. A turn lasts 10 ms while the arm stands still
   and `moving_period_ms` after a send. The arm drops a frame that arrives while it is still
@@ -177,7 +177,7 @@ The component is not a ROS node: its state changes with
 | `read()` (inactive or active) | Publishes position and velocity once the arm has answered; until then the states stay NaN. Once the serial thread has cut the arm for an overheat, latches `driver/fault_code` = 3 and returns ERROR (see Servo over-temperature); while active, temperatures stale for 10 s halt the arm and return ERROR. While active, a link silent for over 200 ms latches `driver/fault_code` = 1 and stops the arm (#35). The temperatures are checked first, so an overheat is not reported as the link timeout that its power off causes. Publishes the latched fault code every cycle. |
 | `on_activate` | Waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then waits up to 2 s for the first servo temperatures and refuses an arm that does not report them or has a servo within 5 degC of `servo_temp_limit_c`. Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". Refuses a link that went silent since the first reply (#35). The only place a latched fault is cleared. |
 | `write()` (active only) | Checks the six commands against the joint limits (#34); a bad one is not sent, the arm gets a stop and `write()` returns ERROR. Otherwise hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive, and also while a fault is latched (#35). |
-| `on_deactivate` | Sends a stop: the arm halts where it is, and the serial thread holds every target until the next activate. Returns ERROR if the stop did not leave the port within 300 ms, because a component that could not stop the arm must not stay active. |
+| `on_deactivate` | Sends a stop: the arm halts where it is, and the serial thread holds every target until the next activate. Returns ERROR if the arm did not acknowledge the stop within 300 ms (#103): the thread keeps resending it meanwhile, but a component that cannot confirm the arm stopped must not stay active. |
 | `on_error` | Reached from any transition that returned ERROR, and from a `write()` that returned ERROR, on the control loop. Asks the serial thread for a stop without waiting, keeps the backend alive (it holds every target and keeps reading the pose) and takes the component to UNCONFIGURED, so `configure` and `activate` bring it back. It never joins the thread on the control loop. |
 | `on_cleanup`, `on_shutdown` | Destroys the backend: stops the thread, unlocks and closes the port. |
 
@@ -274,8 +274,8 @@ No arm is needed:
 
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
-| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate. |
-| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the link timeout (#35), raised by silence and cleared when replies resume; the temperature guard (read while idle, not in turns that send until overdue, then right after a `get_angles`; the cut: stop then power off, `power_on()` refused, the power off repeated, also while halted; implausible readings ignored; stale when `0xE5` never answers); `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate; the acknowledged requests (#103): a deactivate whose stop the arm never acknowledges returns ERROR after 300 ms and leaves the component configurable, an activate whose power_on is never acknowledged returns ERROR with a stop after the last power_on and no target sent, and a 58 ms ack still activates. |
+| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the acknowledged requests (#103): `halt()` returns only after the ack, fails at the deadline and keeps resending when the arm never acknowledges, a `request_halt()` during the power_on wait puts the hold back; the link timeout (#35), raised by silence and cleared when replies resume; the temperature guard (read while idle, not in turns that send until overdue, then right after a `get_angles`; the cut: stop then power off, `power_on()` refused, the power off repeated, also while halted; implausible readings ignored; stale when `0xE5` never answers); `PosixSerialPort` exclusivity on a pseudo-terminal. |
 | `test_link_watchdog`       | `LinkWatchdog` alone with made-up time points (#35): no fault right after reset, the 200 ms boundary, a reply restarts the count, no latching. |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
@@ -295,10 +295,15 @@ does not move and the log names the joint.
   see the same pose twice and the velocity is underestimated.
 - A read error and a read timeout look the same to the serial thread: both are "no reply", and
   the link timeout (#35) catches either after 200 ms.
-- `halt()` and `power_on()` report true when their frame is on the wire, not when the firmware
-  acknowledged it (#103). With a silent arm a serial turn lasts about 50 ms (`VTIME = 0`), and
-  with an arm that answers `get_angles` but not `get_servo_temps` about 70 ms, so a stop reaches
-  the port within ~120 ms; the 300 ms deadline leaves a wide margin.
+- `halt()` and `power_on()` report true only when the firmware acknowledged the request
+  (`FE FE 03 <cmd> 01 FA`), not when the frame left the port (#103). The serial thread writes
+  the frame at the start of a turn and reads the line for up to `ACK_TIMEOUT` (80 ms: the ack
+  takes 1.8 ms on the bench, 58 ms once for a power_on). No ack means the arm did not take the
+  request (a busy window after a `send_angles`, a lost byte): the request stays pending and the
+  frame goes out again next turn, until the ack comes or the caller's 300 ms pass. A `halt()`
+  that returns false therefore means "the arm never confirmed the stop", and the stop is still
+  being resent. What the ack does not say: that the servos obeyed. An unfollowed `send_angles`
+  is the second part of #103.
 - The servo temperature format (`0xE5`, one byte per servo) comes from pymycobot 4.0.4
   (`positronic_protocol` has a one-line check for an arm). On a firmware that does not answer
   it, the driver refuses to activate. The cut is not acknowledged either: the proof that the
@@ -318,7 +323,7 @@ does not move and the log names the joint.
 - `fake_arm.hpp`: `FakeArm`.
 - `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
 - `servo_temperature.hpp`: `SERVO_TEMP_LIMIT_C`, `OverheatDetector`, the over-temperature logic.
-- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`, `TEMPERATURE_REPLY_TIMEOUT`) and `PosixSerialPort`.
+- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `ACK_TIMEOUT`, `REQUEST_TIMEOUT`, `TEMPERATURE_REPLY_TIMEOUT`) and `PosixSerialPort`.
 - `link_watchdog.hpp`: `LinkWatchdog`, the 200 ms link timeout (#35).
 - `test/hil_link_timeout.cpp`: the #35 check on the real arm, run by hand.
 - `serial_transport.hpp`: the `SerialTransport` interface.

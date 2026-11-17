@@ -267,71 +267,112 @@ constexpr std::array<std::uint8_t, 17> RECORDED_REPLY{0xFE, 0xFE, 0x0E, 0x20, 0x
   0xFF, 0xEF, 0xFF, 0xC3, 0xFF, 0x85,
   0x00, 0x2B, 0x00, 0x3D, 0xFA};
 
-/// The get_servo_temps request, as the serial thread writes it.
-constexpr std::array<std::uint8_t, 5> TEMPS_REQUEST{0xFE, 0xFE, 0x02, 0xE5, 0xFA};
+/// What the Atom puts on the line when it polls the six servos, recorded on the arm (the bytes
+/// the SerialArm tests replay): the ping, the sync read and the six echo frames. It precedes
+/// every reply to the driver and every sync-write.
+constexpr std::string_view RECORDED_POLL{
+  "ff ff 07 02 01 f5 ff ff fe 0a 82 38 0f 01 02 03 04 05 06 19 ff ff 01 11 00 01 08 00 00 00 00 "
+  "79 26 00 00 00 01 08 00 00 3c ff ff 02 11 00 02 08 00 00 00 00 79 23 00 00 00 02 08 00 00 3c "
+  "ff ff 03 11 00 f9 07 00 00 00 00 7b 21 00 00 00 f9 07 00 00 4f ff ff 04 11 00 0e 08 00 00 00 "
+  "00 4a 21 00 00 00 0e 08 00 00 53 ff ff 05 11 00 fb 07 00 00 00 00 49 20 00 00 00 fb 07 00 00 "
+  "7c ff ff 06 11 00 f9 07 00 00 00 00 49 23 00 00 00 f9 07 00 00 7c"};
 
-/// The power_off request: what the serial thread sends to cut an overheated arm.
-constexpr std::array<std::uint8_t, 5> POWER_OFF_REQUEST{0xFE, 0xFE, 0x02, 0x11, 0xFA};
+/// The Atom's sync-write to the servos after a send_angles, recorded on the arm on 13 Nov 2026.
+constexpr std::string_view RECORDED_SYNC_WRITE{
+  "ff ff fe 34 83 29 07 01 32 e8 07 00 00 f1 01 02 32 01 08 00 00 32 01 03 32 4a 08 00 00 2c 01 "
+  "04 32 3f 08 00 00 2c 01 05 32 13 08 00 00 9e 01 06 32 de 08 00 00 fe 01 2a"};
 
-/// Answers the requests on the controller side of a pseudo-terminal until stopped: a silent-free
-/// stand-in for the arm, enough for activate to succeed. A get_servo_temps gets the temperatures
-/// set with set_temperature() (all six servos alike), unless set_answer_temperatures(false);
-/// every other request gets RECORDED_REPLY. With set_silent_after_power_off(true) it answers
-/// nothing once a power_off has arrived, like the real arm with its servos off. It keeps every
-/// byte it receives, so a test can check what the driver put on the wire.
+std::vector<std::uint8_t> parse_hex(std::string_view hex)
+{
+  std::vector<std::uint8_t> bytes{};
+  for (std::size_t i{0}; i + 1 < hex.size(); i += 3) {
+    bytes.push_back(
+      static_cast<std::uint8_t>(std::stoul(std::string{hex.substr(i, 2)}, nullptr, 16)));
+  }
+  return bytes;
+}
+
+/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until
+/// stopped: a stand-in for the arm with the real traffic. A get_angles gets the recorded poll
+/// of the servos and then RECORDED_REPLY, a stop or power_on gets the arm's ack
+/// (FE FE 03 <id> 01 FA) after `ack_delay` (1.8 ms on the bench, 58 ms seen once for a
+/// power_on), a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later,
+/// as the arm does it, a get_servo_temps gets the temperatures set with set_temperature() (all
+/// six servos alike) unless set_answer_temperatures(false), anything else nothing. With
+/// ack_requests off the stop and power_on frames are taken and never answered. With
+/// set_silent_after_power_off(true) it answers nothing once a power_off has arrived, like the
+/// real arm with its servos off. Frames are cut like the arm does it: FE FE <len> ..., len + 3
+/// bytes, resynchronised on FE FE, with a carry across reads. It keeps every byte it receives,
+/// so a test can check what the driver put on the wire.
 class ReplyingArm
 {
 public:
   explicit ReplyingArm(int controller)
   : thread_{[this, controller]() {
-        std::array<std::uint8_t, 64> request{};
+        std::array<std::uint8_t, 64> chunk{};
+        std::vector<std::uint8_t> carry{};
         while (!stop_.load()) {
           pollfd waiting{controller, POLLIN, 0};
           if (::poll(&waiting, 1, 10) <= 0) {
             continue;
           }
-          const ssize_t got{::read(controller, request.data(), request.size())};
+          const ssize_t got{::read(controller, chunk.data(), chunk.size())};
           if (got <= 0) {
             continue;
           }
-          const std::uint8_t * const begin{request.data()};
-          const std::uint8_t * const end{std::next(begin, got)};
-          const bool asks_temperatures{
-            std::search(begin, end, TEMPS_REQUEST.begin(), TEMPS_REQUEST.end()) != end};
           {
             const std::lock_guard<std::mutex> lock{mutex_};
-            received_.insert(received_.end(), begin, end);
+            received_.insert(received_.end(), chunk.begin(), std::next(chunk.begin(), got));
           }
-          if (
-            silent_after_power_off_.load() &&
-            std::search(begin, end, POWER_OFF_REQUEST.begin(), POWER_OFF_REQUEST.end()) != end)
+          carry.insert(carry.end(), chunk.begin(), std::next(chunk.begin(), got));
+          for (std::optional<std::vector<std::uint8_t>> frame{next_frame(carry)}; frame;
+            frame = next_frame(carry))
           {
-            powered_off_.store(true);
-          }
-          if (powered_off_.load()) {
-            continue;
-          }
-          if (asks_temperatures && answer_temperatures_.load()) {
-            const std::uint8_t t{celsius_.load()};
-            const std::array<std::uint8_t, 11> reply{0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t,
-              0xFA};
-            static_cast<void>(::write(controller, reply.data(), reply.size()));
-          }
-          if (!asks_temperatures || static_cast<std::size_t>(got) > TEMPS_REQUEST.size()) {
-            static_cast<void>(::write(controller, RECORDED_REPLY.data(), RECORDED_REPLY.size()));
+            answer(controller, frame.value());
           }
         }
       }}
   {
   }
 
+  /// An arm that never acknowledges a stop or power on (default: it does).
+  void set_ack_requests(bool ack)
+  {
+    ack_requests_.store(ack);
+  }
+
+  /// How long the arm takes to acknowledge a request (default 0).
+  void set_ack_delay(std::chrono::milliseconds delay)
+  {
+    ack_delay_.store(delay);
+  }
+
   /// True if a send_angles frame (FE FE 0F 22 ...) arrived since this arm started.
   bool received_send_angles()
   {
-    constexpr std::array<std::uint8_t, 4> HEADER{0xFE, 0xFE, 0x0F, 0x22};
+    return count_frames(18, 0x22) > 0;
+  }
+
+  /// How many 5-byte request frames with command `id` arrived (stop 0x29, power_on 0x10).
+  std::size_t received_requests(std::uint8_t id)
+  {
+    return count_frames(5, id);
+  }
+
+  /// Index in the received bytes of the last request frame with command `id`, or nullopt.
+  std::optional<std::size_t> last_request(std::uint8_t id)
+  {
     const std::lock_guard<std::mutex> lock{mutex_};
-    return std::search(received_.begin(), received_.end(), HEADER.begin(), HEADER.end()) !=
-           received_.end();
+    std::optional<std::size_t> last{};
+    for (std::size_t i{0}; i + 5 <= received_.size(); ++i) {
+      if (
+        received_[i] == 0xFE && received_[i + 1] == 0xFE && received_[i + 2] == 0x02 &&
+        received_[i + 3] == id && received_[i + 4] == 0xFA)
+      {
+        last = i;
+      }
+    }
+    return last;
   }
 
   /// True once the driver has sent anything at all.
@@ -378,11 +419,99 @@ public:
   }
 
 private:
+  /// Cuts the first complete frame off the front of `carry`: FE FE <len> + len bytes. Bytes
+  /// before a FE FE are dropped, as the arm drops them.
+  static std::optional<std::vector<std::uint8_t>> next_frame(std::vector<std::uint8_t> & carry)
+  {
+    std::size_t start{0};
+    while (start + 1 < carry.size() && (carry[start] != 0xFE || carry[start + 1] != 0xFE)) {
+      ++start;
+    }
+    if (start + 3 > carry.size()) {
+      carry.erase(carry.begin(), std::next(carry.begin(), static_cast<std::ptrdiff_t>(start)));
+      return std::nullopt;
+    }
+    const std::size_t size{static_cast<std::size_t>(carry[start + 2]) + 3};
+    if (start + size > carry.size()) {
+      carry.erase(carry.begin(), std::next(carry.begin(), static_cast<std::ptrdiff_t>(start)));
+      return std::nullopt;
+    }
+    std::vector<std::uint8_t> frame(size);
+    std::copy_n(std::next(carry.begin(), static_cast<std::ptrdiff_t>(start)), size, frame.begin());
+    carry.erase(carry.begin(), std::next(carry.begin(), static_cast<std::ptrdiff_t>(start + size)));
+    return frame;
+  }
+
+  static void put(int controller, const std::vector<std::uint8_t> & bytes)
+  {
+    static_cast<void>(::write(controller, bytes.data(), bytes.size()));
+  }
+
+  void answer(int controller, const std::vector<std::uint8_t> & frame)
+  {
+    static const std::vector<std::uint8_t> poll{parse_hex(RECORDED_POLL)};
+    static const std::vector<std::uint8_t> sync_write{parse_hex(RECORDED_SYNC_WRITE)};
+    const std::uint8_t id{frame[3]};
+    if (id == 0x11 && silent_after_power_off_.load()) {
+      powered_off_.store(true);
+    }
+    if (powered_off_.load()) {
+      return;
+    }
+    if (id == 0xE5) {
+      if (answer_temperatures_.load()) {
+        const std::uint8_t t{celsius_.load()};
+        put(controller, {0xFE, 0xFE, 0x08, 0xE5, t, t, t, t, t, t, 0xFA});
+      }
+      return;
+    }
+    if (id == 0x20) {
+      put(controller, poll);
+      put(controller, {RECORDED_REPLY.begin(), RECORDED_REPLY.end()});
+      return;
+    }
+    const bool request{id == 0x29 || id == 0x10};
+    if (request && !ack_requests_.load()) {
+      return;
+    }
+    if (request || id == 0x22) {
+      if (request) {
+        std::this_thread::sleep_for(ack_delay_.load());
+      }
+      put(controller, {0xFE, 0xFE, 0x03, id, 0x01, 0xFA});
+    }
+    if (id == 0x22) {
+      // The arm polls the servos, then writes them the target: the sync-write is on the line
+      // ~20 ms after the send_angles. The sleeps also keep this arm busy, as the real one is.
+      std::this_thread::sleep_for(std::chrono::milliseconds{5});
+      put(controller, poll);
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+      put(controller, sync_write);
+    }
+  }
+
+  std::size_t count_frames(std::size_t size, std::uint8_t id)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    std::size_t count{0};
+    for (std::size_t i{0}; i + size <= received_.size(); ++i) {
+      if (
+        received_[i] == 0xFE && received_[i + 1] == 0xFE &&
+        received_[i + 2] == static_cast<std::uint8_t>(size - 3) && received_[i + 3] == id)
+      {
+        ++count;
+      }
+    }
+    return count;
+  }
+
   std::atomic<bool> answer_temperatures_{true};
   std::atomic<bool> silent_after_power_off_{false};
   std::atomic<bool> powered_off_{false};
   std::atomic<std::uint8_t> celsius_{30};
   std::atomic<bool> stop_{false};
+  std::atomic<bool> ack_requests_{true};
+  std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
   std::mutex mutex_;
   std::vector<std::uint8_t> received_;
   std::thread thread_;
@@ -1209,6 +1338,94 @@ TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
 }
 
+TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)
+{
+  // #103. The arm answers poses but never acknowledges the stop: the line is alive and the
+  // request is lost. on_deactivate must report ERROR after REQUEST_TIMEOUT (a stop nobody
+  // confirmed is not a stop), on_error takes the component to UNCONFIGURED, the thread keeps
+  // resending the stop meanwhile, and the component can be configured again.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  arm->set_ack_requests(false);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::ERROR);
+  const auto elapsed{std::chrono::steady_clock::now() - start};
+  EXPECT_GE(elapsed, positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_LT(elapsed, 2 * positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  // One stop per turn while the request stays pending: at least two by now.
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  EXPECT_GE(arm->received_requests(0x29), 2u);
+
+  // The arm acknowledges again: configure and activate work as on a fresh start.
+  arm->set_ack_requests(true);
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(activate(), hardware_interface::return_type::OK);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn)
+{
+  // #103. The power_on is taken and never acknowledged: activate must fail with ERROR, the
+  // component goes to UNCONFIGURED through on_error, which asks for a stop, so a stop follows
+  // the last power_on on the wire and no target ever leaves. Once the arm acknowledges again,
+  // activate succeeds.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+  arm->set_ack_requests(false);
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  const auto elapsed{std::chrono::steady_clock::now() - start};
+  EXPECT_GE(elapsed, positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_LT(elapsed, 2 * positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  EXPECT_GE(arm->received_requests(0x10), 2u);
+  EXPECT_FALSE(arm->received_send_angles());
+  // on_error asked for a halt: a stop went out after the last power_on.
+  const std::optional<std::size_t> last_power_on{arm->last_request(0x10)};
+  const std::optional<std::size_t> last_stop{arm->last_request(0x29)};
+  ASSERT_TRUE(last_power_on.has_value());
+  ASSERT_TRUE(last_stop.has_value());
+  EXPECT_GT(last_stop.value_or(0), last_power_on.value_or(0));
+
+  arm->set_ack_requests(true);
+  EXPECT_EQ(activate(), hardware_interface::return_type::OK);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
 TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsIt)
 {
   // #35, end to end through the resource manager, on a pseudo-terminal like the real UART.
@@ -1219,6 +1436,8 @@ TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsI
   const int controller{open_pseudo_terminal(port)};
   ASSERT_GE(controller, 0);
   auto arm{std::make_unique<ReplyingArm>(controller)};
+  // The slowest ack seen on the bench (a power_on, 58 ms): activate must still succeed.
+  arm->set_ack_delay(std::chrono::milliseconds{58});
 
   load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
   ASSERT_TRUE(loaded_);
