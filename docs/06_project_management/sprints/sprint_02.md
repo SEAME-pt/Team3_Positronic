@@ -123,7 +123,7 @@ Demo: the arm executes a 3-point trajectory, a limit rejection and a timeout
 halt are shown, and a Gazebo-vs-hardware plot; plus GoToPose → MoveIt → Gazebo.
 
 Measured this sprint: command write timing, final joint error 3.1°–4.9°,
-dead-link stop 194–201 ms, supervisor halt 51–106 ms, safe stop frame 6–16 ms,
+dead-link stop 194–201 ms, supervisor halt 51–76 ms,
 sim-to-real worst peak 3.57°.
 
 ### Went well
