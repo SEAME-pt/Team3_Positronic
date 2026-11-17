@@ -271,9 +271,9 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | Command | What it does |
 |---|---|
 | `make format` | Rewrites C/C++ in `src/`: **clang-format** with our `.clang-format`, then **uncrustify** with ROS's config |
-| `make format-check` | Runs the ROS lint tools on `src/` without changing anything: uncrustify, cpplint, cppcheck, flake8, pep257, copyright ([`scripts/lint.sh`](../scripts/lint.sh)) |
+| `make format-check` | Runs the ROS lint tools on `src/` without changing anything: uncrustify, cpplint, cppcheck, flake8, pep257, copyright ([`scripts/lint.sh`](../scripts/lint.sh)). One line per tool, then the problems of the tools that failed. `VERBOSE=1` prints each tool's full output |
 | `make build` | `colcon build` |
-| `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`) |
+| `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`). Ends with one line per package and each failure ([`scripts/summarize_tests.py`](../scripts/summarize_tests.py)). `make test VERBOSE=1` adds colcon's full output |
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
 | `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); report-only in CI for now |
 | Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
