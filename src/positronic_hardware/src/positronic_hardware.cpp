@@ -485,11 +485,12 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
 
   // "Power the servos on" (#36), after the first reply: a released arm still answers
   // get_angles, so the wait above does not need torque, and a silent arm fails there first.
-  // power_on() also lets targets out again after a halt(). If its frame cannot be written, the
-  // port is in trouble: ERROR hands the component to on_error rather than leaving it ACTIVE.
+  // power_on() also lets targets out again after a halt(). If the arm does not acknowledge it,
+  // the request was lost or the port is in trouble: ERROR hands the component to on_error
+  // rather than leaving it ACTIVE with an arm nobody confirmed powered (#103).
   if (!arm_->power_on()) {
     RCLCPP_ERROR(
-      get_logger(), "power_on was not sent to the arm within %d ms; not activating.",
+      get_logger(), "power_on was not acknowledged by the arm within %d ms; not activating.",
       static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
@@ -509,16 +510,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
 CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   // "Cut actuation": the arm gets a stop and holds where it is, and no target goes out until
-  // the next activate. halt() waits for the stop to reach the port, so SUCCESS means the arm
-  // was told to stop, not only that the component changed state.
+  // the next activate. halt() waits for the arm to acknowledge the stop, so SUCCESS means the
+  // arm confirmed it, not only that the frame left or the component changed state (#103).
   if (arm_->halt()) {
     return CallbackReturn::SUCCESS;
   }
-  // The stop never left: nobody knows what the arm is doing. FAILURE would keep the component
-  // ACTIVE and the controllers commanding it; ERROR takes it out of service through on_error,
-  // and the supervisor sees a component that must be configured and activated again.
+  // The arm never confirmed the stop: nobody knows what it is doing. FAILURE would keep the
+  // component ACTIVE and the controllers commanding it; ERROR takes it out of service through
+  // on_error, and the supervisor sees a component that must be configured and activated again.
   RCLCPP_ERROR(
-    get_logger(), "stop was not sent to the arm within %d ms.",
+    get_logger(), "stop was not acknowledged by the arm within %d ms.",
     static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
   return CallbackReturn::ERROR;
 }

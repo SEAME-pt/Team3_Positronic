@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -89,9 +90,15 @@ public:
   /// reads per second on the Jetson.
   static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
 
-  // REQUEST_TIMEOUT, from the contract, covers the worst case with a wide margin: a silent arm
-  // holds a turn for REPLY_TIMEOUT (~50 ms, the reads return at once), and the request may land
-  // just after a turn has started, so the frame is out within ~100 ms.
+  /// Wait for the arm's ack (`FE FE 03 <cmd> 01 FA`) of a stop or power_on. On the bench the
+  /// ack comes in 1.8 ms, 3.6 ms at p99, once 58 ms. 80 ms covers that plus the 2 ms read
+  /// backoff, and keeps a request turn under the 200 ms link watchdog (~130 ms of silence at
+  /// worst). No ack by then: the frame goes out again next turn (#103).
+  static constexpr std::chrono::milliseconds ACK_TIMEOUT{80};
+
+  // REQUEST_TIMEOUT (300 ms, from the contract) covers the worst case: a turn already running
+  // with a late arm (~50 ms), its send and settle (30 ms), then the ack (up to 80 ms), so an
+  // accepted request is acknowledged within ~170 ms, and one lost frame still fits a retry.
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
@@ -119,8 +126,9 @@ public:
   /// True once the thread has decoded a first reply from the arm.
   [[nodiscard]] bool has_sample() const override;
 
-  /// Holds every target, then asks the thread to send a stop at the start of its next turn and
-  /// waits for it, up to REQUEST_TIMEOUT.
+  /// Holds every target, then has the thread send a stop at its next turn and waits for the
+  /// arm's ack, up to REQUEST_TIMEOUT. The thread resends the stop every turn until the ack
+  /// comes: false means no ack within the deadline, and the stop still pending (#103).
   [[nodiscard]] bool halt() override;
 
   /// halt() without the wait: holds every target and leaves the stop for the start of the
@@ -131,10 +139,11 @@ public:
   /// LinkWatchdog::DEFAULT_TIMEOUT. One atomic load, safe from the control loop.
   [[nodiscard]] bool link_timed_out() const override;
 
-  /// Drops the target held since halt(), then asks the thread to send a power_on at the start
-  /// of its next turn and waits for it, up to REQUEST_TIMEOUT. The thread releases the hold in
-  /// the turn that writes the frame, so targets go out again only once the power on is on the
-  /// wire. If the frame never made it, the hold stays.
+  /// Drops the target held since halt(), then has the thread send a power_on at its next turn
+  /// and waits for the arm's ack, up to REQUEST_TIMEOUT. The hold ends in the turn the ack
+  /// comes, so no target goes out before the power on is confirmed. Without the ack the hold
+  /// stays. False also when a request_halt() landed during the wait: the hold is back on, the
+  /// power_on is dropped, and the arm must not be treated as live (#103).
   [[nodiscard]] bool power_on() override;
 
 private:
@@ -147,9 +156,28 @@ private:
   };
   /// The stop or power_on frame for `request`, or nullopt for NONE.
   static std::optional<positronic_protocol::Frame> encode_request(Request request);
-  /// Sends the pending request, if any, at the start of a turn, and applies what it means for
-  /// the thread: a stop clears `last_sent`, a power on ends the hold.
+  /// Sends the pending request, if any, at the start of a turn, waits for its ack, and applies
+  /// what it means for the thread: a stop clears `last_sent`, a power on ends the hold. No ack
+  /// leaves the request pending for the next turn.
   void send_pending_request(std::optional<JointPositions> & last_sent);
+
+  /// What a Scanner found in the bytes read so far: `found` ends the read, `consumed` is how
+  /// many bytes from the front are noise the scanner has ruled out and the loop may drop.
+  struct ScanResult
+  {
+    bool found{false};
+    std::size_t consumed{0};
+  };
+  using Scanner = std::function<ScanResult(positronic_protocol::ByteView)>;
+
+  /// Reads the port into a local buffer until `scan` reports found or `deadline` passes, with
+  /// EMPTY_READ_BACKOFF between empty reads. Serial thread only. Serves the ack today, and any
+  /// other frame to wait for later (the Atom's sync-write after a send_angles). True when found.
+  bool read_until(Clock::time_point deadline, const Scanner & scan);
+
+  /// read_until() for the arm's ack of `command`, with ACK_TIMEOUT from now. Bytes that are not
+  /// the ack (servo-bus echo, a late pose) are dropped. True when the ack came with status 1.
+  bool await_ack(positronic_protocol::CommandId command);
 
   void poll_loop();
 

@@ -27,15 +27,20 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "positronic_hardware/reply_assembler.hpp"
+#include "positronic_protocol/decode.hpp"
 #include "positronic_protocol/encode.hpp"
 #include "positronic_protocol/types.hpp"
 #include "positronic_protocol/units.hpp"
@@ -217,15 +222,17 @@ bool SerialArm::power_on()
   // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
   // the hold goes on before the stop. A target written meanwhile waits for that turn.
   command_.writeFromNonRT(std::nullopt);
-  return request_and_wait(Request::POWER_ON);
+  // A request_halt() that lands while the thread waits for the power_on ack puts the hold back
+  // (see send_pending_request): the arm is powered but held, and must not be reported live.
+  return request_and_wait(Request::POWER_ON) && !halted_.load();
 }
 
 bool SerialArm::request_and_wait(Request request)
 {
   request_.store(request);
-  // The poll thread writes the frame at the start of its next turn and puts request_ back to
-  // NONE. 1 ms steps: on the arm the frame is out within a few ms, and this runs in a lifecycle
-  // transition, which may wait.
+  // The poll thread writes the frame at the start of its next turn, waits for the arm's ack and
+  // then puts request_ back to NONE. 1 ms steps: on the arm the ack is in within a few ms, and
+  // this runs in a lifecycle transition, which may wait.
   const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
   while (std::chrono::steady_clock::now() < deadline) {
     if (request_.load() == Request::NONE) {
@@ -250,19 +257,22 @@ std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request requ
   return std::nullopt;
 }
 
-/// Writes the pending halt or power_on, if any, at the start of a turn: the previous turn is
-/// over, so the arm's input is free, and request_and_wait() is waiting for this. No settle after
-/// it: the caller returns as soon as the frame is written, and if the arm ignores the port for a
-/// while the only cost is this turn's reply. A failed write leaves the request pending, and the
-/// hold as it is, for the next turn. A stop that went out clears `last_sent`: the arm is heading
-/// nowhere, so the next target goes out even when it equals the last one sent. A power on that
-/// went out ends the hold, with the frame already on the wire, so no target can get ahead of it.
+/// Writes the pending halt or power_on, if any, at the start of a turn (the arm's input is free
+/// then) and waits for its ack. Only the ack clears the request: a frame the arm did not take, or
+/// a failed write, stays pending and goes out again next turn, so nobody hears "stopped" for a
+/// stop the arm never confirmed (#103). An acknowledged stop clears `last_sent`, so the next
+/// target goes out even if it equals the last one. An acknowledged power on ends the hold.
 void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
 {
   const Request pending{request_.load()};
   const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
   if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
     return;
+  }
+  // Byte 3 of `FE FE 02 <cmd> FA` is the command the arm will echo in its ack.
+  const auto command{static_cast<positronic_protocol::CommandId>(frame->bytes[3])};
+  if (!await_ack(command)) {
+    return;  // not taken: the request stays pending, the frame goes out again next turn
   }
   if (pending == Request::HALT) {
     last_sent = std::nullopt;
@@ -275,7 +285,53 @@ void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Request expected{pending};
-  request_.compare_exchange_strong(expected, Request::NONE);
+  if (!request_.compare_exchange_strong(expected, Request::NONE) && pending == Request::POWER_ON) {
+    // A request_halt() landed during the ack wait: it stored HALT over our POWER_ON (so the CAS
+    // failed) and set halted_ before the store above cleared it. Put the hold back: the stop
+    // goes out next turn, and power_on() reports false.
+    halted_.store(true);
+  }
+}
+
+bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
+{
+  // The frame shares the line with the servo-bus echo (~150 bytes per Atom cycle) and may come
+  // behind a late pose, so the scan runs over everything read and drops what it rules out. Not
+  // the ReplyAssembler: that one only knows poses.
+  std::array<std::uint8_t, 256> chunk{};
+  std::vector<std::uint8_t> buffer{};
+  buffer.reserve(512);
+  while (!stop_.load() && Clock::now() < deadline) {
+    const std::size_t got{transport_->read(chunk.data(), chunk.size())};
+    if (got == 0) {
+      std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
+      continue;
+    }
+    buffer.insert(
+      buffer.end(), chunk.begin(), std::next(chunk.begin(), static_cast<std::ptrdiff_t>(got)));
+    const ScanResult result{scan(positronic_protocol::ByteView{buffer.data(), buffer.size()})};
+    if (result.found) {
+      return true;
+    }
+    buffer.erase(
+      buffer.begin(), std::next(buffer.begin(), static_cast<std::ptrdiff_t>(result.consumed)));
+  }
+  return false;
+}
+
+bool SerialArm::await_ack(positronic_protocol::CommandId command)
+{
+  bool ok{false};
+  const bool found{read_until(
+      Clock::now() + ACK_TIMEOUT, [command, &ok](positronic_protocol::ByteView rx) {
+        const positronic_protocol::Decoded<std::uint8_t> ack{
+          positronic_protocol::decode_ack(rx, command)};
+        if (ack.status == positronic_protocol::DecodeStatus::FOUND) {
+          ok = ack.value == 1;
+        }
+        return ScanResult{ack.status == positronic_protocol::DecodeStatus::FOUND, ack.consumed};
+      })};
+  return found && ok;
 }
 
 std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
@@ -316,8 +372,9 @@ void SerialArm::poll_loop()
       // Read until the reply completes or REPLY_TIMEOUT passes. The reply comes in many small
       // chunks behind servo-bus chatter, so a fixed number of reads is not enough, and the
       // request and its reply must be over before anything else is written: the arm drops a
-      // send_angles that arrives while it is still answering a get_angles.
-      const auto reply_deadline{turn_start + REPLY_TIMEOUT};
+      // send_angles that arrives while it is still answering a get_angles. The window counts
+      // from this write, not from turn_start, or a turn spent in a request eats its own (#103).
+      const auto reply_deadline{std::chrono::steady_clock::now() + REPLY_TIMEOUT};
       while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
         const std::size_t got{transport_->read(chunk.data(), chunk.size())};
         if (got == 0) {

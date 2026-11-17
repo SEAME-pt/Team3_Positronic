@@ -58,6 +58,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -88,8 +89,19 @@ constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::Co
 constexpr std::uint8_t POWER_ON_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
 
-/// A transport that answers every request with a fixed sequence of byte bursts, looping. It is
-/// thread-safe because SerialArm reads it from its poll thread.
+/// The Atom's sync-write to the six servos, recorded on the arm on 13 Nov 2026 right after a
+/// send_angles: `FF FF FE 34 83 29 07` + per servo (id, acc, goal, time, speed) + checksum. It
+/// is what the arm puts on the line ~20 ms after a send_angles, once the target reached the bus.
+constexpr std::string_view RECORDED_SYNC_WRITE{
+  "ff ff fe 34 83 29 07 01 32 e8 07 00 00 f1 01 02 32 01 08 00 00 32 01 03 32 4a 08 00 00 2c 01 "
+  "04 32 3f 08 00 00 2c 01 05 32 13 08 00 00 9e 01 06 32 de 08 00 00 fe 01 2a"};
+constexpr std::chrono::milliseconds SYNC_WRITE_DELAY{20};
+
+std::vector<std::uint8_t> parse_hex(std::string_view hex);
+
+/// A transport that answers every request with a fixed sequence of byte bursts, looping, and
+/// acknowledges requests and send_angles like the arm (the sync-write follows a send_angles).
+/// It is thread-safe because SerialArm reads it from its poll thread.
 class ReplayTransport : public SerialTransport
 {
 public:
@@ -103,15 +115,51 @@ public:
     // A stop or power on is refused while reject_requests_ is set, as a busy port would. Every
     // other frame is accepted; the reply is scripted below. Accepted frames are kept so a test
     // can check what the thread put on the wire.
-    if (reject_requests_.load() && count == 5) {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    const auto now{std::chrono::steady_clock::now()};
+    if (count == 5) {
       const std::uint8_t id{*std::next(data, 3)};
       if (id == STOP_ID || id == POWER_ON_ID) {
-        return false;
+        if (reject_requests_.load()) {
+          return false;
+        }
+        // The arm acknowledges a request with FE FE 03 <id> 01 FA, 1.8 ms after it on the
+        // bench, 58 ms once for a power_on. The ack is handed out by read() when due, and the
+        // line is silent until then, as the arm answers nothing else while it handles the
+        // request. With ack_requests_ off the request is taken and never answered: the case
+        // #103 must survive.
+        if (ack_requests_.load()) {
+          queued_.push_back({now + ack_delay_.load(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA}, true});
+        }
       }
+    } else if (count == 18 && *std::next(data, 3) == 0x22) {
+      // A send_angles: the ack at once, the sync-write to the servos ~20 ms later, with the
+      // poses still flowing in between. What the serial thread will wait for one day instead of
+      // a fixed settle.
+      queued_.push_back({now, {0xFE, 0xFE, 0x03, 0x22, 0x01, 0xFA}, false});
+      queued_.push_back({now + SYNC_WRITE_DELAY, parse_hex(RECORDED_SYNC_WRITE), false});
     }
-    const std::lock_guard<std::mutex> lock{mutex_};
     written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
     return true;
+  }
+
+  /// How many sync-write frames the arm has put on the line so far.
+  std::size_t sync_writes_sent()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return sync_writes_sent_;
+  }
+
+  /// An arm that never acknowledges a stop or power on (default: it does).
+  void set_ack_requests(bool ack)
+  {
+    ack_requests_.store(ack);
+  }
+
+  /// How long the arm takes to acknowledge a request (default 0).
+  void set_ack_delay(std::chrono::milliseconds delay)
+  {
+    ack_delay_.store(delay);
   }
 
   /// A port that refuses the stop and power on frames only, until set_reject_requests(false).
@@ -136,6 +184,23 @@ public:
   std::size_t read(std::uint8_t * dst, std::size_t max) override
   {
     const std::lock_guard<std::mutex> lock{mutex_};
+    if (!queued_.empty()) {
+      // The arm's own frames go out whole when due. A request ack silences the line until it
+      // is due; the frames after a send_angles do not, the poses keep coming meanwhile.
+      const Queued & next{queued_.front()};
+      if (std::chrono::steady_clock::now() >= next.due) {
+        const std::size_t n{std::min(max, next.bytes.size())};
+        std::copy_n(next.bytes.begin(), n, dst);
+        if (next.bytes.size() > 6) {
+          ++sync_writes_sent_;
+        }
+        queued_.erase(queued_.begin());
+        return n;
+      }
+      if (next.silences) {
+        return 0;
+      }
+    }
     if (silent_.load() || bursts_.empty()) {
       return 0;
     }
@@ -152,6 +217,17 @@ private:
   std::size_t index_{0};
   std::atomic<bool> silent_{false};
   std::atomic<bool> reject_requests_{false};
+  std::atomic<bool> ack_requests_{true};
+  std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
+  /// A frame the arm will put on the line at `due`. `silences`: nothing else until then.
+  struct Queued
+  {
+    std::chrono::steady_clock::time_point due;
+    std::vector<std::uint8_t> bytes;
+    bool silences;
+  };
+  std::vector<Queued> queued_{};
+  std::size_t sync_writes_sent_{0};
   std::mutex mutex_;
 };
 
@@ -215,6 +291,21 @@ std::vector<std::vector<std::uint8_t>> wait_for_sends(
   return send_angles_frames(transport.written());
 }
 
+/// Waits until the thread has written `count` request frames with command `id`, or 2 s pass.
+std::vector<std::vector<std::uint8_t>> wait_for_requests(
+  ReplayTransport & transport, std::uint8_t id, std::size_t count)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto found{frames_with_id(transport.written(), id)};
+    if (found.size() >= count) {
+      return found;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  return frames_with_id(transport.written(), id);
+}
+
 /// Parses a space-separated hex string ("ff fe 0a") into bytes. Test-only.
 std::vector<std::uint8_t> parse_hex(std::string_view hex)
 {
@@ -253,7 +344,7 @@ JointPositions expected_pose()
 }
 
 /// Polls read_angles() until it leaves the start pose, or the timeout elapses.
-JointPositions wait_for_reply(const SerialArm & arm)
+JointPositions wait_for_reply(const SerialArm & arm) 
 {
   for (int tries{0}; tries < 200; ++tries) {
     const JointPositions pose{arm.read_angles()};
@@ -509,6 +600,143 @@ TEST(SerialArm, HaltReachesASilentArmInTime)
   EXPECT_TRUE(arm.halt());
   EXPECT_LT(std::chrono::steady_clock::now() - start, SerialArm::REQUEST_TIMEOUT);
   EXPECT_EQ(frames_with_id(port.written(), STOP_ID).size(), 1u);
+}
+
+TEST(SerialArm, TheFixtureArmSyncWritesAfterEverySendAngles)
+{
+  // Not a driver property, a fixture property the next change relies on: after each
+  // send_angles the replayed arm puts the recorded sync-write on the line ~20 ms later, like
+  // the real one. The thread ignores it today (it sleeps the settle), but it must be there.
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(port.sync_writes_sent(), 1u);
+}
+
+// #103. halt() and power_on() report SUCCESS only once the arm acknowledged the request frame.
+// The transport acknowledges like the arm (1.8 ms on the bench, 58 ms seen once), with the
+// delay chosen per test so the wait is visible.
+
+TEST(SerialArm, HaltReturnsTrueOnlyAfterTheStopIsAcknowledged)
+{
+  // The ack comes 50 ms after the stop, inside ACK_TIMEOUT: halt() must not return before it.
+  // Three in a row, so a late clear of one request cannot be mistaken for the next. The poses
+  // keep flowing between them, so the link watchdog never trips: the reply window must count
+  // from the get_angles write, not from the start of a turn that spent 50 ms in a request.
+  constexpr std::chrono::milliseconds ACK_DELAY{50};
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_delay(ACK_DELAY);
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  for (int i{1}; i <= 3; ++i) {
+    const auto start{std::chrono::steady_clock::now()};
+    EXPECT_TRUE(arm.halt()) << "halt " << i;
+    const auto elapsed{std::chrono::steady_clock::now() - start};
+    EXPECT_GE(elapsed, ACK_DELAY) << "halt " << i << " returned before the ack";
+    EXPECT_LT(elapsed, SerialArm::REQUEST_TIMEOUT) << "halt " << i;
+    EXPECT_EQ(frames_with_id(port.written(), STOP_ID).size(), static_cast<std::size_t>(i));
+    EXPECT_TRUE(arm.power_on());
+  }
+  EXPECT_FALSE(arm.link_timed_out());
+}
+
+TEST(SerialArm, HaltFailsWithinTheDeadlineWhenTheArmDoesNotAcknowledge)
+{
+  // The arm takes every stop and never answers it, while poses keep coming (the line is alive,
+  // the request is lost). halt() must give up at REQUEST_TIMEOUT, not before and not much
+  // after, and the thread must keep resending the stop every turn until it is acknowledged:
+  // a stop that was never confirmed is not a stop.
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_requests(false);
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_FALSE(arm.halt());
+  const auto elapsed{std::chrono::steady_clock::now() - start};
+  EXPECT_GE(elapsed, SerialArm::REQUEST_TIMEOUT);
+  EXPECT_LT(elapsed, 2 * SerialArm::REQUEST_TIMEOUT);
+
+  // The request stays pending: more stops go out after halt() returned.
+  const std::size_t stops_at_return{frames_with_id(port.written(), STOP_ID).size()};
+  EXPECT_GE(stops_at_return, 1u);
+  std::this_thread::sleep_for(std::chrono::milliseconds{250});
+  const auto frames{port.written()};
+  EXPECT_GE(frames_with_id(frames, STOP_ID).size(), stops_at_return + 1);
+
+  // Between two stops exactly one get_angles and no send_angles: one request per turn, and the
+  // hold set by halt() keeps every target off the wire.
+  std::size_t first{frames.size()};
+  std::size_t second{frames.size()};
+  for (std::size_t i{0}; i < frames.size(); ++i) {
+    if (frames[i].size() == 5 && frames[i][3] == STOP_ID) {
+      if (first == frames.size()) {
+        first = i;
+      } else {
+        second = i;
+        break;
+      }
+    }
+  }
+  ASSERT_LT(second, frames.size());
+  std::size_t get_angles{0};
+  std::size_t send_angles{0};
+  for (std::size_t i{first + 1}; i < second; ++i) {
+    get_angles += (frames[i].size() == 5 && frames[i][3] == 0x20) ? 1u : 0u;
+    send_angles += (frames[i].size() == 18) ? 1u : 0u;
+  }
+  EXPECT_EQ(get_angles, 1u);
+  EXPECT_EQ(send_angles, 0u);
+  // The poses never stopped, so this is not a link fault.
+  EXPECT_FALSE(arm.link_timed_out());
+}
+
+TEST(SerialArm, ARequestHaltDuringThePowerOnWaitKeepsTheHold)
+{
+  // power_on() is waiting for its ack (50 ms) when the plugin's on_error calls request_halt().
+  // The hold the power_on released must come back: power_on() reports failure, a stop goes out
+  // after the power_on, and no target leaves until the next power_on. Without the re-assert the
+  // late clear of the power_on request erases the halt and the arm is live with nobody knowing.
+  constexpr std::chrono::milliseconds ACK_DELAY{50};
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_delay(ACK_DELAY);
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+  ASSERT_TRUE(arm.halt());
+  ASSERT_EQ(frames_with_id(port.written(), STOP_ID).size(), 1u);
+
+  std::future<bool> powered{std::async(std::launch::async, [&arm]() {return arm.power_on();})};
+  // Once the power_on frame is on the wire the thread is inside the ack wait.
+  ASSERT_EQ(wait_for_requests(port, POWER_ON_ID, 1).size(), 1u);
+  arm.request_halt();
+  EXPECT_FALSE(powered.get());
+
+  // The second stop leaves after the power_on, and the target written meanwhile never does.
+  EXPECT_EQ(wait_for_requests(port, STOP_ID, 2).size(), 2u);
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 0u);
+  EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 1u);
+  const auto frames{port.written()};
+  std::size_t last_power_on{0};
+  std::size_t last_stop{0};
+  for (std::size_t i{0}; i < frames.size(); ++i) {
+    if (frames[i].size() == 5 && frames[i][3] == POWER_ON_ID) {
+      last_power_on = i;
+    }
+    if (frames[i].size() == 5 && frames[i][3] == STOP_ID) {
+      last_stop = i;
+    }
+  }
+  EXPECT_GT(last_stop, last_power_on);
 }
 
 // #35. SerialArm reads the real clock, so these tests must sleep. 300 ms is the 200 ms timeout
