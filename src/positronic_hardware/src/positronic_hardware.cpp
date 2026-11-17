@@ -486,7 +486,7 @@ CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & previous
   // of on_deactivate has gone out by now. Not every path does (HardwareComponent::shutdown()
   // takes ACTIVE straight here), so send it ourselves when the arm may still be moving (#103).
   if (arm_ != nullptr && previous_state.id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-    static_cast<void>(arm_->halt());
+    std::ignore = arm_->halt();
   }
   arm_.reset();
   return CallbackReturn::SUCCESS;
