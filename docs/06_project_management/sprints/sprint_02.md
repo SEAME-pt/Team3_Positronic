@@ -82,7 +82,7 @@ serial port at a time.
 
 ## Risks
 
-- First write() on hardware: the arm can move fast. Start at speed ≤ 30, keep a hand near the stop.
+- First write() on hardware: the arm can move fast. Start at speed ≤ 30, two people, one hand on the power plug.
 - Only one process on the serial port: do not run the driver and a measurement script together.
 - Bench time is shared by the pairs.
 
