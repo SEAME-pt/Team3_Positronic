@@ -6,7 +6,12 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/ws,type=bind",
   "workspaceFolder": "/ws",
   "remoteUser": "dev",
-  "runArgs": ["--network=host", "--ipc=host"],
+  "runArgs": [
+    "--network=host",
+    "--ipc=host",
+    "-v", "${localEnv:SSH_AUTH_SOCK}:/ssh-agent",
+    "-e", "SSH_AUTH_SOCK=/ssh-agent"
+  ],
   "containerEnv": { "ROS_DOMAIN_ID": "17" },
   "customizations": {
     "vscode": { "extensions": ["llvm-vs-code-extensions.vscode-clangd"] }

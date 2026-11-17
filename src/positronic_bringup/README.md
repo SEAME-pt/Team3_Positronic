@@ -4,6 +4,8 @@ Launch files and the controllers config:
 
 - `launch/gazebo.launch.py`: the arm in Gazebo Harmonic with ros2_control (#26).
 - `launch/mirror.launch.py`: the real arm mirrored in RViz on a laptop (#24).
+- `launch/driver.launch.py`: the real arm driver on the Jetson (#23).
+- `launch/supervised.launch.py`: the driver under the safety supervisor (#45).
 
 Files:
 
@@ -13,6 +15,8 @@ Files:
 - `config/ros2_controllers.yaml`: controller_manager at 100 Hz, `joint_state_broadcaster` and
   `arm_controller` (a `JointTrajectoryController`). Same file on the real arm: the hardware
   plugin is in the xacro, not here.
+- `config/safety_supervisor.yaml`: parameters of the safety supervisor in
+  `supervised.launch.py` (#45); what each one does is in the `positronic_safety` README.
 - `rviz/mirror.rviz`: RViz config of the mirror launch: grid, robot model, fixed frame `world`.
 - `scripts/joint_states_delay.py`: prints every second the number of `/joint_states` messages, the
   average and the maximum delay, as laptop time minus the message stamp.
@@ -120,6 +124,45 @@ enough to fail the criterion. Measure over a cable.
 Expected: two `robot_state_publisher` nodes publish `/tf` for the same links (the driver's and
 the mirror's). RViz warns and tolerates it. Without the driver, the same launch can be fed by
 a simulation or by `joint_state_publisher_gui`, but not by two of them at once.
+
+## Real arm under the safety supervisor
+
+`supervised.launch.py` (#45) is `driver.launch.py` with `start_inactive:=true`, plus the safety
+supervisor of `positronic_safety`, configured and left inactive. The driver reads the arm and
+publishes `/joint_states`, but the hardware component and `arm_controller` are inactive:
+nothing can move the arm until a person activates the supervisor. After any halt the
+supervisor is inactive again, and the same command resumes. What it watches, its parameters
+(`config/safety_supervisor.yaml`) and its limits are in the `positronic_safety` README.
+
+Without the arm, in the dev container (`backend:=fake` opens no serial port):
+
+```bash
+ros2 launch positronic_bringup supervised.launch.py backend:=fake
+```
+
+In a second terminal:
+
+```bash
+ros2 control list_hardware_components     # positronic_arm: inactive
+ros2 control list_controllers             # arm_controller inactive, joint_state_broadcaster active
+ros2 run positronic_mission mission_node &
+ros2 lifecycle set /mission_node configure && ros2 lifecycle set /mission_node activate
+ros2 lifecycle set /safety_supervisor activate
+ros2 topic echo /safety_supervisor/status --once          # mode: 2, the arm may move
+ros2 service call /safety_supervisor/stop std_srvs/srv/Trigger
+ros2 topic echo /safety_supervisor/status --once          # mode: 0, reason: 1
+```
+
+The numbers of `mode` and `reason` are in `positronic_interfaces/msg/SafetyStatus.msg`. The
+supervisor refuses to activate without the heartbeat of an active mission node.
+
+On the arm, activating the supervisor powers the servos on (they hold their pose) and lets
+`arm_controller` take goals: do it with the bench clear, one person at the arm with a hand on
+the power switch. The procedure of the fault-injection tests is in
+`docs/03_verification/safety_supervisor/`.
+
+`driver.launch.py` alone still starts everything active, with no supervisor: for bench tests
+only.
 
 ## Troubleshooting
 

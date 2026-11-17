@@ -13,6 +13,11 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Expands the real arm xacro and checks its <ros2_control> block against the URDF (#23).
   ament_add_pytest_test(test_robot_description test/test_robot_description.py)
+  # The broadcaster settings the safety supervisor depends on to read driver/fault_code (#45).
+  ament_add_pytest_test(test_controllers_config test/test_controllers_config.py)
+  # Every launch file builds its description: a typo or a missing import fails here, not on
+  # the Jetson.
+  ament_add_pytest_test(test_launch_files test/test_launch_files.py)
   # The maths of the delay script, without ROS running (#24).
   ament_add_pytest_test(test_joint_states_delay test/test_joint_states_delay.py)
   ament_add_pytest_test(test_joint_states_rate test/test_joint_states_rate.py)

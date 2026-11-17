@@ -1,0 +1,5 @@
+# Request : Empty because any request received is a reset request
+---
+# Response
+bool accepted       # Response: returns true if the request was accepted
+string message      # Response: Message with the reason, when rejected. Accepted is just "Reset done"
