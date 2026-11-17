@@ -424,7 +424,7 @@ private:
   static std::optional<std::vector<std::uint8_t>> next_frame(std::vector<std::uint8_t> & carry)
   {
     std::size_t start{0};
-    while (start + 1 < carry.size() && !(carry[start] == 0xFE && carry[start + 1] == 0xFE)) {
+    while (start + 1 < carry.size() && (carry[start] != 0xFE || carry[start + 1] != 0xFE)) {
       ++start;
     }
     if (start + 3 > carry.size()) {
@@ -1416,7 +1416,7 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn)
   const std::optional<std::size_t> last_stop{arm->last_request(0x29)};
   ASSERT_TRUE(last_power_on.has_value());
   ASSERT_TRUE(last_stop.has_value());
-  EXPECT_GT(last_stop.value(), last_power_on.value());
+  EXPECT_GT(last_stop.value_or(0), last_power_on.value_or(0));
 
   arm->set_ack_requests(true);
   EXPECT_EQ(activate(), hardware_interface::return_type::OK);

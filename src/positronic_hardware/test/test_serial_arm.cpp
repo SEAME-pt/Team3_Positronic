@@ -246,7 +246,7 @@ private:
     std::vector<std::uint8_t> bytes;
     bool silences;
   };
-  std::vector<Queued> queued_{};
+  std::vector<Queued> queued_;
   std::size_t sync_writes_sent_{0};
   std::mutex mutex_;
 };
