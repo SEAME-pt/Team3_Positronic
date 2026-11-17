@@ -66,7 +66,7 @@ run, so prepare the Gazebo side and the plot script in week 1.
 - Tests added or updated, or the PR says why not.
 - Docs updated if an interface or behaviour changed.
 - Numbers in the PR evidence section when the story has one.
-- Safety: new motion code starts at speed ≤ 30, and the emergency stop always wins.
+- Safety: new motion code starts at speed ≤ 30, and pulling the power plug always wins. 
 
 ## Bench calendar
 
