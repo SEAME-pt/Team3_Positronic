@@ -58,9 +58,14 @@ const Bytes ANGLES_FRAME{parse_hex("fe fe 0e 20 00 57 00 00 ff c3 ff 85 ff f8 00
 const pp::JointAngles ANGLES_VALUE{87, 0, -61, -123, -8, 0};
 
 /// get_servo_temps reply in the format pymycobot 4.0.4 decodes: J1..J6 = 31, 33, 35, 30, 29,
-/// 28 degC. Not recorded on the arm yet.
+/// 28 degC. Synthetic, one distinct value per servo; RECORDED_TEMPS_FRAME below is a real one.
 const Bytes TEMPS_FRAME{parse_hex("fe fe 08 e5 1f 21 23 1e 1d 1c fa")};
 const pp::ServoTemperatures TEMPS_VALUE{31, 33, 35, 30, 29, 28};
+
+/// A real get_servo_temps reply, recorded from the arm on 2026-11-13: J1..J6 = 34, 32, 31, 32,
+/// 30, 34 degC, the same values pymycobot read in the same session.
+const Bytes RECORDED_TEMPS_FRAME{parse_hex("fe fe 08 e5 22 20 1f 20 1e 22 fa")};
+const pp::ServoTemperatures RECORDED_TEMPS_VALUE{34, 32, 31, 32, 30, 34};
 
 struct AckCase
 {
@@ -390,6 +395,16 @@ TEST(DecodeTemps, CleanFrame)
   ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
   EXPECT_EQ(result.value, TEMPS_VALUE);
   EXPECT_EQ(result.consumed, TEMPS_FRAME.size());
+  EXPECT_EQ(result.rejected, 0U);
+}
+
+TEST(DecodeTemps, RecordedFrameFromArm)
+{
+  // The frame as it came off the arm on 2026-11-13, not a synthetic one.
+  const auto result{pp::decode_servo_temps_reply(view_of(RECORDED_TEMPS_FRAME))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value, RECORDED_TEMPS_VALUE);
+  EXPECT_EQ(result.consumed, RECORDED_TEMPS_FRAME.size());
   EXPECT_EQ(result.rejected, 0U);
 }
 

@@ -424,8 +424,9 @@ void SerialArm::watch_temperatures(bool new_target, std::optional<JointPositions
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
-/// arm's input is free. No frame is acknowledged, so a dropped power off would leave the servos
-/// torqued and still heating; and the arm can be powered on again without this port (the
+/// arm's input is free. The arm does ack it (`FE FE 03 11 01 FA`, Atom firmware 7.3), but the
+/// ack is not read here, so a dropped power off would leave the servos torqued and still
+/// heating; the resend covers it. The arm can also be powered on again without this port (the
 /// Atom's button, a power cycle). Nothing else can use the port meanwhile: it is exclusive.
 void SerialArm::repeat_power_off(Clock::time_point turn_start)
 {

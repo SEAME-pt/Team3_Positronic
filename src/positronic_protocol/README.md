@@ -33,9 +33,9 @@ FE FE LEN CMD [DATA...] FA        LEN = N + 2 for N data bytes; the frame has LE
 (J2 and J3 drop under their own weight) and get_angles still answers, so it can be moved by
 hand. `power_off` also cuts the torque, but then get_angles gets no reply at all.
 
-`get_servo_temps` is not in the 2026-10-16 capture: its bytes are the ones pymycobot 4.0.4
-sends and decodes (one unsigned byte per servo, degC, J1 first), not yet confirmed on our arm.
-The decoder rejects any other length rather than misread it. To check an arm, with the driver
+`get_servo_temps` is not in the 2026-10-16 capture, but the reply was recorded from our arm on
+2026-11-13 and matched pymycobot 4.0.4 (one unsigned byte per servo, degC, J1 first). The
+decoder rejects any other length rather than misread it. To check an arm, with the driver
 stopped, on the Jetson host: `python3 -c "from pymycobot import MyCobot280; print(MyCobot280('/dev/ttyTHS1', 1000000).get_servo_temps())"` must print six temperatures, not `-1`.
 
 The servo bus (Feetech style, `FF FF id len ...`) shares the UART. Up to ~150 bytes of it

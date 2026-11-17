@@ -41,10 +41,10 @@ namespace positronic_protocol
 /// Finds the get_servo_temps reply (`FE FE 08 E5` + 6 bytes + `FA`) in `rx`.
 ///
 /// One unsigned byte per servo, in degC, J1 first: the format pymycobot 4.0.4 decodes. Our
-/// command reference does not list 0xE5 yet and the reply is not recorded from the arm; a reply
-/// of another length is rejected, never misread. Same search and `consumed`
-/// rules as decode_get_angles_reply(), so a get_angles reply in the buffer is skipped, not
-/// mistaken for temperatures.
+/// command reference does not list 0xE5, but the reply was recorded from the arm on 2026-11-13
+/// and matched pymycobot's values; a reply of another length is rejected, never misread. Same
+/// search and `consumed` rules as decode_get_angles_reply(), so a get_angles reply in the buffer
+/// is skipped, not mistaken for temperatures.
 [[nodiscard]] Decoded<ServoTemperatures> decode_servo_temps_reply(ByteView rx) noexcept;
 
 /// Finds the one-byte reply to `command` (`FE FE 03 CMD STATUS FA`) in `rx`.

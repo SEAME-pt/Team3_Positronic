@@ -52,7 +52,9 @@ inline constexpr int MAX_PLAUSIBLE_C{99};
 
 /// Readings in a row at or above the limit before the cut, so one corrupt byte cannot cut the
 /// arm. At one reading a second that is two seconds at most, on a temperature that takes
-/// minutes to climb.
+/// minutes to climb. Seen on the arm on 2026-11-13: idle, one reading gave J1 = 45 degC between
+/// two of 34 degC. It is inside the 1-99 plausible range, so a single reading would have cut a
+/// cool arm; two in a row would not.
 inline constexpr int READINGS_TO_TRIP{2};
 
 /// True when one reading can be a servo temperature.
