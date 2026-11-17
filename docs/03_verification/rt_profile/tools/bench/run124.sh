@@ -33,8 +33,9 @@
 #   bash run124.sh G    no goal, a throwaway participant (`ros2 node list`) every 23 s
 #   bash run124.sh H    T2 goals from one persistent node (goals_node.py)
 # A and H MOVE THE ARM on the serial backend (joints 1 and 2, 20 deg at 5 deg/s): bench clear,
-# two people, hand on the plug. Output in $OUT (default /ws/log/rt/124_<variant>_<time>), read
-# with: python3 tools/pauses_124.py $OUT
+# two people, hand on the plug, arm powered and holding near the start pose of T0_to_start.
+# A stops at the first goal that does not end SUCCEEDED. Output in $OUT (default
+# /ws/log/rt/124_<variant>_<time>), read with: python3 tools/pauses_124.py $OUT
 
 set -uo pipefail
 V=${1:?variant A, G or H}; DUR=${2:-600}
@@ -55,15 +56,19 @@ python3 "$HERE/../rt_record.py" --out "$OUT" --duration $((DUR + 15)) \
   > "$OUT/rt_record.txt" 2>&1 & pids+=($!)
 sleep 5
 END=$(( $(date +%s) + DUR )); n=0
+# True only when the goal ended SUCCEEDED: `ros2 action send_goal` exits 0 on an aborted goal too.
 send() {
   ros2 action send_goal /arm_controller/follow_joint_trajectory \
-    control_msgs/action/FollowJointTrajectory "$(cat "$TR/$1.yaml")"
+    control_msgs/action/FollowJointTrajectory "$(cat "$TR/$1.yaml")" 2>&1 \
+    | tee -a "$OUT/goals_out.txt" | grep -q 'SUCCEEDED'
 }
 case "$V" in
-  A) { send T0_to_start
-       while [ "$(date +%s)" -lt "$END" ]; do
-         n=$((n+1)); echo "goal $n T2 $(date +%s.%N)" >> "$OUT/goals.txt"; send T2; sleep 10
-       done; } > "$OUT/goals_out.txt" 2>&1 ;;
+  A) if ! send T0_to_start; then echo "T0_to_start did not succeed, no T2 sent"; cleanup; exit 1; fi
+     while [ "$(date +%s)" -lt "$END" ]; do
+       n=$((n+1)); echo "goal $n T2 $(date +%s.%N)" >> "$OUT/goals.txt"
+       if ! send T2; then echo "T2 goal $n did not succeed, stopping"; break; fi
+       sleep 10
+     done ;;
   G) while [ "$(date +%s)" -lt "$END" ]; do
        n=$((n+1)); echo "participant $n start $(date +%s.%N)" >> "$OUT/churn.txt"
        ros2 node list > /dev/null 2>&1; sleep 23

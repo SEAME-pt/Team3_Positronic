@@ -92,13 +92,20 @@ def analyse(folder):
               if line.strip() and line.strip()[0].isdigit()]
     start_path = os.path.join(folder, 'start.txt')
     t_start = float(open(start_path).readline()) if os.path.exists(start_path) else rx[0]
-    events = [i for i, p in enumerate(ph) if p > GAP_S or pr[i] > GAP_S]
-    print(f'pauses (stamp or arrival gap > {GAP_S * 1e3:.0f} ms): {len(events)}, '
-          f'marks: {len(marks)}')
-    for i in events:
+    # A pause is a stamp gap, as in pauses.md: cycles the loop produced and nobody published.
+    # The late message that arrives just before it also shows as an arrival gap, so that gap is
+    # part of the same pause. An arrival gap with the stamps intact is a late delivery, not a
+    # pause, and is listed apart.
+    pauses = [i for i, p in enumerate(ph) if p > GAP_S]
+    late = [i for i, p in enumerate(ph)
+            if pr[i] > GAP_S and p <= GAP_S and (i + 1 == len(ph) or ph[i + 1] <= GAP_S)]
+    print(f'pauses (stamp gap > {GAP_S * 1e3:.0f} ms): {len(pauses)}, '
+          f'arrival-only gaps: {len(late)}, marks: {len(marks)}')
+    for i in sorted(pauses + late):
         t = hd[i + 1]
         since = min([t - m for m in marks if m <= t], default=float('nan'))
-        print(f'  at +{t - rx[0]:.2f} s: stamp gap {ph[i] * 1e3:.0f} ms, '
+        kind = 'pause' if i in pauses else 'arrival-only gap'
+        print(f'  {kind} at +{t - rx[0]:.2f} s: stamp gap {ph[i] * 1e3:.0f} ms, '
               f'arrival gap {pr[i] * 1e3:.0f} ms, '
               f'latency of the late message {lat[i + 1] * 1e3:.0f} ms, {since:.1f} s after a mark')
         for k in range(max(0, i - 3), min(len(ph), i + 4)):
@@ -126,7 +133,7 @@ def figure(folders, out):
         marks = load_marks(folder)
         for m in marks:
             ax.axvline(m - t0, color='#c55a11', lw=0.5, alpha=0.6)
-        pauses = sum(1 for a, b in zip(hd, hd[1:]) if b - a > GAP_S)
+        pauses = sum(1 for a, b in zip(hd, hd[1:]) if b - a > GAP_S)  # stamp gaps, as analyse()
         ax.set_ylim(0, 400)
         ax.set_ylabel('ms')
         label = f'{os.path.basename(folder.rstrip("/"))}: {pauses} pauses, {len(marks)} marks'

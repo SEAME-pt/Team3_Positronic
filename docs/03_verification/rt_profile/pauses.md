@@ -47,10 +47,11 @@ above 100 ms.
 ![Header period of /joint_states against time, one panel per run](figures/pauses_runs.png)
 
 Every pause of A2, L, F, F2 and M1 sits 3.0 to 3.4 s after a `send_goal` command starts
-(orange marks), never elsewhere. The CLI takes about 2 s to start, create its action client and send
-the goal, so the pause falls within a second of the goal being accepted. Only 3 to 6 goals in
-25 trigger it. (F2 also shows two arrival-only gaps in its first 20 s, stamps intact: messages
-delivered late while the recorders were still starting, not the pause.)
+(orange marks), never elsewhere, and the one pause of A1 sits 4.1 s after one (open Wi-Fi, a
+slower CLI start). The CLI takes about 2 s to start, create its action client and send the goal,
+so the pause falls within a second of the goal being accepted. Only 1 to 7 goals in 24 to 26
+trigger it (table above). (F2 also shows two arrival-only gaps in its first 20 s, stamps intact:
+messages delivered late while the recorders were still starting, not the pause.)
 
 ## What the pause is
 
@@ -85,7 +86,7 @@ for about 300 ms. A throwaway participant without action endpoints (run G) does 
 the 5 endpoints of the CLI's own node (rosout, parameters) are the same in G, so what costs
 is the matching against the action server, not any discovery.
 
-Why only 3 to 6 goals in 25: the match happens once per new client, and only a `publish()`
+Why only 1 to 7 goals in 24 to 26: the match happens once per new client, and only a `publish()`
 that falls inside that window waits. The window is a few hundred ms in a 23 s cycle.
 
 Two more runs place the block inside Fast DDS. M1 set the writers to `ASYNCHRONOUS` publish
@@ -97,8 +98,8 @@ same CLI goals on `rmw_cyclonedds_cpp`: **0 pauses, max stamp period 40.9 ms in 
 ## What it does to the system
 
 - **`arm_controller` is not affected.** The JTC checks its path tolerance on the hardware
-  state it reads in the same cycle, not on `/joint_states`. All 9 goals that carried a pause
-  ended `SUCCEEDED`.
+  state it reads in the same cycle, not on `/joint_states`. The 10 goals that carried a pause
+  on the arm (A1 1, A2 6, L 3) ended `SUCCEEDED`, and no goal of any run was aborted.
 - **The supervisor can be.** It feeds its fault watchdog from `/dynamic_joint_states` and halts
   with `FAULT_DATA_LOST` after 200 ms without a usable message. `/dynamic_joint_states` is
   published by the same broadcaster through its own `RealtimePublisher`. Run F2 recorded both topics: **the three
