@@ -17,10 +17,10 @@ process per goal). The 10 messages are not late, they are never published: the b
 |---|---|
 | The loop (`write()` cadence) during a pause | runs: the next cycle stamp is exactly 10 periods later, and the controller_manager threads run their usual 0.2 ms every 33 ms (thread sampler) |
 | CPU, memory, I/O (vmstat), wall clock (reference clock at 10 ms) | clean in every run, no thread waits for CPU |
-| Wi-Fi, DDS over the network | not the cause: same pauses with `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` (run L) |
-| The serial link and the arm | not the cause: same pauses with `backend:=fake` (run F) |
-| Discovery of a new DDS participant alone | not the cause: 25 participants came and went, no goal, 0 pauses (run G) |
-| Goals from one persistent node, no new endpoints (run H) | **0 pauses in 27 goals**: the trigger is the new action client of each CLI process, not the goal itself |
+| Wi-Fi, DDS over the network | not the cause: same pauses with `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` (run X1) |
+| The serial link and the arm | not the cause: same pauses with `backend:=fake` (run X2) |
+| Discovery of a new DDS participant alone | not the cause: 25 participants came and went, no goal, 0 pauses (run C1) |
+| Goals from one persistent node, no new endpoints (run C2) | **0 pauses in 27 goals**: the trigger is the new action client of each CLI process, not the goal itself |
 | Fast DDS asynchronous publishing (run M1) | does not help: 7 pauses in 24 goals, the writer blocks before the send |
 | CycloneDDS instead of Fast DDS (run M2) | **0 pauses in 26 goals**, same CLI goals: the block is inside Fast DDS |
 
@@ -32,25 +32,28 @@ Same recipe in every run: driver up, `rt_record.py` keeps every `/joint_states` 
 every ~17 ms. 10 min each, then a goal or a participant every ~23 s. Pause = cycle stamp gap
 above 100 ms.
 
+Runs are named by the question they answer: R reproduces the pause, X excludes a cause, C finds the
+trigger, D measures the damage to the system, M tries another middleware.
+
 | Run | Backend | DDS | What arrives every 23 s | Goals | Pauses | Pause length |
 |---|---|---|---|---|---|---|
-| A1 15:52 | serial, arm | open (Wi-Fi) | T2 goal from `ros2 action send_goal` | 25 | 1 | 337 ms |
-| A2 16:16 | serial, arm | open | same | 25 | 6 | 333 to 334 ms |
-| L 18:28 | serial, arm | localhost | same | 26 | 3 | 333 ms |
-| F 19:06 | fake | localhost | same | 26 | 5 | 333 to 335 ms |
-| G 19:20 | fake | localhost | a throwaway participant (`ros2 node list`), no goal | 0 | 0 | |
-| H 19:32 | fake | localhost | T2 goal from one persistent node (`goals_node.py`) | 27 | 0 | |
-| F2 19:43 | fake | localhost | same as F, `/dynamic_joint_states` recorded too | 26 | 3 | 333 ms |
-| M1 20:12 | fake | localhost, Fast DDS `ASYNCHRONOUS` publish mode | same as F | 24 | 7 | 267 to 333 ms |
-| M2 20:25 | fake | localhost, `rmw_cyclonedds_cpp` | same as F | 26 | 0 | |
+| R1 15:52 | serial, arm | open (Wi-Fi) | T2 goal from `ros2 action send_goal` | 25 | 1 | 337 ms |
+| R2 16:16 | serial, arm | open | same | 25 | 6 | 333 to 334 ms |
+| X1 18:28 | serial, arm | localhost | same | 26 | 3 | 333 ms |
+| X2 19:06 | fake | localhost | same | 26 | 5 | 333 to 335 ms |
+| C1 19:20 | fake | localhost | a throwaway participant (`ros2 node list`), no goal | 0 | 0 | |
+| C2 19:32 | fake | localhost | T2 goal from one persistent node (`goals_node.py`) | 27 | 0 | |
+| D1 19:43 | fake | localhost | same as X2, `/dynamic_joint_states` recorded too | 26 | 3 | 333 ms |
+| M1 20:12 | fake | localhost, Fast DDS `ASYNCHRONOUS` publish mode | same as X2 | 24 | 7 | 267 to 333 ms |
+| M2 20:25 | fake | localhost, `rmw_cyclonedds_cpp` | same as X2 | 26 | 0 | |
 
 ![Header period of /joint_states against time, one panel per run](figures/pauses_runs.png)
 
-Every pause of A2, L, F, F2 and M1 sits 3.0 to 3.4 s after a `send_goal` command starts
-(orange marks), never elsewhere, and the one pause of A1 sits 4.1 s after one (open Wi-Fi, a
+Every pause of R2, X1, X2, D1 and M1 sits 3.0 to 3.4 s after a `send_goal` command starts
+(orange marks), never elsewhere, and the one pause of R1 sits 4.1 s after one (open Wi-Fi, a
 slower CLI start). The CLI takes about 2 s to start, create its action client and send the goal,
 so the pause falls within a second of the goal being accepted. Only 1 to 7 goals in 24 to 26
-trigger it (table above). (F2 also shows two arrival-only gaps in its first 20 s, stamps intact:
+trigger it (table above). (D1 also shows two arrival-only gaps in its first 20 s, stamps intact:
 messages delivered late while the recorders were still starting, not the pause.)
 
 ## What the pause is
@@ -74,16 +77,16 @@ are idle. The time goes inside the `publish()` call of the broadcaster's thread.
 
 ## What triggers it
 
-Run G rules out participant discovery by itself. Run F rules out the serial link. What
-remains, common to A1, A2, L and F, is the goal: a new action client (5 endpoints: goal,
+Run C1 rules out participant discovery by itself. Run X2 rules out the serial link. What
+remains, common to R1, R2, X1 and X2, is the goal: a new action client (5 endpoints: goal,
 cancel and result services, feedback and status topics) matched by the action server of
 `arm_controller`, and the goal accepted and executed, both within the same second.
-Run H separates the two: 27 goals from one node whose action client exists from the start,
+Run C2 separates the two: 27 goals from one node whose action client exists from the start,
 0 pauses. **The trigger is the new action client**: when a `ros2 action send_goal` process
 appears, the action server of `arm_controller` matches its five endpoints, and while Fast DDS
 does that matching inside the driver process a `publish()` of the broadcaster can wait on it
-for about 300 ms. A throwaway participant without action endpoints (run G) does not do it, and
-the 5 endpoints of the CLI's own node (rosout, parameters) are the same in G, so what costs
+for about 300 ms. A throwaway participant without action endpoints (run C1) does not do it, and
+the 5 endpoints of the CLI's own node (rosout, parameters) are the same in C1, so what costs
 is the matching against the action server, not any discovery.
 
 Why only 1 to 7 goals in 24 to 26: the match happens once per new client, and only a `publish()`
@@ -99,10 +102,10 @@ same CLI goals on `rmw_cyclonedds_cpp`: **0 pauses, max stamp period 40.9 ms in 
 
 - **`arm_controller` is not affected.** The JTC checks its path tolerance on the hardware
   state it reads in the same cycle, not on `/joint_states`. The 10 goals that carried a pause
-  on the arm (A1 1, A2 6, L 3) ended `SUCCEEDED`, and no goal of any run was aborted.
+  on the arm (R1 1, R2 6, X1 3) ended `SUCCEEDED`, and no goal of any run was aborted.
 - **The supervisor can be.** It feeds its fault watchdog from `/dynamic_joint_states` and halts
   with `FAULT_DATA_LOST` after 200 ms without a usable message. `/dynamic_joint_states` is
-  published by the same broadcaster through its own `RealtimePublisher`. Run F2 recorded both topics: **the three
+  published by the same broadcaster through its own `RealtimePublisher`. Run D1 recorded both topics: **the three
   pauses of `/joint_states` are also pauses of `/dynamic_joint_states`**, same instants, 343 to
   357 ms without a message, 333 ms between stamps. A supervisor in `MONITORING` at that moment
   halts the arm with `FAULT_DATA_LOST` (200 ms), a false halt: safe, but it stops a run.
@@ -134,7 +137,7 @@ same CLI goals on `rmw_cyclonedds_cpp`: **0 pauses, max stamp period 40.9 ms in 
 
 - The thread sampler reads `/proc` every ~17 ms: it sees states and run time, not stack
   traces. Where inside Fast DDS `publish()` waits is inferred from what is excluded, not seen.
-- Only T2 (joints 1 and 2, 5 deg/s) was used. The pause is not tied to the motion (run F has no
+- Only T2 (joints 1 and 2, 5 deg/s) was used. The pause is not tied to the motion (run X2 has no
   motion), so other trajectories were not run.
 - One Jetson, Fast DDS 2.14.6, rmw_fastrtps_cpp 8.4.4, realtime_tools 3.13.0,
   joint_state_broadcaster 4.42.1.
@@ -145,8 +148,8 @@ same CLI goals on `rmw_cyclonedds_cpp`: **0 pauses, max stamp period 40.9 ms in 
 |---|---|
 | `tools/thread_sampler.py` | per-thread state, wchan and run time of one process from `/proc`, every ~17 ms |
 | `tools/pauses_124.py` | finds the pauses in the run folders, prints what happened around each one, draws the figure (`--figure`) |
-| `tools/bench/run124.sh` | the runs: A (goals through the CLI), G (throwaway participants, no goal), H (goals from one node) |
-| `tools/bench/goals_node.py` | the persistent action client of run H |
+| `tools/bench/run124.sh` | the runs: variant A (goals through the CLI: R1, R2, X1, X2, D1, M1, M2), G (throwaway participants, no goal: C1), H (goals from one node: C2) |
+| `tools/bench/goals_node.py` | the persistent action client of run C2 |
 
 `rt_record.py` is the recorder of #39. The 10 ms reference clock and the `/dynamic_joint_states`
-recorder of run F2 were one-off checks and are not kept here.
+recorder of run D1 were one-off checks and are not kept here.
