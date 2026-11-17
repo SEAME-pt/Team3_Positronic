@@ -105,7 +105,7 @@ file per day in `../standups/sprint_02/`:
 
 ## Notes for the review
 
-- Also delivered beyond the backlog: safety supervisor #45 (every stop halted 51–106 ms), safe stop frame #36 (6–16 ms), mission node #43 (GoToPose and state machine through MoveIt, demoed into Gazebo), servo over-temperature cut #115 (60 °C), coverage gate #46 (3 of 5 packages ≥ 80 %), HIL runner #47 (self-hosted Jetson runner, read-only), joint 6 zero offset #94, and a code-review agent in CI #118.
+- Also delivered beyond the backlog: safety supervisor #45 (every stop halted 51–76 ms, `docs/03_verification/safety_supervisor/`), safe stop on deactivate #36, mission node #43 (GoToPose and state machine through MoveIt, demoed into Gazebo), coverage report and report-only gate #109 (3 of 5 packages ≥ 80 %), joint 6 zero offset #94, and a code-review agent in CI #118. Merged after the review, on 16 Nov: servo over-temperature cut #115 (60 °C) and the HIL runner #47 (self-hosted Jetson runner, read-only).
 - <...>
 
 ## Review & retrospective (13 Nov)
