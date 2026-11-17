@@ -48,9 +48,10 @@ jobs:
           cache-from: type=gha,scope=image
           cache-to: type=gha,mode=max,scope=image
 
-      # ament_uncrustify, cpplint, cppcheck, flake8, pep257, copyright (scripts/lint.sh)
+      # ament_uncrustify, cpplint, cppcheck, flake8, pep257, copyright (scripts/lint.sh).
+      # FORCE_COLOR: the GitHub log shows colours, but -T gives the container no terminal.
       - name: Format check
-        run: make RUN="$RUN_DEV" format-check
+        run: make RUN="docker compose run --rm -T -e FORCE_COLOR=1 dev" format-check
 
       # make format must change nothing. The check above runs only uncrustify, which also accepts
       # code that clang-format would rewrite, so without this step `make format` keeps rewriting
@@ -60,12 +61,25 @@ jobs:
           make RUN="$RUN_DEV" format
           git diff --stat --exit-code || { git diff; exit 1; }
 
+      # The unit tests of scripts/ (coverage gate, test summary). No build needed, no ROS.
+      - name: Script tests
+        run: $RUN_DEV python3 -m pytest -q scripts
+
       - name: Build
         run: make RUN="$RUN_DEV" build
 
-      # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint)
+      # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint), then
+      # scripts/summarize_tests.py: one line per package and each failure. Its table goes to the
+      # job summary through log/, like the coverage report below.
       - name: Test
-        run: make RUN="$RUN_DEV" test
+        run: >-
+          make test
+          RUN="docker compose run --rm -T -e FORCE_COLOR=1
+          -e GITHUB_STEP_SUMMARY=/ws/log/test-summary.md dev"
+
+      - name: Test report in the job summary
+        if: always()
+        run: cat log/test-summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No test report"
 
       # Line coverage of src/, C++ and Python (scripts/coverage.sh, scripts/coverage_gate.py).
       # Each package must reach 80 %; the total is only shown. Own build in build_cov/, so the
