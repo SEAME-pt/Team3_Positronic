@@ -24,6 +24,8 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 
 namespace positronic_hardware
 {
@@ -33,6 +35,18 @@ inline constexpr std::size_t NUM_JOINTS{6};
 
 /// Six joint angles in radians, J1 (base) to J6 (flange).
 using JointPositions = std::array<double, NUM_JOINTS>;
+
+/// The six servo temperatures in degC, J1 first, as the arm reports them (one byte each).
+using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
+
+/// The servo that tripped the over-temperature cut, and the reading that did it.
+struct Overheat
+{
+  /// 0 for J1 ... 5 for J6.
+  std::size_t joint{0};
+  /// degC.
+  int celsius{0};
+};
 
 /// Where the driver reads the joint angles from and sends the targets to.
 ///
@@ -100,6 +114,21 @@ public:
   /// not latch: it turns false again once replies resume. Non-blocking, safe from the control
   /// loop.
   [[nodiscard]] virtual bool link_timed_out() const = 0;
+
+  /// The newest plausible temperatures of the six servos, or nullopt before the first one.
+  /// Non-blocking, safe from the control loop.
+  [[nodiscard]] virtual std::optional<ServoTemperatures> read_temperatures() const = 0;
+
+  /// Set once a servo has reached the backend's temperature limit. By then the backend has
+  /// already stopped the arm and powered its servos off, on its own, without waiting for the
+  /// plugin: the arm goes limp. From then on it holds every target and refuses power_on(), for
+  /// as long as it lives; a new configure creates a new backend. Non-blocking, safe from the
+  /// control loop.
+  [[nodiscard]] virtual std::optional<Overheat> overheat() const = 0;
+
+  /// True when no plausible temperature has arrived for longer than the backend's timeout, so
+  /// an overheat could go unseen. Non-blocking, safe from the control loop.
+  [[nodiscard]] virtual bool temperature_stale() const = 0;
 };
 
 }  // namespace positronic_hardware
