@@ -2,7 +2,7 @@
 # ROS 2 Jazzy style checks on src/ (the ament_lint_common tools that colcon test runs).
 #   bash scripts/lint.sh            check only (make format-check, CI)
 #   bash scripts/lint.sh --fix      clang-format, then uncrustify reformat (make format)
-#   VERBOSE=1 bash scripts/lint.sh  also print each tool's full output (make format-check V=1)
+#   VERBOSE=1 bash scripts/lint.sh  also print each tool's full output (make format-check VERBOSE)
 #
 # Check mode prints one line per tool. A tool that fails also prints its problems, without the
 # lines every tool prints for each file it checked. The last line says if everything passed.
