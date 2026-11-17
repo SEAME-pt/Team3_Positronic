@@ -61,8 +61,9 @@ void add_entry(
 DynamicJointState arm_message(double fault_code)
 {
   DynamicJointState message;
-  for (const char * joint : {"joint2_to_joint1", "joint3_to_joint2", "joint4_to_joint3",
-      "joint5_to_joint4", "joint6_to_joint5", "joint6output_to_joint6"})
+  for (const char * joint :
+    {"joint2_to_joint1", "joint3_to_joint2", "joint4_to_joint3", "joint5_to_joint4",
+      "joint6_to_joint5", "joint6output_to_joint6"})
   {
     add_entry(message, joint, {"position", "velocity"}, {0.5, 0.0});
   }

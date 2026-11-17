@@ -52,6 +52,14 @@ jobs:
       - name: Format check
         run: make RUN="$RUN_DEV" format-check
 
+      # make format must change nothing. The check above runs only uncrustify, which also accepts
+      # code that clang-format would rewrite, so without this step `make format` keeps rewriting
+      # files nobody touched (#119). On failure: the files, then the diff to apply.
+      - name: Format is idempotent
+        run: |
+          make RUN="$RUN_DEV" format
+          git diff --stat --exit-code || { git diff; exit 1; }
+
       - name: Build
         run: make RUN="$RUN_DEV" build
 

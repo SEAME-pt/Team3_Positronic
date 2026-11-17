@@ -1,0 +1,101 @@
+name: HIL
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: hil
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: positronic-runtime:hil
+  CONTAINER: positronic-hil
+  PORT: /dev/ttyTHS1
+  DRIVER_SERVICE: positronic-driver
+
+jobs:
+  HIL:
+    runs-on: [self-hosted, jetson, hil]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Jetson image
+        run: |
+          docker build --target runtime -t "$IMAGE" \
+            --build-arg USER_UID="$(id -u)" --build-arg USER_GID="$(id -g)" docker
+
+      - name: Stop the driver service
+        run: |
+          if systemctl is-active --quiet "$DRIVER_SERVICE"; then
+            echo "DRIVER_SERVICE_WAS_ACTIVE=1" >> "$GITHUB_ENV"
+            if ! sudo -n systemctl stop "$DRIVER_SERVICE"; then
+              echo "::error::er cannot stop $DRIVER_SERVICE: er needs a NOPASSWD sudoers rule for systemctl stop and start $DRIVER_SERVICE."
+              exit 1
+            fi
+          fi
+
+      - name: Check the arm is free
+        run: |
+          docker rm -f "$CONTAINER" > /dev/null 2>&1 || true
+
+          if docker ps --format '{{.Names}}' | grep -qx positronic-arm; then
+            echo "::error::make nano-shell is open (container positronic-arm)."
+            exit 1
+          fi
+          if ! command -v fuser > /dev/null; then
+            echo "::error::fuser is missing on the Jetson."
+            exit 1
+          fi
+          if fuser -s "$PORT"; then
+            echo "::error::$PORT is open by another process:"
+            fuser -v "$PORT" || true
+            exit 1
+          fi
+
+      - name: Build and run the HIL tests on the arm
+        run: |
+          docker run --rm --name "$CONTAINER" --pull never --init \
+            --network host --ipc host \
+            -e ROS_DOMAIN_ID=18 -e ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST -e POSITRONIC_HIL=1 \
+            --device "$PORT" -v "$PWD:/ws" -w /ws "$IMAGE" bash -c "
+              source /opt/ros/jazzy/setup.bash &&
+              colcon build --parallel-workers 2 --packages-up-to positronic_bringup positronic_hil &&
+              source install/setup.bash &&
+              colcon test --packages-select positronic_hil --ctest-args -R test_hil &&
+              colcon test-result --verbose --test-result-base build/positronic_hil"
+
+      - name: Check every HIL test ran
+        run: |
+          results=build/positronic_hil/test_results/positronic_hil
+          for test in test_hil test_hil_trajectory; do
+            if [ ! -f "$results/$test.xunit.xml" ]; then
+              echo "::error::$test did not run."
+              exit 1
+            fi
+          done
+          if grep -l '<skipped' "$results"/test_hil*.xunit.xml; then
+            echo "::error::A HIL test was skipped. On the Jetson every test must run."
+            exit 1
+          fi
+
+      - name: Stop the test container
+        if: always()
+        run: docker stop -t 20 "$CONTAINER" > /dev/null 2>&1 || true
+
+      - name: Start the driver service again
+        if: always() && env.DRIVER_SERVICE_WAS_ACTIVE == '1'
+        run: sudo -n systemctl start "$DRIVER_SERVICE"
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-results
+          path: |
+            build/positronic_hil/test_results
+            log
+          if-no-files-found: ignore
