@@ -319,7 +319,7 @@ void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
     return;
   }
   // Byte 3 of `FE FE 02 <cmd> FA` is the command the arm will echo in its ack.
-  const auto command{static_cast<positronic_protocol::CommandId>(frame->bytes[3])};
+  const auto command{static_cast<positronic_protocol::CommandId>(std::get<3>(frame->bytes))};
   if (!await_ack(command)) {
     return;  // not taken: the request stays pending, the frame goes out again next turn
   }
