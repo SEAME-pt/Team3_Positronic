@@ -22,7 +22,7 @@ Two presentations per sprint, in `sprint_NN/`:
 | Sprint | Module | Monday — planning | Friday — review & retrospective | Sprint goal |
 |---|---|---|---|---|
 | 1 | M1 | [planning](sprint_01/planning/README.md) — Mon 19 Oct 2026 | [review & retro](sprint_01/review/README.md) — Fri 30 Oct 2026 | The real arm is visible in ROS 2 from any laptop, and every PR is built and tested by CI. |
-| 2 | M1 | [planning](sprint_02/planning/README.md) — Mon 2 Nov 2026 | [review & retro](sprint_02/review/README.md) — Fri 13 Nov 2026 | |
+| 2 | M1 | [planning](sprint_02/planning/README.md) — Mon 2 Nov 2026 | [review & retro](sprint_02/review/README.md) — Fri 13 Nov 2026 | The real arm executes joint trajectories from ROS 2 with position commands, stops safely on a joint limit or a lost link, and the same motion is compared between simulation and hardware. |
 | 3 | M1 | [planning](sprint_03/planning/README.md) — Mon 16 Nov 2026 | [review & retro](sprint_03/review/README.md) — Fri 27 Nov 2026 | |
 | 4 | M1 | [planning](sprint_04/planning/README.md) — Mon 30 Nov 2026 | [review & retro](sprint_04/review/README.md) — Fri 11 Dec 2026 | |
 | 5 | M2 | [planning](sprint_05/planning/README.md) — Mon 14 Dec 2026 | [review & retro](sprint_05/review/README.md) — Fri 8 Jan 2027 | |
