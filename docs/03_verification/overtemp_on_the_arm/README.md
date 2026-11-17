@@ -5,7 +5,7 @@
 | Criterion (#115) | Result | Measured |
 |---|---|---|
 | A servo at `servo_temp_limit_c` on two readings in a row stops the arm and powers its servos off | PASS | the wrist servo `joint6_to_joint5` reached 47 degC (= limit) under load, the arm was stopped and its servos powered off, went limp and dropped (held by hand) |
-| `read()` returns ERROR, `driver/fault_code` latches 3, the component leaves ACTIVE | PASS | log: `Servo overheated: joint 'joint6_to_joint5' at 47 degC (limit 47 degC)...`; the read cycle returned an error and the controller_manager deactivated `positronic_arm` and its controllers. `fault_code` was set to 3 on the interface but not published (no gpio controller yet, #45), so it is not in the log |
+| `read()` returns ERROR, `driver/fault_code` latches 3, the component leaves ACTIVE | PASS | log: `Servo overheated: joint 'joint6_to_joint5' at 47 degC (limit 47 degC)...`; the read cycle returned an error and the controller_manager deactivated `positronic_arm` and its controllers. `fault_code` was set to 3 on the interface but not published, so it is not in the log |
 | Recovery: cool the arm, power on, configure and activate again | PASS | after the cut the servos were powered on again with `pymycobot` while holding the arm; a cool configure + activate is shown at the top of this same log (`Successful 'activate' of hardware`), which is the recovery path |
 | Activation is refused while a servo is within 5 degC of the limit | covered by unit tests | not forced on the arm; see `test_load_robot_system` (activation refused on a hot arm) |
 
@@ -62,7 +62,7 @@ limit (<= 15 deg/s).
 | Time from activation to the cut | ~52 s |
 | Log line | `Servo overheated: joint 'joint6_to_joint5' at 47 degC (limit 47 degC). The arm was stopped and its servos powered off, so it is limp now. Find the cause, let it cool, power the arm on again, then configure and activate.` |
 | Component after the cut | deactivated by the controller_manager (`Deactivating ... positronic_arm`), with `arm_controller` and `joint_state_broadcaster`; `on_error` then takes it to UNCONFIGURED |
-| `driver/fault_code` | set to 3 on the interface; not published (no gpio controller yet, #45), so not in the log |
+| `driver/fault_code` | set to 3 on the interface; not published, so not in the log |
 | Arm behaviour | went limp and dropped (held by hand), as expected for a power off |
 | Recovery | servos powered on again with `pymycobot` while holding the arm; the clean configure + activate at the top of this log is the recovery path |
 
@@ -73,9 +73,3 @@ while attempting mode switch when deactivating controllers in read cycle!`. This
 noise, not a second fault: the component errored mid-cycle, so when the manager tried to stop the
 command interfaces they were already unavailable. The outcome is the intended one: the component
 and both controllers are deactivated and the arm is limp.
-
-## Known limitation
-
-Nothing publishes the live temperature while the driver runs, so the climb was not logged: the
-temperature only appears in the log at the moment of the cut. Watching it live (a topic for
-`driver/fault_code` and the temperatures) is part of #45, not this issue.
