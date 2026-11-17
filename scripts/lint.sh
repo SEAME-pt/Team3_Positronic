@@ -2,7 +2,7 @@
 # ROS 2 Jazzy style checks on src/ (the ament_lint_common tools that colcon test runs).
 #   bash scripts/lint.sh            check only (make format-check, CI)
 #   bash scripts/lint.sh --fix      clang-format, then uncrustify reformat (make format)
-#   VERBOSE=1 bash scripts/lint.sh  also print each tool's full output
+#   VERBOSE=1 bash scripts/lint.sh  also print each tool's full output (make format-check V=1)
 #
 # Check mode prints one line per tool. A tool that fails also prints its problems, without the
 # lines every tool prints for each file it checked. The last line says if everything passed.
@@ -44,30 +44,41 @@ problems() {
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 failed=()
+table=()
 
 # run <tool> <what it checks>: one line with the result, the problems kept for the end.
+# Verbose: the tool's full output now, its line in the table printed after every tool ran.
 run() {
   local tool=$1 what=$2 out="$TMP/$1" start=$EPOCHREALTIME
   "ament_$tool" src > "$out" 2>&1
-  local rc=$? took
+  local rc=$? took line
   took=$(awk -v a="$start" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.1f s", b - a }')
-  if [ "${VERBOSE:-}" ]; then cat "$out"; fi
   if [ "$rc" -eq 0 ]; then
-    printf '  %s✔%s  %-11s %-24s %s%s%s\n' "$GREEN" "$RESET" "$tool" "$what" "$DIM" "$took" "$RESET"
+    line=$(printf '  %s✔%s  %-11s %-24s %s%s%s' "$GREEN" "$RESET" "$tool" "$what" \
+      "$DIM" "$took" "$RESET")
   else
     local n
     n=$(problems "$out")
     failed+=("$tool${n:+ ($n)}")
-    printf '  %s✘%s  %-11s %-24s %s%s%s\n' "$RED" "$RESET" "$tool" "$what" \
-      "$RED" "${n:-?} problem$([ "${n:-}" = 1 ] || echo s)" "$RESET"
+    line=$(printf '  %s✘%s  %-11s %-24s %s%s%s' "$RED" "$RESET" "$tool" "$what" \
+      "$RED" "${n:-?} problem$([ "${n:-}" = 1 ] || echo s)" "$RESET")
+  fi
+  if [ "${VERBOSE:-}" ]; then
+    echo "${BOLD}── $tool: full output ──${RESET}"
+    cat "$out"
+    echo
+    table+=("$line")
+  else
+    echo "$line"
   fi
 }
 
 ncpp=$(count "${CPP[@]}")
 npy=$(count -name '*.py')
-echo
-echo "${BOLD}Format check${RESET} ${DIM}src/: $ncpp C/C++ files, $npy Python files${RESET}"
-echo
+header="${BOLD}Format check${RESET} ${DIM}src/: $ncpp C/C++ files, $npy Python files${RESET}"
+if [ -z "${VERBOSE:-}" ]; then
+  printf '\n%s\n\n' "$header"
+fi
 if [ "$ncpp" -gt 0 ]; then
   run uncrustify "C++ layout"
   run cpplint "C++ style"
@@ -79,6 +90,12 @@ if [ "$npy" -gt 0 ]; then
 fi
 if [ $((ncpp + npy)) -gt 0 ]; then
   run copyright "License headers"
+fi
+
+# Verbose: the full outputs are above, so the summary comes in one piece after them.
+if [ "${VERBOSE:-}" ]; then
+  printf '\n%s\n\n' "$header"
+  printf '%s\n' "${table[@]}"
 fi
 
 if [ ${#failed[@]} -eq 0 ]; then

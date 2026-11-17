@@ -64,10 +64,10 @@ build: ## colcon build
 	$(RUN) bash -c 'colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
 
 # colcon's per package stderr is hidden: scripts/summarize_tests.py shows each failure once, at the end.
-# VERBOSE=1 shows everything colcon prints, plus colcon test-result --verbose, before the summary.
-test: ## colcon test, then a summary per package and each failure (VERBOSE=1: full output)
-	$(RUN) bash -c 'colcon test $(if $(VERBOSE),,--event-handlers console_stderr-); rc=$$?; \
-	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
+# V=1 shows everything colcon prints, plus colcon test-result --verbose, before the summary.
+test: ## colcon test, then a summary per package and each failure (V=1: full output)
+	$(RUN) bash -c 'colcon test $(if $(V),,--event-handlers console_stderr-); rc=$$?; \
+	  $(if $(V),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
 # CI runs it as report-only (continue-on-error) until #46.
@@ -77,8 +77,8 @@ coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below
 format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 	$(RUN) bash scripts/lint.sh --fix
 
-format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE=1: each tool's full output)
-	$(RUN) env VERBOSE=$(VERBOSE) bash scripts/lint.sh
+format-check: ## ROS 2 lint on src/, one line per tool (V=1: each tool's full output)
+	$(RUN) env VERBOSE=$(V) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'

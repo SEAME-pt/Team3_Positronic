@@ -266,7 +266,7 @@ def verdict(results, colcon_rc):
         return False, f'{failed} of {total} tests failed, in {where}'
     if colcon_rc:
         return False, (f'every test passed, but colcon test itself exited with {colcon_rc}: '
-                       'run make test VERBOSE=1 to see why')
+                       'run make test V=1 to see why')
     extra = f' ({skipped} skipped)' if skipped else ''
     return True, f'all {total} tests passed in {len(results)} packages{extra}'
 
@@ -293,7 +293,7 @@ def terminal_report(results, colcon_rc, style):
             shown, left = short(f.message)
             lines += [style.dim(f'      {line}') for line in shown]
             if left:
-                lines.append(style.dim(f'      … {left} more lines (make test VERBOSE=1)'))
+                lines.append(style.dim(f'      … {left} more lines (make test V=1)'))
             lines.append('')
 
     else:
