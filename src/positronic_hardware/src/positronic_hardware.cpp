@@ -53,12 +53,12 @@ namespace
 bool has_position_and_velocity(const hardware_interface::ComponentInfo & joint)
 {
   const auto has{[&joint](const std::string & name) {
-    return std::any_of(
+      return std::any_of(
       joint.state_interfaces.begin(), joint.state_interfaces.end(),
-      [&name](const hardware_interface::InterfaceInfo & interface) {
-        return interface.name == name;
+        [&name](const hardware_interface::InterfaceInfo & interface) {
+          return interface.name == name;
       });
-  }};
+    }};
   return joint.state_interfaces.size() == 2 && has(hardware_interface::HW_IF_POSITION) &&
          has(hardware_interface::HW_IF_VELOCITY);
 }
@@ -240,9 +240,9 @@ bool only_known_parameters(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters)
 {
   const auto known{[](const auto & entry) {
-    return std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(), entry.first) !=
-           KNOWN_PARAMETERS.end();
-  }};
+      return std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(), entry.first) !=
+             KNOWN_PARAMETERS.end();
+    }};
   const auto unknown{std::find_if_not(parameters.begin(), parameters.end(), known)};
   if (unknown == parameters.end()) {
     return true;
@@ -472,7 +472,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
   tracking_ = TrackingCheck{TrackingLimits{
-    config_.tracking_error_deg * DEG_TO_RAD, std::chrono::milliseconds{config_.tracking_error_ms}}};
+      config_.tracking_error_deg * DEG_TO_RAD,
+      std::chrono::milliseconds{config_.tracking_error_ms}}};
   try {
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
