@@ -242,3 +242,5 @@ Put per-machine values in `.env` (copy `.env.example`), or override one run with
 | `GPU=sw make shell` seems to do nothing | A value in `.env` beats the environment: use `make GPU=sw shell` |
 | `could not select device driver "nvidia"` with `GPU=nvidia` | The NVIDIA Container Toolkit isn't installed on the host: install it, or use `GPU=dri` or `sw` |
 | Laptops don't see the Jetson's topics after a reboot | The service started before the Wi-Fi: `ssh -t nano sudo systemctl restart positronic-driver`, then open an issue |
+
+THROWAWAY (#144 test): a docs-only commit on top of a code PR. Reverted next.
