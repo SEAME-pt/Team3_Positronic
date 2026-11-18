@@ -81,8 +81,13 @@ build: ## colcon build
 
 # colcon's per package stderr is hidden: scripts/summarize_tests.py shows each failure once, at the end.
 # VERBOSE shows everything colcon prints, plus colcon test-result --verbose, before the summary.
+# Packages run in parallel (colcon's default) and so do the tests inside each one (ctest -j).
+# ROS_DOMAIN_ID is unset so the tests that talk over ROS (ament_add_ros_isolated_gtest) each get
+# a free domain: with it set (17, the arm's) they all share it and see each other's nodes (#144).
+TEST_JOBS ?= 4
 test: ## colcon test, then a summary per package and each failure (VERBOSE: full output)
-	$(RUN) bash -c 'colcon test $(if $(VERBOSE),,--event-handlers console_stderr-); rc=$$?; \
+	$(RUN) bash -c 'unset ROS_DOMAIN_ID; \
+	  colcon test $(if $(VERBOSE),,--event-handlers console_stderr-) --ctest-args -j$(TEST_JOBS); rc=$$?; \
 	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.

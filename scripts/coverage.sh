@@ -46,13 +46,24 @@ rm -f "${BUILD}/.coverage"
 # disappearing and making the number look better than it is.
 "${LCOV[@]}" --capture --initial --directory "${BUILD}" --output-file "${OUT}/cpp_base.info"
 
+# Without ROS_DOMAIN_ID, each test that talks over ROS gets a free domain (make test, #144).
+unset ROS_DOMAIN_ID
+
+# C++ tests in parallel: packages (colcon) and the tests inside each (ctest -j). They write the
+# .gcda counters as they run; libgcov locks each file while it adds to it. No linters: they add
+# no coverage (make test runs them).
+echo "== C++ tests with coverage"
+colcon test --build-base "${BUILD}" --install-base "${INSTALL}" \
+  --ctest-args -j"${TEST_JOBS:-4}" -L gtest
+
 # colcon starts pytest itself, so the coverage options reach it through PYTEST_ADDOPTS.
-# --cov-append: each package's tests add to one data file. Sequential: no two packages write it
-# at once. The C++ counters are written by the tests as they run.
-echo "== Tests with coverage"
+# --cov-append: each test adds to one data file. One at a time: pytest-cov merges into that
+# file at the end of each run, which is not safe from two processes at once.
+echo "== Python tests with coverage"
 COVERAGE_FILE="$(pwd)/${BUILD}/.coverage" \
 PYTEST_ADDOPTS="--cov --cov-config=$(pwd)/.coveragerc --cov-append --cov-report=" \
-  colcon test --build-base "${BUILD}" --install-base "${INSTALL}" --executor sequential
+  colcon test --build-base "${BUILD}" --install-base "${INSTALL}" --executor sequential \
+  --ctest-args -L pytest
 colcon test-result --test-result-base "${BUILD}" || echo "WARNING: some tests failed" >&2
 
 echo "== C++"

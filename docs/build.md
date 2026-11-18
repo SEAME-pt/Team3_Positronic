@@ -34,7 +34,7 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: [ADR 
 | Target | Image | Used by | Has |
 | --- | --- | --- | --- |
 | `runtime` | `positronic-runtime:nano` | The Jetson (`make nano-image`) | ros2_control, pymycobot, ROS lint set |
-| `ci` | `positronic-dev:jazzy` in CI | GitHub Actions | `runtime` + clang tools + MoveIt |
+| `ci` | `positronic-dev:jazzy` in CI, pulled from `ghcr.io/seame-pt/team3_positronic-ci` | GitHub Actions | `runtime` + clang tools + MoveIt |
 | `dev` | `positronic-dev:jazzy` | Your machine (`make image`) | `ci` + Gazebo, RViz, rqt |
 
 **Adding a package:** put it in the lowest stage that needs it (rules at the top of the Dockerfile),
@@ -93,7 +93,9 @@ and the editor's clangd use to understand the code (see the README, "Errors and 
 To build only one package, use `make shell` and run `colcon build --packages-select <package>`.
 
 **`make test`**: runs every package's tests plus linters and prints a summary. Read the last lines: they say how
-many tests failed. Run `make build` first, since the tests run against the last build.
+many tests failed. Run `make build` first, since the tests run against the last build. Tests run 4 at a time
+inside each package (`make test TEST_JOBS=1` for one at a time). `ROS_DOMAIN_ID` is unset for them, so each
+test registered with `ament_add_ros_isolated_gtest` gets a free domain: a new test that starts ROS should use it.
 
 **`make coverage`**: measures which lines of `src/` (C++ and Python) the tests run. It builds and tests
 everything a second time with coverage on, in `build_cov/` and `install_cov/`, so your normal build
