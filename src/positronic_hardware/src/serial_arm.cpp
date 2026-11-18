@@ -376,7 +376,8 @@ bool SerialArm::perform(const Request & request, const Scanner & reply)
     case Expect::NONE:
       return true;
     case Expect::REPLY:
-      return read_until(deadline, reply);
+      // A reply nobody scans for is a request that cannot succeed, not a crash on the thread.
+      return static_cast<bool>(reply) && read_until(deadline, reply);
     case Expect::ACK:
       break;
   }
