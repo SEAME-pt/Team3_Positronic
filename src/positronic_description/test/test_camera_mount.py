@@ -74,10 +74,8 @@ def apply(matrix, vector):
 
 
 def camera_in_flange(camera, camera_link):
-    """Return position, optical axis (+x) and image up (+z) of camera_link in joint6_flange.
-
-    Gazebo cameras look along +x of their link, with +z up in the image.
-    """
+    """Return position, optical axis (+x) and image up (+z) of camera_link, in the flange."""
+    # Gazebo cameras look along +x of their link, with +z up in the image.
     turn = rotation(camera['rpy'])
     offset = apply(turn, camera_link['xyz'])
     position = [camera['xyz'][i] + offset[i] for i in range(3)]
@@ -88,11 +86,9 @@ def camera_in_flange(camera, camera_link):
 
 
 def finger_line_in_flange(gripper):
-    """Return the line the fingers open along in the joint6_flange frame.
-
-    The finger joints sit at x = -0.005 and x = +0.005 of gripper_base and the fingers grow
-    along its y: they open and close along its x axis.
-    """
+    """Return the line the fingers open along, in the joint6_flange frame."""
+    # The finger joints sit at x = -0.005 and +0.005 of gripper_base and grow along its y, so
+    # they open and close along its x axis.
     return apply(rotation(gripper['rpy']), [1.0, 0.0, 0.0])
 
 
@@ -110,11 +106,9 @@ def is_across_the_fingers(position, fingers):
 
 
 def is_on_the_real_side(position):
-    """Return True when the camera sits on -y of joint6_flange.
-
-    Seen from the front at all-zero, that puts the camera module up and to the left, as on the
-    real arm (docs/03_verification/camera_mount).
-    """
+    """Return True when the camera sits on -y of joint6_flange, the real side (#97)."""
+    # Seen from the front at all-zero, -y puts the camera module up and to the left, as on the
+    # real arm (docs/03_verification/camera_mount).
     return position[1] < 0.0
 
 
