@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2026 Positronic
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -42,6 +44,18 @@ import yaml
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config')
 CONFIG = os.path.join(CONFIG_DIR, 'jetson_controllers.yaml')
 SUPERVISOR_CONFIG = os.path.join(CONFIG_DIR, 'safety_supervisor.yaml')
+ROS2_CONTROLLERS = os.path.join(CONFIG_DIR, 'ros2_controllers.yaml')
+
+
+def test_gazebo_jtc_has_the_jetson_tolerances_and_rate():
+    """Check that Gazebo's arm_controller uses the Jetson's tolerances and check rate (#33)."""
+    with open(ROS2_CONTROLLERS) as file:
+        gazebo = yaml.safe_load(file)
+    jetson = load_config()
+    assert (gazebo['arm_controller']['ros__parameters']['constraints']
+            == jetson['arm_controller']['ros__parameters']['constraints'])
+    assert (gazebo['controller_manager']['ros__parameters']['update_rate']
+            == jetson['controller_manager']['ros__parameters']['update_rate'])
 
 
 def load_config():
@@ -59,8 +73,11 @@ def supervisor_params():
 def declared_controllers():
     """Return {name: type} of the controllers the controller manager can load."""
     manager = load_config()['controller_manager']['ros__parameters']
-    return {name: value['type'] for name, value in manager.items()
-            if isinstance(value, dict) and 'type' in value}
+    return {
+        name: value['type']
+        for name, value in manager.items()
+        if isinstance(value, dict) and 'type' in value
+    }
 
 
 def broadcaster_params():
@@ -80,7 +97,9 @@ def test_broadcaster_publishes_every_state_interface():
     params = broadcaster_params()
     # It publishes everything while either list is empty; with both set, only those.
     narrowed = bool(params.get('joints')) and bool(params.get('interfaces'))
-    assert not narrowed, 'joints and interfaces are both set: driver/fault_code is not published'
+    assert (
+        not narrowed
+    ), 'joints and interfaces are both set: driver/fault_code is not published'
 
 
 def test_fault_code_stays_on_dynamic_joint_states():
@@ -93,8 +112,11 @@ def test_fault_code_stays_on_dynamic_joint_states():
 def test_a_halt_deactivates_every_command_controller():
     """Check that no controller that can move the arm is left out of the halt (#45)."""
     # A broadcaster only reads state interfaces; everything else writes commands.
-    command_controllers = {name for name, kind in declared_controllers().items()
-                           if not kind.endswith('Broadcaster')}
+    command_controllers = {
+        name
+        for name, kind in declared_controllers().items()
+        if not kind.endswith('Broadcaster')
+    }
     assert command_controllers, 'jetson_controllers.yaml declares no command controller'
     missing = command_controllers - set(supervisor_params()['controllers_to_stop'])
     assert not missing, f'not deactivated by a halt: {sorted(missing)}'
@@ -113,8 +135,13 @@ def test_a_resume_activates_declared_controllers_and_the_fault_reader():
 def test_supervisor_timeouts_are_positive():
     """Check the timeouts: the node refuses to configure with one that is not positive."""
     params = supervisor_params()
-    for name in ('heartbeat_timeout_ms', 'fault_timeout_ms', 'halt_step_timeout_ms',
-                 'resume_step_timeout_ms', 'check_period_ms'):
+    for name in (
+        'heartbeat_timeout_ms',
+        'fault_timeout_ms',
+        'halt_step_timeout_ms',
+        'resume_step_timeout_ms',
+        'check_period_ms',
+    ):
         assert isinstance(params[name], int) and params[name] > 0, name
     # The check must run several times inside the shortest timeout it watches.
     assert params['check_period_ms'] * 4 <= params['heartbeat_timeout_ms']
