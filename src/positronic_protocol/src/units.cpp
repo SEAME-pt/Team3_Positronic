@@ -66,7 +66,7 @@ std::optional<JointAngles> to_centidegrees(const JointRadians & radians) noexcep
       ok = ok && converted.has_value();
       return converted.value_or(0);
   });
-  if (!ok) {
+  if(!ok){
     return std::nullopt;
   }
   return angles;
