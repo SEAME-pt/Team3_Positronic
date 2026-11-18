@@ -47,6 +47,7 @@
 #include "positronic_protocol/types.hpp"
 #include "positronic_protocol/units.hpp"
 
+// #144 experiment E4: a throwaway comment so CI sees this file changed. Reverted next.
 namespace positronic_hardware
 {
 namespace
