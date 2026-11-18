@@ -41,7 +41,8 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: [ADR 
 then `make image`. Only that stage's layer is downloaded again. CI builds, lints and tests `src/` in
 `ci`, and builds the Jetson's packages (`NANO_PACKAGES`, see `make nano-build`) in `runtime`, so a
 package in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't
-catch a package that only fails on the Jetson's arm64. Build one target by hand with
+catch a package that only fails on the Jetson's arm64. A PR that only changes `docs/` or `.md` files skips
+all of this: only the `CI` check runs, and it passes. Build one target by hand with
 `docker build --target <name> docker`.
 
 ## First time
@@ -109,8 +110,15 @@ it to check before pushing.
 `make build` first. Warnings don't fail the command; read them and fix what's real.
 
 **`make tidy-strict`**: the same, but only on the packages that talk to the arm or command it
-(`positronic_hardware`, `positronic_protocol`, `positronic_mission`), and every warning is an error.
-CI runs it, so run it before you push changes there. Needs `make build` first.
+(`positronic_hardware`, `positronic_protocol`, `positronic_mission`, `positronic_safety`), and every
+warning is an error. Test files (`test/`) get the `bugprone-*` checks only (ADR 0007). CI runs it after
+each merge to `dev`. Needs `make build` first.
+
+**`make tidy-changed`**: `make tidy-strict` on only the files your branch can affect since
+`origin/dev`: the `.cpp` files you changed, every file that includes a header you changed, a whole
+package if you changed its `CMakeLists.txt` or `package.xml`, and everything if you changed
+`.clang-tidy` or the Dockerfile. CI runs this on PRs, so run it before you push changes to those
+packages. Needs `make build` first. Uncommitted changes count; new files only once you `git add` them.
 
 **`make doctor`**: checks the environment: ROS, tools, write access to the repo, ROS 2 messaging.
 With `ARM_IP=<jetson ip>` it also checks the Jetson is reachable. Run it first when something is
@@ -224,6 +232,7 @@ Put per-machine values in `.env` (copy `.env.example`), or override one run with
 | `Permission denied` on the Jetson's `/ws` | The Jetson image is out of date: `make nano-image` |
 | Build fails after pulling someone's Dockerfile change | `make image` (and `make nano-image` for the Jetson) |
 | `make tidy` finds nothing | Run `make build` first |
+| `make tidy-changed` says `git failed` | In a git worktree, git can't run in the dev container: use `make tidy-strict` |
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
 | `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
 | CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |
