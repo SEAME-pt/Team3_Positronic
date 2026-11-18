@@ -41,7 +41,8 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: [ADR 
 then `make image`. Only that stage's layer is downloaded again. CI builds, lints and tests `src/` in
 `ci`, and builds the Jetson's packages (`NANO_PACKAGES`, see `make nano-build`) in `runtime`, so a
 package in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't
-catch a package that only fails on the Jetson's arm64. Build one target by hand with
+catch a package that only fails on the Jetson's arm64. A PR that only changes `docs/` or `.md` files skips
+all of this: only the `CI` check runs, and it passes. Build one target by hand with
 `docker build --target <name> docker`.
 
 ## First time

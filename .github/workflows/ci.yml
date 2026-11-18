@@ -14,7 +14,54 @@ permissions:
   contents: read
 
 jobs:
-  CI:
+  # Which files the PR changes, from the merge commit against its first parent (the tip of the
+  # base branch), so it is the whole PR and not only the last push. Docs-only: every file is under
+  # docs/ or is a .md file. Those files are never built, linted or tested (scripts/lint.sh and
+  # colcon only read src/, the script tests only scripts/), so the checks job can't fail on them.
+  # --no-renames lists both paths of a move, so a file moved out of src/ counts as code.
+  # Pushes to dev and main always run everything. An empty diff runs everything too.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Docs-only or code
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          # EXPERIMENT #144 E6 ONLY, never merge: the workflow file is left out of the check so a
+          # PR that carries this workflow can still be docs-only. A real PR must count it as code.
+          EXPERIMENT_IGNORE: .github/workflows/ci.yml
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "$EVENT: everything runs"
+            exit 0
+          fi
+          docs_only=true
+          n=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              "$EXPERIMENT_IGNORE") echo "  ignored  $f"; continue ;;
+              docs/* | *.md) echo "  docs     $f" ;;
+              *) echo "  code     $f"; docs_only=false ;;
+            esac
+            n=$((n + 1))
+          done < <(git diff --name-only --no-renames HEAD^1 HEAD)
+          [ "$n" -gt 0 ] || docs_only=false
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "$n files, docs_only=$docs_only" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Everything CI checked before, unchanged: format, build, tests, coverage, tidy, Jetson.
+  checks:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -146,3 +193,33 @@ jobs:
             log
             build/*/test_results
           if-no-files-found: ignore
+
+  # The one status check the dev ruleset requires. It always runs and is green only when the
+  # classification ran and the checks passed, or were skipped because the PR is docs-only.
+  # A skipped checks job for any other reason (changes failed) is red.
+  CI:
+    needs: [changes, checks]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Result
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CHECKS: ${{ needs.checks.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+        run: |
+          echo "changes: $CHANGES, checks: $CHECKS, docs_only: $DOCS_ONLY"
+          if [ "$CHANGES" != success ]; then
+            echo "::error::The changes job did not succeed ($CHANGES)"
+            exit 1
+          fi
+          if [ "$CHECKS" = success ]; then
+            exit 0
+          fi
+          if [ "$CHECKS" = skipped ] && [ "$DOCS_ONLY" = true ]; then
+            echo "Docs-only PR: the checks job was skipped"
+            exit 0
+          fi
+          echo "::error::The checks job did not succeed ($CHECKS)"
+          exit 1
