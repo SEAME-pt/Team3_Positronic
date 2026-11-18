@@ -30,18 +30,21 @@ built by hand, so no launch and no publisher are needed.
 import importlib.util
 import os
 
-from builtin_interfaces.msg import Time
 import pytest
 import rclpy
+from builtin_interfaces.msg import Time
 from sensor_msgs.msg import JointState
 
-SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      'scripts', 'joint_states_delay.py')
+SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scripts",
+    "joint_states_delay.py",
+)
 
 
 def load_script():
     """Import the script as a module, without running its main()."""
-    spec = importlib.util.spec_from_file_location('joint_states_delay', SCRIPT)
+    spec = importlib.util.spec_from_file_location("joint_states_delay", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -58,7 +61,7 @@ def test_delay_is_now_minus_stamp_in_ms():
 def test_summary_counts_averages_and_takes_the_worst():
     """Three delays give the count, the mean and the maximum, one decimal each."""
     module = load_script()
-    assert module.summary([4.0, 5.0, 9.0]) == '3 msgs  avg 6.0 ms  max 9.0 ms'
+    assert module.summary([4.0, 5.0, 9.0]) == "3 msgs  avg 6.0 ms  max 9.0 ms"
 
 
 def test_summary_of_nothing_is_none():
@@ -72,10 +75,10 @@ def test_final_summary_passes_when_every_delay_is_within_the_limit():
     module = load_script()
     lines, passed = module.final_summary([(0.0, 4.0), (1.0, 30.0), (2.0, 5.0)], 100.0)
     assert passed
-    assert lines[0] == '3 msgs in 2 s'
-    assert lines[1] == 'avg 13.0 ms  max 30.0 ms at 1.0 s'
-    assert lines[2] == '0 msgs above 100 ms'
-    assert lines[-1] == 'PASS: limit 100 ms'
+    assert lines[0] == "3 msgs in 2 s"
+    assert lines[1] == "avg 13.0 ms  max 30.0 ms at 1.0 s"
+    assert lines[2] == "0 msgs above 100 ms"
+    assert lines[-1] == "PASS: limit 100 ms"
 
 
 def test_final_summary_fails_and_lists_the_late_messages():
@@ -84,9 +87,9 @@ def test_final_summary_fails_and_lists_the_late_messages():
     samples = [(0.0, 5.0), (15.2, 103.0), (16.1, 117.9), (20.0, 6.0)]
     lines, passed = module.final_summary(samples, 100.0)
     assert not passed
-    assert lines[2] == '2 msgs above 100 ms'
-    assert lines[3] == 'first: 103.0 ms at 15.2 s, 117.9 ms at 16.1 s'
-    assert lines[-1] == 'FAIL: limit 100 ms'
+    assert lines[2] == "2 msgs above 100 ms"
+    assert lines[3] == "first: 103.0 ms at 15.2 s, 117.9 ms at 16.1 s"
+    assert lines[-1] == "FAIL: limit 100 ms"
 
 
 def test_final_summary_of_nothing_fails():
@@ -94,18 +97,20 @@ def test_final_summary_of_nothing_fails():
     module = load_script()
     lines, passed = module.final_summary([], 100.0)
     assert not passed
-    assert lines == ['no messages received']
+    assert lines == ["no messages received"]
 
 
 def test_write_results_makes_the_csv_and_the_summary(tmp_path):
     """delays.csv has a header and one line per message, summary.txt the lines given."""
     module = load_script()
-    module.write_results(str(tmp_path), [(0.0, 4.0), (0.02, 5.5)], ['3 msgs', 'PASS'])
-    assert (tmp_path / 'delays.csv').read_text() == 'seconds,delay_ms\n0.000,4.000\n0.020,5.500\n'
-    assert (tmp_path / 'summary.txt').read_text() == '3 msgs\nPASS\n'
+    module.write_results(str(tmp_path), [(0.0, 4.0), (0.02, 5.5)], ["3 msgs", "PASS"])
+    assert (
+        tmp_path / "delays.csv"
+    ).read_text() == "seconds,delay_ms\n0.000,4.000\n0.020,5.500\n"
+    assert (tmp_path / "summary.txt").read_text() == "3 msgs\nPASS\n"
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def ros():
     """Bring rclpy up for the node tests of this module, and down at the end."""
     rclpy.init()
@@ -130,7 +135,9 @@ def test_node_measures_how_old_each_message_is(ros):
         node.on_message(stamped(now_ns - 5 * module.NS_PER_MS))
 
         assert len(node.delays_ms) == 1
-        assert 5.0 <= node.delays_ms[0] < 1000.0  # at least 5 ms, plus the time this test took
+        assert (
+            5.0 <= node.delays_ms[0] < 1000.0
+        )  # at least 5 ms, plus the time this test took
         assert len(node.samples) == 1
         assert node.samples[0][1] == node.delays_ms[0]
         assert node.samples[0][0] >= 0.0

@@ -34,13 +34,16 @@ import importlib.util
 import os
 import sys
 
-SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      'scripts', 'joint_states_rate.py')
+SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scripts",
+    "joint_states_rate.py",
+)
 
 
 def load_script():
     """Import the script as a module, without running its main()."""
-    spec = importlib.util.spec_from_file_location('joint_states_rate', SCRIPT)
+    spec = importlib.util.spec_from_file_location("joint_states_rate", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -49,14 +52,15 @@ def load_script():
 def test_main_runs_for_the_duration_and_writes_the_files(tmp_path, monkeypatch, capsys):
     """Check main() with --duration and --out: returns 0, reports no poses, writes both files."""
     rate = load_script()
-    out = tmp_path / 'run'
-    monkeypatch.setattr(sys, 'argv', ['joint_states_rate.py', '--duration', '0.3',
-                                      '--out', str(out)])
+    out = tmp_path / "run"
+    monkeypatch.setattr(
+        sys, "argv", ["joint_states_rate.py", "--duration", "0.3", "--out", str(out)]
+    )
 
     assert rate.main() == 0
 
     printed = capsys.readouterr().out
-    assert 'no new poses received' in printed
-    assert f'written to {out}/intervals.csv and summary.txt' in printed
-    assert (out / 'summary.txt').read_text() == 'no new poses received\n'
-    assert (out / 'intervals.csv').read_text() == 'seconds,interval_ms\n'
+    assert "no new poses received" in printed
+    assert f"written to {out}/intervals.csv and summary.txt" in printed
+    assert (out / "summary.txt").read_text() == "no new poses received\n"
+    assert (out / "intervals.csv").read_text() == "seconds,interval_ms\n"

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2026 Positronic
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -33,24 +35,27 @@
 import importlib.util
 import os
 
+import pytest
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
-import pytest
 
-LAUNCH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch')
+LAUNCH_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launch"
+)
 
 
 def describe(name):
     """Return the LaunchDescription of launch/<name>, without launching anything."""
-    spec = importlib.util.spec_from_file_location(name.replace('.', '_'),
-                                                  os.path.join(LAUNCH_DIR, name))
+    spec = importlib.util.spec_from_file_location(
+        name.replace(".", "_"), os.path.join(LAUNCH_DIR, name)
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.generate_launch_description()
 
 
-@pytest.mark.parametrize('name', ['driver.launch.py', 'supervised.launch.py'])
+@pytest.mark.parametrize("name", ["driver.launch.py", "supervised.launch.py"])
 def test_launch_file_builds_its_description(name):
     """Check that the file imports and returns a LaunchDescription."""
     assert isinstance(describe(name), LaunchDescription)
@@ -58,19 +63,25 @@ def test_launch_file_builds_its_description(name):
 
 def test_driver_starts_active_unless_asked():
     """Check that start_inactive exists and defaults to false: the launch is as it was."""
-    arguments = {entity.name: entity for entity in describe('driver.launch.py').entities
-                 if isinstance(entity, DeclareLaunchArgument)}
-    assert 'start_inactive' in arguments
-    default = ''.join(part.text for part in arguments['start_inactive'].default_value)
-    assert default == 'false'
+    arguments = {
+        entity.name: entity
+        for entity in describe("driver.launch.py").entities
+        if isinstance(entity, DeclareLaunchArgument)
+    }
+    assert "start_inactive" in arguments
+    default = "".join(part.text for part in arguments["start_inactive"].default_value)
+    assert default == "false"
 
 
 def test_driver_has_both_variants_of_what_start_inactive_changes():
     """Check the two controller managers and the two arm_controller spawners."""
-    nodes = [entity for entity in describe('driver.launch.py').entities
-             if isinstance(entity, Node)]
-    managers = [node for node in nodes if node.node_executable == 'ros2_control_node']
-    spawners = [node for node in nodes if node.node_executable == 'spawner']
+    nodes = [
+        entity
+        for entity in describe("driver.launch.py").entities
+        if isinstance(entity, Node)
+    ]
+    managers = [node for node in nodes if node.node_executable == "ros2_control_node"]
+    spawners = [node for node in nodes if node.node_executable == "spawner"]
     # One of each pair runs, chosen by its condition.
     assert len(managers) == 2
     assert all(node.condition is not None for node in managers)
@@ -80,8 +91,8 @@ def test_driver_has_both_variants_of_what_start_inactive_changes():
 
 def test_supervised_launch_starts_the_driver_and_the_supervisor():
     """Check that supervised.launch.py includes a launch and runs the lifecycle node."""
-    entities = describe('supervised.launch.py').entities
+    entities = describe("supervised.launch.py").entities
     assert any(isinstance(entity, IncludeLaunchDescription) for entity in entities)
     supervisors = [entity for entity in entities if isinstance(entity, LifecycleNode)]
     assert len(supervisors) == 1
-    assert supervisors[0].node_executable == 'safety_supervisor'
+    assert supervisors[0].node_executable == "safety_supervisor"
