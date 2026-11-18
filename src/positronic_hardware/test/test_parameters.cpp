@@ -173,11 +173,15 @@ TEST(Parameters, AFractionWhereAWholeNumberIsExpectedIsRefused)
   EXPECT_FALSE(accepted(Parameters{{"moving_period_ms", "40ms"}}));
 }
 
-// from_chars reads "nan" as a number: the range check is what refuses it.
+// from_chars reads "nan", "inf" and "-inf" as numbers: the range check is what refuses them.
 TEST(Parameters, NotANumberIsRefused)
 {
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", "nan"}}));
   EXPECT_FALSE(accepted(Parameters{{"velocity_filter_alpha", "nan"}}));
+  EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", "inf"}}));
+  EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", "-inf"}}));
+  EXPECT_FALSE(accepted(Parameters{{"velocity_filter_alpha", "inf"}}));
+  EXPECT_FALSE(accepted(Parameters{{"velocity_filter_alpha", "-inf"}}));
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_ms", "abc"}}));
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", ""}}));
 }
