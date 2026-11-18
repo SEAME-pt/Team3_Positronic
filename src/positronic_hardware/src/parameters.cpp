@@ -54,7 +54,7 @@ constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOU
 /// the field of the config it fills. A new numeric parameter is one row of NUMERIC_PARAMETERS.
 struct NumericParameter
 {
-  std::string_view name{};
+  std::string_view name;
   double min{0.0};
   double max{0.0};
   bool whole{true};
@@ -179,9 +179,9 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
     config.baud = value.value();
   }
   if (const std::string * alpha{find_parameter(parameters, "velocity_filter_alpha")}) {
-    // (0, 1]: an alpha of 0 would freeze the estimate. A NaN fails both comparisons.
+    // (0, 1]: an alpha of 0 would freeze the estimate.
     const double value{parse_number<double>(*alpha).value_or(0.0)};
-    if (!(value > 0.0 && value <= 1.0)) {
+    if (std::isnan(value) || value <= 0.0 || value > 1.0) {
       return "Parameter 'velocity_filter_alpha' is '" + *alpha + "'; use a number in (0, 1].";
     }
     config.velocity_filter_alpha = value;

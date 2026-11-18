@@ -56,7 +56,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   const ParsedParameters parsed{parse_hardware_parameters(Parameters{})};
   ASSERT_TRUE(parsed.config.has_value());
   EXPECT_TRUE(parsed.error.empty());
-  const HardwareConfig & config{parsed.config.value()};
+  const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   const HardwareConfig defaults{};
   EXPECT_EQ(config.backend, defaults.backend);
   EXPECT_EQ(config.port, defaults.port);
@@ -82,7 +82,7 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"tracking_error_deg", "6.5"},
       {"tracking_error_ms", "200"}})};
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
-  const HardwareConfig & config{parsed.config.value()};
+  const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   EXPECT_EQ(config.backend, Backend::FAKE);
   EXPECT_EQ(config.port, "/dev/null");
   EXPECT_EQ(config.baud, 115200);
