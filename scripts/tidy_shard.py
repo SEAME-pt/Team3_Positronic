@@ -26,15 +26,21 @@
 #   make tidy-strict), give each file its measured clang-tidy cost, and split them into N shards
 #   with the longest-first greedy rule so each shard costs about the same. Print the regex
 #   run-clang-tidy takes for one shard. A file with no measured cost gets the median, so a new
-#   file is still checked by exactly one shard.
+#   file is still checked by exactly one shard. With --run, run clang-tidy on the shard itself,
+#   longest file first on all CPUs (run-clang-tidy starts them in random order), print each file's
+#   wall time, and fail if any file fails.
 
 """Split the clang-tidy files into balanced shards (experiment E5, #144)."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import re
 import statistics
+import subprocess
 import sys
+import time
 
 # CPU seconds per file: clang-tidy-18, 4 files at a time, local container, 2026-11-18
 # (#144 notes, section 1). Only the ratios matter.
@@ -92,12 +98,35 @@ def split(files, shards):
     return buckets
 
 
+def run_one(path, db_dir):
+    """clang-tidy on one file with the flags of make tidy-strict, return its exit code."""
+    start = time.monotonic()
+    done = subprocess.run(
+        ['clang-tidy-18', f'-p={db_dir}', '-quiet', '--warnings-as-errors=*', path],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    seconds = time.monotonic() - start
+    print(f'{seconds:6.1f} s  rc {done.returncode}  {path}', flush=True)
+    if done.returncode:
+        print(done.stdout, flush=True)
+    return done.returncode
+
+
+def run_longest_first(paths, db_dir):
+    """Run the files in the given order (longest first) on all CPUs, 1 if any failed."""
+    start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+        codes = list(pool.map(lambda p: run_one(p, db_dir), paths))
+    print(f'clang-tidy wall time: {time.monotonic() - start:.0f} s, nproc {os.cpu_count()}')
+    return 1 if any(codes) else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', default='build/compile_commands.json')
     parser.add_argument('--filter', required=True, help='regex of make tidy-strict')
     parser.add_argument('--shards', type=int, default=3)
     parser.add_argument('--shard', type=int, required=True, help='0 to shards - 1')
+    parser.add_argument('--run', action='store_true', help='run clang-tidy, longest file first')
     args = parser.parse_args()
 
     with open(args.db) as db:
@@ -110,8 +139,11 @@ def main():
             print(f'  {cost(path):6.1f}  {path}', file=sys.stderr)
     print(f'all shards: {len(files)} files', file=sys.stderr)
     mine = buckets[args.shard][1]
+    if args.run:
+        return run_longest_first(mine, os.path.dirname(args.db) or '.')
     print('^(' + '|'.join(re.escape(p) for p in mine) + ')$')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
