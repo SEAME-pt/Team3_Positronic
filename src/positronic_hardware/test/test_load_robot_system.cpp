@@ -88,6 +88,11 @@
 //   again, activate clears it to 0. Then the arm the real way: it goes silent after the power
 //   off, so by the first read() after the cut the link has timed out too. The fault must still
 //   be 3, the cause, not 1, its consequence: read() checks the temperatures before the link.
+// Follow-up prompt (#103, part 2):
+//   The unfollowed command: a joint further than tracking_error_deg from the last target on the
+//   wire for longer than tracking_error_ms latches fault 2 while active. On the pseudo-terminal
+//   arm, which answers the same pose whatever it is told: 2 deg away is never a fault, 9 deg for
+//   300 ms is, 9 deg for 100 ms and then back is not. A bad parameter value is rejected.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -160,6 +165,7 @@ constexpr std::string_view FAULT_GPIO{
 constexpr double NO_FAULT{0.0};
 constexpr double LINK_TIMEOUT_FAULT{1.0};
 constexpr double OVERHEAT_FAULT{3.0};
+constexpr double TRACKING_ERROR_FAULT{2.0};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -350,7 +356,13 @@ public:
   /// True if a send_angles frame (FE FE 0F 22 ...) arrived since this arm started.
   bool received_send_angles()
   {
-    return count_frames(18, 0x22) > 0;
+    return received_sends() > 0;
+  }
+
+  /// How many send_angles frames arrived since this arm started.
+  std::size_t received_sends()
+  {
+    return count_frames(18, 0x22);
   }
 
   /// How many 5-byte request frames with command `id` arrived (stop 0x29, power_on 0x10).
@@ -571,11 +583,34 @@ protected:
   }
 
   /// Configures (if needed) and activates the component, as the controller manager does.
+  /// configure, as the controller manager does before an activate.
+  hardware_interface::return_type configure()
+  {
+    return go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE);
+  }
+
   hardware_interface::return_type activate()
   {
     return go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
       hardware_interface::lifecycle_state_names::ACTIVE);
+  }
+
+  /// Opens a pseudo-terminal and loads the plugin on its serial backend, port not opened yet
+  /// (that is configure). The controller side is in controller_, for a ReplyingArm to answer
+  /// on, or for a test to close. False when the terminal could not be opened or the plugin did
+  /// not load.
+  [[nodiscard]] bool load_on_pseudo_terminal()
+  {
+    std::array<char, 128> port{};
+    controller_ = open_pseudo_terminal(port);
+    if (controller_ < 0) {
+      return false;
+    }
+    load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+    return loaded_;
   }
 
   /// One controller-manager cycle of read(), 10 ms long.
@@ -598,6 +633,22 @@ protected:
   }
 
   /// Writes `value` to `joint`/position the way a controller does.
+  /// `n` control cycles, a write then a read, 30 ms apart like the Jetson's loop. False at
+  /// the first write or read that is not OK.
+  [[nodiscard]] bool cycles(int n)
+  {
+    for (int cycle{0}; cycle < n; ++cycle) {
+      if (
+        write_once() != hardware_interface::return_type::OK ||
+        read_once() != hardware_interface::return_type::OK)
+      {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    }
+    return true;
+  }
+
   bool command(const std::string & joint, double value)
   {
     auto loaned{resource_manager_->claim_command_interface(joint + "/position")};
@@ -607,6 +658,8 @@ protected:
   rclcpp::Clock clock_;
   std::unique_ptr<hardware_interface::ResourceManager> resource_manager_;
   bool loaded_{false};
+  /// The controller side of the pseudo-terminal of load_on_pseudo_terminal(), or -1.
+  int controller_{-1};
 };
 
 }  // namespace
@@ -768,11 +821,7 @@ TEST_F(LoadRobotSystem, InitRejectsASettleThatFillsTheTurn)
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
 {
   load(urdf_with(all_good_joints()));
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
 
   for (const auto & joint : JOINTS) {
     for (const std::string interface : {"position", "velocity"}) {
@@ -786,11 +835,7 @@ TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)
 TEST_F(LoadRobotSystem, ReadReportsTheFakeArmPose)
 {
   load(urdf_with(all_good_joints()));
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
 
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
@@ -964,21 +1009,13 @@ TEST_F(LoadRobotSystem, ConfigureFailsWhenTheSerialPortIsMissing)
 TEST_F(LoadRobotSystem, CleanupThenConfigureAgain)
 {
   load(urdf_with(all_good_joints()));
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED,
       hardware_interface::lifecycle_state_names::UNCONFIGURED),
     hardware_interface::return_type::OK);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
 
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   const auto position{state(JOINTS.at(1), "position")};
@@ -990,17 +1027,8 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmIsSilent)
 {
   // A pseudo-terminal stands in for the serial port: it opens and configures like one, but
   // nothing ever answers get_angles. No arm is needed.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
 
   // No reply yet: read() works but reports "unknown", not the placeholder pose of zeros.
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
@@ -1021,7 +1049,7 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmIsSilent)
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   resource_manager_.reset();  // closes the port before its pseudo-terminal goes away
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, DeactivateHoldsCommandsAndActivateResumesThem)
@@ -1038,11 +1066,7 @@ TEST_F(LoadRobotSystem, DeactivateHoldsCommandsAndActivateResumesThem)
   ASSERT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.25);
 
   // Deactivate: on_deactivate halts the arm (nothing to interrupt on the fake) and succeeds.
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
 
   // A controller still writing its command interface reaches nothing: the resource manager
@@ -1065,11 +1089,7 @@ TEST_F(LoadRobotSystem, DeactivateHoldsCommandsAndActivateResumesThem)
   EXPECT_DOUBLE_EQ(state(JOINTS.at(0), "position").value_or(std::nan("")), 0.5);
 
   // The rest of the lifecycle still works after a deactivate.
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED,
@@ -1083,17 +1103,8 @@ TEST_F(LoadRobotSystem, AFailedActivateLeavesTheComponentConfigurable)
   // Same silent pseudo-terminal: activate fails, and on_error must take the component back to
   // UNCONFIGURED, never FINALIZED (which needs a plugin reload), so a supervisor can configure
   // it again.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
@@ -1102,33 +1113,20 @@ TEST_F(LoadRobotSystem, AFailedActivateLeavesTheComponentConfigurable)
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 
   // on_error kept the backend, and with it the port: configure drops it before opening again.
-  EXPECT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  EXPECT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
 
   resource_manager_.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsConfigurable)
 {
   // A pseudo-terminal with an arm behind it that answers every request, so the component gets
   // its first reply and becomes ACTIVE like on the bench.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(
     go_to(
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
@@ -1143,7 +1141,7 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsCo
   // UNCONFIGURED, where a supervisor can configure it again. (The thread does not spin
   // meanwhile: a failed get_angles write skips the read and sleeps out the turn.)
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
   const auto start{std::chrono::steady_clock::now()};
   EXPECT_EQ(
     go_to(
@@ -1162,52 +1160,37 @@ TEST_F(LoadRobotSystem, ActivateRefusesAHotArm)
 {
   // Every servo at 57 degC: under the 60 degC cut, but within the 5 degC cool-down margin. The
   // servos are not powered on.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   arm->set_temperature(57);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
   EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, ActivateRefusesAnArmThatDoesNotReportItsTemperature)
 {
   // Firmware without get_servo_temps: the pose answers, the temperature never does. The
   // driver does not run without its over-temperature guard.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   arm->set_answer_temperatures(false);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
   EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
 {
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   const std::size_t before_heat{arm->received().size()};
@@ -1235,11 +1218,7 @@ TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
   // #35: the overheat is latched as fault 3. It survives the on_error: a configure publishes it
   // again for the supervisor. Only an activate clears it, and only a cool arm activates.
   arm->set_temperature(30);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
@@ -1247,21 +1226,16 @@ TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut)
 {
   // The real arm stops answering once its servos are off, so after the cut the link times out
   // too. Only the first fault is kept: read() must latch OVERHEAT, the cause, not LINK_TIMEOUT.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   arm->set_silent_after_power_off(true);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
@@ -1283,16 +1257,12 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
 
   // Both are true now: the arm was cut and the link timed out. The first read() reports the cut.
   EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
@@ -1344,13 +1314,8 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)
   // request is lost. on_deactivate must report ERROR after REQUEST_TIMEOUT (a stop nobody
   // confirmed is not a stop), on_error takes the component to UNCONFIGURED, the thread keeps
   // resending the stop meanwhile, and the component can be configured again.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
@@ -1371,16 +1336,12 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)
 
   // The arm acknowledges again: configure and activate work as on a fresh start.
   arm->set_ack_requests(true);
-  EXPECT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  EXPECT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_EQ(activate(), hardware_interface::return_type::OK);
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn)
@@ -1389,19 +1350,10 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn)
   // component goes to UNCONFIGURED through on_error, which asks for a stop, so a stop follows
   // the last power_on on the wire and no target ever leaves. Once the arm acknowledges again,
   // activate succeeds.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   arm->set_ack_requests(false);
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   const auto start{std::chrono::steady_clock::now()};
   EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
   const auto elapsed{std::chrono::steady_clock::now() - start};
@@ -1423,7 +1375,7 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn)
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsIt)
@@ -1432,20 +1384,11 @@ TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsI
   // The test sleeps because SerialArm reads the real clock; the exact 200 ms boundary is
   // tested without sleeps in test_link_watchdog.cpp.
   constexpr std::chrono::milliseconds PAST_THE_TIMEOUT{300};
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
   // The slowest ack seen on the bench (a power_on, 58 ms): activate must still succeed.
   arm->set_ack_delay(std::chrono::milliseconds{58});
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
@@ -1461,24 +1404,16 @@ TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsI
 
   // The arm answers again and a controller asks for a new J1. The fault stays latched and no
   // target reaches the wire, even though the link would carry it now.
-  arm = std::make_unique<ReplyingArm>(controller);
+  arm = std::make_unique<ReplyingArm>(controller_);
   const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
   ASSERT_TRUE(command(JOINTS.at(0), j1 + 0.1));
-  for (int cycle{0}; cycle < 10; ++cycle) {
-    ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
-    ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-    std::this_thread::sleep_for(std::chrono::milliseconds{30});
-  }
+  ASSERT_TRUE(cycles(10));
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
   EXPECT_TRUE(arm->received_anything());  // the driver kept asking for angles
   EXPECT_FALSE(arm->received_send_angles());
 
   // Only a deactivate and an activate clear it, and then targets go out again.
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
@@ -1493,31 +1428,18 @@ TEST_F(LoadRobotSystem, LinkTimeoutLatchesTheFaultHoldsTargetsAndActivateClearsI
 
   resource_manager_.reset();
   arm.reset();
-  ::close(controller);
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, ActivateRefusesASilentLink)
 {
   // has_sample() stays true after the first reply, so a link that died later must be caught
   // by on_activate itself, before power_on.
-  std::array<char, 128> port{};
-  const int controller{open_pseudo_terminal(port)};
-  ASSERT_GE(controller, 0);
-  auto arm{std::make_unique<ReplyingArm>(controller)};
-
-  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
-  ASSERT_TRUE(loaded_);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
-  ASSERT_EQ(
-    go_to(
-      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
-      hardware_interface::lifecycle_state_names::INACTIVE),
-    hardware_interface::return_type::OK);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
 
   arm.reset();
   std::this_thread::sleep_for(std::chrono::milliseconds{300});
@@ -1525,5 +1447,96 @@ TEST_F(LoadRobotSystem, ActivateRefusesASilentLink)
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   resource_manager_.reset();
-  ::close(controller);
+  ::close(controller_);
+}
+
+// #103 part 2. The pseudo-terminal arm answers the same recorded pose whatever it is told, so a
+// target N deg away stays N deg away for as long as it is commanded: the arm "does not follow".
+
+TEST_F(LoadRobotSystem, ATargetInsideTheTrackingThresholdIsNeverAFault)
+{
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  // 2 deg from the pose: inside the 8 deg default, for twice the 300 ms.
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 2.0 * DEG));
+  ASSERT_TRUE(cycles(20));
+  EXPECT_TRUE(arm->received_send_angles());
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, ATargetTheArmDoesNotFollowLatchesTheTrackingFault)
+{
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  // 9 deg from the pose, past the 8 deg default, for 600 ms: fault 2 after the 300 ms.
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 9.0 * DEG));
+  ASSERT_TRUE(cycles(20));
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), TRACKING_ERROR_FAULT);
+  // Reported like the link timeout: the component stays ACTIVE for the supervisor, the backend
+  // was asked to stop, and the stop went out after the last send.
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_GE(arm->received_requests(0x29), 1U);
+  const std::size_t sends_at_fault{arm->received_sends()};
+
+  // Latched: a new target does not clear it and does not go out.
+  ASSERT_TRUE(command(JOINTS.at(0), j1));
+  ASSERT_TRUE(cycles(10));
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), TRACKING_ERROR_FAULT);
+  EXPECT_EQ(arm->received_sends(), sends_at_fault);
+
+  // Only a deactivate and an activate clear it.
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, ATargetThatComesBackInsideBeforeTheTimeIsNoFault)
+{
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+
+  // 9 deg away for about 100 ms, then the target is the pose again: the clock never reaches
+  // 300 ms, and the next target is followed at once (the arm is already there).
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 9.0 * DEG));
+  ASSERT_TRUE(cycles(3));
+  ASSERT_TRUE(command(JOINTS.at(0), j1));
+  ASSERT_TRUE(cycles(20));
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, InitRejectsABadTrackingParameter)
+{
+  // Below the 1 deg floor: a value that would call every move a fault.
+  load(urdf_with(all_good_joints(), param("backend", "fake") + param("tracking_error_deg", "0.5")));
+  EXPECT_FALSE(loaded_);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
