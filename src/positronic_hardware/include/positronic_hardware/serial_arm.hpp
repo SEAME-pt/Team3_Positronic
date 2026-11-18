@@ -112,11 +112,12 @@ public:
   static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
 
   /// Wait for the arm's ack (`FE FE 03 <cmd> 01 FA`) of a stop or power_on. On the bench (16 Nov
-  /// 2026, 152 stops and 72 power_on) a stop is acknowledged in 37 to 45 ms at rest, once 86 ms
-  /// mid-move, a power_on in 58 to 60 ms. 80 ms covers the arm at rest plus the 2 ms read
-  /// backoff, and keeps a request turn under the 200 ms link watchdog (~130 ms of silence at
-  /// worst). No ack by then: the frame goes out again next turn (#103). That is what the one
-  /// 86 ms ack costs, a second stop one turn later.
+  /// 2026, 259 stops and 69 power_on) a stop is acknowledged in 37 to 41 ms when the arm is not
+  /// moving, up to 45 ms right after a send_angles, once 86 ms mid-move. A power_on takes 58 to
+  /// 60 ms. 80 ms covers all of that but the one 86 ms, plus the 2 ms read backoff, and keeps a
+  /// request turn under the 200 ms link watchdog (~130 ms of silence at worst). No ack by then:
+  /// the frame goes out again next turn (#103). That is what the 86 ms ack costs, a second stop
+  /// one turn later.
   static constexpr std::chrono::milliseconds ACK_TIMEOUT{80};
 
   // REQUEST_TIMEOUT (300 ms, from the contract) covers the worst case: a turn already running
