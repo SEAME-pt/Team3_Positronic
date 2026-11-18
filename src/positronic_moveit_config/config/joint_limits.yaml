@@ -1,10 +1,12 @@
-default_velocity_scaling_factor: 0.2
+# 0.3 for the first runs on the arm; raise it once the runs and #124 confirm the 0.26 limit.
+default_velocity_scaling_factor: 0.3
 default_acceleration_scaling_factor: 0.2
 
+# 0.26 rad/s (15°/s), measured in #33, may be lowered by #124.
 joint_limits:
   joint2_to_joint1: &default_limits
     has_velocity_limits: true
-    max_velocity: 1.0
+    max_velocity: 0.26
     has_acceleration_limits: true
     max_acceleration: 2.0
   joint3_to_joint2: *default_limits
@@ -12,6 +14,10 @@ joint_limits:
   joint5_to_joint4: *default_limits
   joint6_to_joint5: *default_limits
   joint6output_to_joint6: *default_limits
-  gripper_controller: *default_limits
-  gripper_base_to_gripper_left2: *default_limits
-  gripper_base_to_gripper_right2: *default_limits
+  gripper_controller: &gripper_limits
+    has_velocity_limits: true
+    max_velocity: 1.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  gripper_base_to_gripper_left2: *gripper_limits
+  gripper_base_to_gripper_right2: *gripper_limits
