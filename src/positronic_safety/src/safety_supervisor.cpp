@@ -95,7 +95,7 @@ SafetySupervisor::SafetySupervisor(const rclcpp::NodeOptions & options)
   // FAULT_GPIO and FAULT_STATE in positronic_hardware.hpp.
   declare_parameter<std::string>("fault_gpio", "driver");
   declare_parameter<std::string>("fault_interface", "fault_code");
-  // Measured on the lab Wi-Fi (docs/03_verification/heartbeat_link): the longest gap between
+  // Measured over the lab Wi-Fi (docs/03_verification/heartbeat_link): the longest gap between
   // two heartbeats was 157 ms in the campaign, and one of at least 204 ms with the real mission
   // node; 300 ms is about 1.5 times the latter. Assumes the mission node publishes at 25 Hz and
   // the Jetson's Wi-Fi power saving is off.
