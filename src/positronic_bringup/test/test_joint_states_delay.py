@@ -31,8 +31,8 @@ import importlib.util
 import os
 
 import pytest
-import rclpy
 from builtin_interfaces.msg import Time
+import rclpy
 from sensor_msgs.msg import JointState
 
 SCRIPT = os.path.join(

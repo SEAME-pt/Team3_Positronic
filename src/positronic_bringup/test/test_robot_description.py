@@ -53,8 +53,8 @@ from xml.etree import ElementTree
 
 import pytest
 import xacro
-import yaml
 from ament_index_python.packages import get_package_share_directory
+import yaml
 
 SUPERVISOR_CONFIG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

@@ -35,8 +35,8 @@
 import importlib.util
 import os
 
-import pytest
 from launch import LaunchDescription
+import pytest
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
 
