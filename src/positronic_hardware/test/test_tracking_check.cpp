@@ -29,6 +29,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 #include "positronic_hardware/arm_backend.hpp"
@@ -128,10 +129,19 @@ TEST(TrackingCheck, AnUnknownPoseDoesNotCount)
   for (int ms{0}; ms <= 1000; ms += 33) {
     EXPECT_FALSE(check.update(target, unknown, at(ms)).has_value()) << ms;
   }
+  // Infinity on either side is unknown too, and so is a NaN target.
+  JointPositions infinite{POSE};
+  infinite.at(0) = std::numeric_limits<double>::infinity();
+  JointPositions nan_target{target};
+  nan_target.at(0) = std::nan("");
+  for (int ms{2000}; ms <= 3000; ms += 33) {
+    EXPECT_FALSE(check.update(target, infinite, at(ms)).has_value()) << ms;
+    EXPECT_FALSE(check.update(nan_target, POSE, at(ms)).has_value()) << ms;
+  }
   // The pose arrives: the clock starts now, not at 0.
-  EXPECT_FALSE(check.update(target, POSE, at(1033)).has_value());
-  EXPECT_FALSE(check.update(target, POSE, at(1033 + 299)).has_value());
-  EXPECT_TRUE(check.update(target, POSE, at(1033 + 300)).has_value());
+  EXPECT_FALSE(check.update(target, POSE, at(4000)).has_value());
+  EXPECT_FALSE(check.update(target, POSE, at(4000 + 299)).has_value());
+  EXPECT_TRUE(check.update(target, POSE, at(4000 + 300)).has_value());
 }
 
 TEST(TrackingCheck, ResetForgetsEveryClock)

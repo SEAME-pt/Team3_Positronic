@@ -213,7 +213,6 @@ bool read_timing(
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
-constexpr double DEG_TO_RAD{1.0 / RAD_TO_DEG};
 
 /// Logs a refused check (#34) as "<what>: joint '<name>' = <rad> rad (<deg> deg), <fault>
 /// [<lower>, <upper>] rad.", the joint name and value the issue asks for.
@@ -472,7 +471,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
   tracking_ = TrackingCheck{TrackingLimits{
-      config_.tracking_error_deg * DEG_TO_RAD,
+      config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
   try {
     if (config_.backend == Backend::SERIAL) {

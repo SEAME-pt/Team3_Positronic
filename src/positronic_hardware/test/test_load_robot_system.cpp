@@ -582,7 +582,6 @@ protected:
     return resource_manager_->set_component_state(std::string{HARDWARE_NAME}, target);
   }
 
-  /// Configures (if needed) and activates the component, as the controller manager does.
   /// configure, as the controller manager does before an activate.
   hardware_interface::return_type configure()
   {
@@ -591,6 +590,7 @@ protected:
       hardware_interface::lifecycle_state_names::INACTIVE);
   }
 
+  /// Configures (if needed) and activates the component, as the controller manager does.
   hardware_interface::return_type activate()
   {
     return go_to(
@@ -632,7 +632,6 @@ protected:
     return resource_manager_->write(clock_.now(), rclcpp::Duration::from_seconds(0.01)).result;
   }
 
-  /// Writes `value` to `joint`/position the way a controller does.
   /// `n` control cycles, a write then a read, 30 ms apart like the Jetson's loop. False at
   /// the first write or read that is not OK.
   [[nodiscard]] bool cycles(int n)
@@ -649,6 +648,7 @@ protected:
     return true;
   }
 
+  /// Writes `value` to `joint`/position the way a controller does.
   bool command(const std::string & joint, double value)
   {
     auto loaned{resource_manager_->claim_command_interface(joint + "/position")};
@@ -1535,8 +1535,15 @@ TEST_F(LoadRobotSystem, ATargetThatComesBackInsideBeforeTheTimeIsNoFault)
 
 TEST_F(LoadRobotSystem, InitRejectsABadTrackingParameter)
 {
-  // Below the 1 deg floor: a value that would call every move a fault.
-  load(urdf_with(all_good_joints(), param("backend", "fake") + param("tracking_error_deg", "0.5")));
-  EXPECT_FALSE(loaded_);
-  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  // Below the 1 deg floor would call every move a fault; the others are the other edges of the
+  // two ranges, a NaN and a fraction where an integer is expected.
+  for (const auto & [name, value] :
+    {std::pair{"tracking_error_deg", "0.5"}, std::pair{"tracking_error_deg", "45.5"},
+      std::pair{"tracking_error_deg", "nan"}, std::pair{"tracking_error_ms", "49"},
+      std::pair{"tracking_error_ms", "5001"}, std::pair{"tracking_error_ms", "300.5"}})
+  {
+    load(urdf_with(all_good_joints(), param("backend", "fake") + param(name, value)));
+    EXPECT_FALSE(loaded_) << name << "=" << value;
+    EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) << name;
+  }
 }
