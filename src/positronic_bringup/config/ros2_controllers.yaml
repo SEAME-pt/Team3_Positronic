@@ -28,8 +28,8 @@ arm_controller:
     # Position only: the arm firmware gives no velocity (get_servo_speeds would cost a second serial read).
     state_interfaces:
       - position
-    # Tolerances (#33). The constrains in this file are copied from the jetson_controllers.yaml file
-    # Which was verified by issue #33.
+    # Tolerances (#33). The constraints below are copied from jetson_controllers.yaml,
+    # which was verified by issue #33.
     constraints:
       goal_time: 1.0
       joint2_to_joint1:

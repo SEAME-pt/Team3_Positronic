@@ -41,11 +41,21 @@ import os
 
 import yaml
 
-CONFIG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config'
-)
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config')
 CONFIG = os.path.join(CONFIG_DIR, 'jetson_controllers.yaml')
 SUPERVISOR_CONFIG = os.path.join(CONFIG_DIR, 'safety_supervisor.yaml')
+ROS2_CONTROLLERS = os.path.join(CONFIG_DIR, 'ros2_controllers.yaml')
+
+
+def test_gazebo_jtc_has_the_jetson_tolerances_and_rate():
+    """Check that Gazebo's arm_controller checks the same tolerances at the same rate as the Jetson (#33)."""
+    with open(ROS2_CONTROLLERS) as file:
+        gazebo = yaml.safe_load(file)
+    jetson = load_config()
+    assert (gazebo['arm_controller']['ros__parameters']['constraints']
+            == jetson['arm_controller']['ros__parameters']['constraints'])
+    assert (gazebo['controller_manager']['ros__parameters']['update_rate']
+            == jetson['controller_manager']['ros__parameters']['update_rate'])
 
 
 def load_config():
