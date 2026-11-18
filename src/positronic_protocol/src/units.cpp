@@ -60,7 +60,6 @@ double to_radians(CentiDegrees value) noexcept
 std::optional<JointAngles> to_centidegrees(const JointRadians & radians) noexcept
 {
   JointAngles angles{};
-  // THROWAWAY (#144 test): a one-file change in one package.
   bool ok{true};
   std::transform(radians.begin(), radians.end(), angles.begin(), [&ok](double joint) {
       const std::optional<CentiDegrees> converted{to_centidegrees(joint)};
