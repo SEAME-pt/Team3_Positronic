@@ -35,8 +35,11 @@ import pytest
 import rclpy
 from sensor_msgs.msg import JointState
 
-SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      'scripts', 'joint_states_rate.py')
+SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'scripts',
+    'joint_states_rate.py',
+)
 
 
 def load_script():
@@ -66,8 +69,9 @@ def test_final_summary_lists_count_min_median_p90_and_max():
     samples = [(0.1, 10.0), (0.2, 66.0), (0.3, 200.0)]
     lines = rate.final_summary(samples)
     assert lines[0] == '3 new poses in 0 s'
-    assert lines[1] == ('interval min 10.0 ms  median 66.0 ms  p90 200.0 ms'
-                        '  max 200.0 ms at 0.3 s')
+    assert lines[1] == (
+        'interval min 10.0 ms  median 66.0 ms  p90 200.0 ms' '  max 200.0 ms at 0.3 s'
+    )
 
 
 def test_final_summary_says_so_without_samples():
@@ -80,10 +84,12 @@ def test_write_results_writes_the_csv_and_the_summary(tmp_path):
     """Check both files, in a folder that does not exist yet."""
     rate = load_script()
     out = tmp_path / 'run'
-    rate.write_results(str(out), [(0.1, 10.0), (0.25, 66.0)], ['first line', 'second line'])
-    assert (out / 'intervals.csv').read_text() == ('seconds,interval_ms\n'
-                                                   '0.100,10.000\n'
-                                                   '0.250,66.000\n')
+    rate.write_results(
+        str(out), [(0.1, 10.0), (0.25, 66.0)], ['first line', 'second line']
+    )
+    assert (out / 'intervals.csv').read_text() == (
+        'seconds,interval_ms\n' '0.100,10.000\n' '0.250,66.000\n'
+    )
     assert (out / 'summary.txt').read_text() == 'first line\nsecond line\n'
 
 

@@ -1,0 +1,182 @@
+# AI-generated (Claude, Anthropic)
+
+"""Summarise each extracted bag: plan, JTC status, tracking."""
+
+import csv
+import itertools
+import json
+import math
+import os
+import sys
+
+import yaml
+
+ROOT = sys.argv[1]
+JOINTS = ["j1", "j2", "j3", "j4", "j5", "j6"]
+
+
+def tfs(d):
+    return d["sec"] + d["nanosec"] * 1e-9
+
+
+def load_plans(path):
+    with open(path) as f:
+        docs = [d for d in yaml.safe_load_all(f) if d]
+    plans = []
+    for d in docs:
+        jt = d["trajectory"][0]["joint_trajectory"]
+        raw = jt["points"]
+        pts = [p for p in raw if isinstance(p, dict)]
+        truncated = len(pts) != len(raw)
+        T = tfs(pts[-1]["time_from_start"]) if pts else 0.0
+        if not pts:
+            continue
+        vmax = [max(abs(p["velocities"][i]) for p in pts) for i in range(6)]
+        plans.append(
+            {
+                "T": T,
+                "n": len(pts),
+                "start": pts[0]["positions"],
+                "truncated": truncated,
+                "end": pts[-1]["positions"],
+                "vmax": vmax,
+            }
+        )
+    return plans
+
+
+def load_status(path):
+    with open(path) as f:
+        docs = [d for d in yaml.safe_load_all(f) if d]
+    goals = {}
+    order = []
+    for d in docs:
+        for s in d.get("status_list") or []:
+            gid = tuple(s["goal_info"]["goal_id"]["uuid"])
+            if gid not in goals:
+                order.append(gid)
+                goals[gid] = []
+            goals[gid].append((tfs(s["goal_info"]["stamp"]), s["status"]))
+    return [
+        {
+            "stamp": goals[g][0][0],
+            "final": goals[g][-1][1],
+            "seq": [x[1] for x in goals[g]],
+        }
+        for g in order
+    ]
+
+
+def load_state(path):
+    rows = []
+    with open(path) as f:
+        for r in csv.reader(f):
+            if len(r) != 73:
+                continue
+            t = int(r[0]) + int(r[1]) * 1e-9
+            ref = [float(x) for x in r[9:15]]
+            fb = [float(x) for x in r[30:36]]
+            err = [float(x) for x in r[41:47]]
+            rows.append((t, ref, fb, err))
+    return rows
+
+
+def segments(rows, eps=1e-6):
+    """Split into motion segments: spans where the reference changes."""
+    segs = []
+    cur = None
+    for i in range(1, len(rows)):
+        moving = any(abs(a - b) > eps for a, b in zip(rows[i][1], rows[i - 1][1]))
+        if moving:
+            if cur is None:
+                cur = [i - 1, i]
+            else:
+                cur[1] = i
+        elif cur is not None and rows[i][0] - rows[cur[1]][0] > 1.0:
+            segs.append(tuple(cur))
+            cur = None
+    if cur is not None:
+        segs.append(tuple(cur))
+    return segs
+
+
+def analyse(bag):
+    d = os.path.join(ROOT, bag)
+    plans = load_plans(os.path.join(d, "plan.yaml"))
+    status = load_status(os.path.join(d, "jtc_status.txt"))
+    rows = load_state(os.path.join(d, "controller_state.csv"))
+    ts = [r[0] for r in rows]
+    dts = [b - a for a, b in itertools.pairwise(ts)]
+    med_dt = sorted(dts)[len(dts) // 2] if dts else 0
+    segs = segments(rows)
+    seg_out = []
+    for a, b in segs:
+        # extend to 3 s after the reference stops, to see settling
+        end_t = rows[b][0]
+        c = b
+        while c + 1 < len(rows) and rows[c + 1][0] <= end_t + 3.0:
+            c += 1
+        peak = [max(abs(rows[k][3][j]) for k in range(a, b + 1)) for j in range(6)]
+        peak_j = max(range(6), key=lambda j: peak[j])
+        # time of the peak
+        k_peak = max(range(a, b + 1), key=lambda k: abs(rows[k][3][peak_j]))
+        final = [abs(x) for x in rows[c][3]]
+        gaps = [rows[k + 1][0] - rows[k][0] for k in range(a, c)]
+        seg_out.append(
+            {
+                "t0": rows[a][0],
+                "t1": rows[b][0],
+                "dur": rows[b][0] - rows[a][0],
+                "peak": peak,
+                "peak_joint": JOINTS[peak_j],
+                "peak_at": (rows[k_peak][0] - rows[a][0]),
+                "final": final,
+                "max_gap": max(gaps) if gaps else 0,
+                "gaps_100": sum(1 for g in gaps if g > 0.1),
+                "gaps_200": sum(1 for g in gaps if g > 0.2),
+                "end_ref": rows[b][1],
+                "end_fb": rows[c][2],
+            }
+        )
+    return {
+        "bag": bag,
+        "plans": plans,
+        "status": status,
+        "n_rows": len(rows),
+        "med_dt": med_dt,
+        "max_dt": max(dts) if dts else 0,
+        "segs": seg_out,
+    }
+
+
+bags = sorted(os.listdir(ROOT))
+out = [analyse(b) for b in bags]
+with open(sys.argv[2], "w") as f:
+    json.dump(out, f, indent=1)
+
+deg = 180 / math.pi
+for r in out:
+    print("=" * 70)
+    print(
+        r["bag"],
+        "rows",
+        r["n_rows"],
+        f"median dt {r['med_dt']:.3f} max dt {r['max_dt']:.3f}",
+    )
+    for i, p in enumerate(r["plans"]):
+        vmax = max(p["vmax"])
+        joint = JOINTS[p["vmax"].index(vmax)]
+        end_deg = [round(x * deg, 1) for x in p["end"]]
+        print(
+            f"  plan {i}: trunc={p['truncated']} T={p['T']:.1f}s pts={p['n']} "
+            f"vmax={vmax:.4f} rad/s ({joint}) end(deg)={end_deg}"
+        )
+    for s in r["status"]:
+        print("  goal status seq", s["seq"], "final", s["final"])
+    for s in r["segs"]:
+        peak = [round(x, 4) for x in s["peak"]]
+        print(
+            f"  seg dur {s['dur']:.1f}s peak {peak} max={max(s['peak']):.4f} "
+            f"({s['peak_joint']} at {s['peak_at']:.1f}s) final max {max(s['final']):.4f}  "
+            f"maxgap {s['max_gap']:.3f} gaps>0.1:{s['gaps_100']} >0.2:{s['gaps_200']}"
+        )
