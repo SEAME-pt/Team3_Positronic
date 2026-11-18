@@ -262,7 +262,7 @@ Date, status (proposed / accepted / superseded by NNNN), deciders.
 
 ### 2.12 What CI runs
 
-[`ci.yml`](../.github/workflows/ci.yml) runs on every PR and every push to `dev` and `main`, as parallel jobs. The wall time is the longest job, about 4 to 5 minutes, not the sum.
+[`ci.yml`](../.github/workflows/ci.yml) runs on every PR and every push to `dev` and `main`, as parallel jobs. The wall time is the longest job, not the sum: about 4 minutes when a PR changes a few files, up to about 7 when clang-tidy checks everything.
 
 | Job | What | Fails the PR |
 |---|---|---|
