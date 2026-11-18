@@ -153,7 +153,7 @@ bool read_milliseconds(
   const std::optional<int> value{parse_number<int>(*text)};
   if (!value.has_value() || *value < min || *value > max) {
     RCLCPP_ERROR(
-      logger, "Parameter '%s' is '%s'; use a whole number in [%d, %d].", name.c_str(),
+      logger, "Parameter '%s' is '%s'; use a whole number within [%d, %d].", name.c_str(),
       text->c_str(), min, max);
     return false;
   }
