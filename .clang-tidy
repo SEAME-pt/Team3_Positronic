@@ -1,4 +1,3 @@
-# #144 experiment E4: a throwaway comment, must trigger the full clang-tidy run. Reverted next.
 ---
 Checks: >
   -*,
