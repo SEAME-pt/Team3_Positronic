@@ -21,7 +21,11 @@ jobs:
       # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
       RUN_DEV: docker compose run --rm -T dev
     steps:
+      # fetch-depth 2: on a PR, HEAD is GitHub's merge commit and HEAD^1 the tip of the base
+      # branch, so `git diff HEAD^1 HEAD` is what the PR changes (tidy on changed TUs below).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Read the runner's uid and gid
         id: ids
@@ -102,9 +106,52 @@ jobs:
         run: cat coverage/summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No coverage report"
 
       # clang-tidy on the strict packages (TIDY_STRICT_FILES in the Makefile): any warning fails.
-      # Needs the Build step above, which writes build/compile_commands.json
+      # Needs the Build step above: build/compile_commands.json and the depfiles.
+      # #144 experiment E4: on a PR, only the TUs the PR can affect (scripts/tidy_changed.py:
+      # changed files, headers through the depfiles, CMakeLists/package.xml -> whole package,
+      # .clang-tidy, docker/Dockerfile or TIDY_STRICT_FILES -> everything). Full run otherwise.
       - name: Static analysis (clang-tidy)
-        run: make RUN="$RUN_DEV" tidy-strict
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "Event $EVENT: full run"
+            make RUN="$RUN_DEV" tidy-strict
+            exit
+          fi
+          python3 scripts/tidy_changed.py --base HEAD^1 --head HEAD --format regex \
+            --summary "$GITHUB_STEP_SUMMARY" > tidy_selection.txt
+          selection=$(cat tidy_selection.txt)
+          if [ "$selection" = ALL ]; then
+            make RUN="$RUN_DEV" tidy-strict
+          elif [ -z "$selection" ]; then
+            echo "No strict TU affected: nothing to check"
+          else
+            start=$(date +%s)
+            $RUN_DEV bash -c 'run-clang-tidy -quiet -p build -warnings-as-errors="*" "$1"' \
+              _ "$selection"
+            echo "clang-tidy took $(( $(date +%s) - start )) s"
+          fi
+
+      # #144 experiment E4 only, not for dev: the same selection from a plain grep of the
+      # depfiles (only direct file matches, no package or full-run rules), to compare.
+      - name: "E4: cross-check the selection with the depfiles"
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          strict=$(sed -n 's/^TIDY_STRICT_FILES *:= *//p' Makefile)
+          for f in $(git diff --name-only --no-renames HEAD^1 HEAD); do
+            grep -rlE --include='*.o.d' "(^| )/ws/$f( |$)" build || true
+          done | while read -r d; do
+            tr -s ' \\' '\n\n' < "$d" | grep -v '^$' | sed -n 2p
+          done | grep -E "$strict" | sort -u > tidy_grep.txt || true
+          python3 scripts/tidy_changed.py --base HEAD^1 --head HEAD 2>/dev/null | sort > tidy_script.txt
+          echo "grep: $(wc -l < tidy_grep.txt) TUs, script: $(wc -l < tidy_script.txt)"
+          diff tidy_grep.txt tidy_script.txt && echo "Same TU list"
+          {
+            echo "### E4 cross-check: grep of the depfiles vs scripts/tidy_changed.py"
+            echo; echo '```'; diff tidy_grep.txt tidy_script.txt && echo "Same TU list"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
       # layers with the image above, it costs little. No cache-to: writing to the same scope
