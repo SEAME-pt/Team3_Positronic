@@ -24,14 +24,17 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
 #include "positronic_hardware/serial_transport.hpp"
+#include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_protocol/types.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 
@@ -54,6 +57,25 @@ struct SerialTiming
   /// the arm with turns just above the settle: 30 ms gave 0 stalls in 4464 requests, 25 ms
   /// gave 43, 20 ms gave 110 and once froze the arm for 20 s.
   std::chrono::milliseconds send_settle{30};
+};
+
+/// How the serial thread watches the servo temperatures. The plugin sets the limit from the URDF
+/// (servo_temp_limit_c); the times are fixed, and only the tests shorten them.
+struct TemperatureGuard
+{
+  /// A servo at or above this, READINGS_TO_TRIP readings in a row, cuts the arm. degC.
+  int limit_c{SERVO_TEMP_LIMIT_C};
+
+  /// How often the thread asks for the temperatures (get_servo_temps), on a turn that sends no
+  /// target. A temperature climbs over minutes; once a second costs ~1 % of the line.
+  std::chrono::milliseconds period{1000};
+
+  /// A reading older than this is taken even on a turn that sends a target, before the send,
+  /// so a long motion cannot hide a hot servo. 47 of the 50 ms of a moving turn.
+  std::chrono::milliseconds max_age{3000};
+
+  /// No plausible reading for this long and temperature_stale() turns true: the guard is blind.
+  std::chrono::milliseconds stale_timeout{10000};
 };
 
 /// The real arm behind the ArmBackend interface (#22).
@@ -89,16 +111,29 @@ public:
   /// reads per second on the Jetson.
   static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
 
-  // REQUEST_TIMEOUT, from the contract, covers the worst case with a wide margin: a silent arm
-  // holds a turn for REPLY_TIMEOUT (~50 ms, the reads return at once), and the request may land
-  // just after a turn has started, so the frame is out within ~100 ms.
+  /// Wait for the arm's ack (`FE FE 03 <cmd> 01 FA`) of a stop or power_on. On the bench the
+  /// ack comes in 1.8 ms, 3.6 ms at p99, once 58 ms. 80 ms covers that plus the 2 ms read
+  /// backoff, and keeps a request turn under the 200 ms link watchdog (~130 ms of silence at
+  /// worst). No ack by then: the frame goes out again next turn (#103).
+  static constexpr std::chrono::milliseconds ACK_TIMEOUT{80};
+
+  // REQUEST_TIMEOUT (300 ms, from the contract) covers the worst case: a turn already running
+  // with a late arm (~50 ms for get_angles, ~70 ms when its temperature request goes unanswered
+  // too), its send and settle (30 ms), then the ack (up to 80 ms), so an accepted request is
+  // acknowledged within ~190 ms, and one lost frame still fits a retry. No temperature request
+  // is written while a stop or power_on is pending.
+
+  /// How long a temperature request waits for its reply, like REPLY_TIMEOUT for get_angles.
+  static constexpr std::chrono::milliseconds TEMPERATURE_REPLY_TIMEOUT{50};
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
-  SerialArm(const std::string & port, int baud_rate, Timing timing = {});
+  SerialArm(
+    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {});
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
-  explicit SerialArm(std::unique_ptr<SerialTransport> transport, Timing timing = {});
+  explicit SerialArm(
+    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {});
 
   ~SerialArm() override;
 
@@ -119,8 +154,9 @@ public:
   /// True once the thread has decoded a first reply from the arm.
   [[nodiscard]] bool has_sample() const override;
 
-  /// Holds every target, then asks the thread to send a stop at the start of its next turn and
-  /// waits for it, up to REQUEST_TIMEOUT.
+  /// Holds every target, then has the thread send a stop at its next turn and waits for the
+  /// arm's ack, up to REQUEST_TIMEOUT. The thread resends the stop every turn until the ack
+  /// comes: false means no ack within the deadline, and the stop still pending (#103).
   [[nodiscard]] bool halt() override;
 
   /// halt() without the wait: holds every target and leaves the stop for the start of the
@@ -131,11 +167,24 @@ public:
   /// LinkWatchdog::DEFAULT_TIMEOUT. One atomic load, safe from the control loop.
   [[nodiscard]] bool link_timed_out() const override;
 
-  /// Drops the target held since halt(), then asks the thread to send a power_on at the start
-  /// of its next turn and waits for it, up to REQUEST_TIMEOUT. The thread releases the hold in
-  /// the turn that writes the frame, so targets go out again only once the power on is on the
-  /// wire. If the frame never made it, the hold stays.
+  /// Drops the target held since halt(), then has the thread send a power_on at its next turn
+  /// and waits for the arm's ack, up to REQUEST_TIMEOUT. The hold ends in the turn the ack
+  /// comes, so no target goes out before the power on is confirmed. Without the ack the hold
+  /// stays. False also when a request_halt() landed during the wait: the hold is back on, the
+  /// power_on is dropped, and the arm must not be treated as live (#103). After an overheat
+  /// cut it returns false at once and sends nothing: the servos stay off.
   [[nodiscard]] bool power_on() override;
+
+  /// The newest plausible reading of get_servo_temps, or nullopt before the first one.
+  [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override;
+
+  /// Set by the thread when it cut the arm: stop, then power off, sent by the thread itself in
+  /// the turn that completed the trip. The power off goes out again every guard period after
+  /// that, in case the arm dropped it or was powered on again without this port.
+  [[nodiscard]] std::optional<Overheat> overheat() const override;
+
+  /// True when no plausible temperature has arrived for TemperatureGuard::stale_timeout.
+  [[nodiscard]] bool temperature_stale() const override;
 
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -147,9 +196,28 @@ private:
   };
   /// The stop or power_on frame for `request`, or nullopt for NONE.
   static std::optional<positronic_protocol::Frame> encode_request(Request request);
-  /// Sends the pending request, if any, at the start of a turn, and applies what it means for
-  /// the thread: a stop clears `last_sent`, a power on ends the hold.
+  /// Sends the pending request, if any, at the start of a turn, waits for its ack, and applies
+  /// what it means for the thread: a stop clears `last_sent`, a power on ends the hold. No ack
+  /// leaves the request pending for the next turn.
   void send_pending_request(std::optional<JointPositions> & last_sent);
+
+  /// What a Scanner found in the bytes read so far: `found` ends the read, `consumed` is how
+  /// many bytes from the front are noise the scanner has ruled out and the loop may drop.
+  struct ScanResult
+  {
+    bool found{false};
+    std::size_t consumed{0};
+  };
+  using Scanner = std::function<ScanResult(positronic_protocol::ByteView)>;
+
+  /// Reads the port into a local buffer until `scan` reports found or `deadline` passes, with
+  /// EMPTY_READ_BACKOFF between empty reads. Serial thread only. Serves the ack today, and any
+  /// other frame to wait for later (the Atom's sync-write after a send_angles). True when found.
+  bool read_until(Clock::time_point deadline, const Scanner & scan);
+
+  /// read_until() for the arm's ack of `command`, with ACK_TIMEOUT from now. Bytes that are not
+  /// the ack (servo-bus echo, a late pose) are dropped. True when the ack came with status 1.
+  bool await_ack(positronic_protocol::CommandId command);
 
   void poll_loop();
 
@@ -158,8 +226,30 @@ private:
 
   bool request_and_wait(Request request);
 
+  /// True once the thread has cut the arm for an overheat.
+  [[nodiscard]] bool overheated() const;
+
+  /// Writes a get_servo_temps request and reads until its reply completes or
+  /// TEMPERATURE_REPLY_TIMEOUT passes. Only when the arm's input is free: after the get_angles
+  /// reply of a turn, with nothing else on the wire.
+  std::optional<ServoTemperatures> ask_temperatures();
+
+  /// The guard's part of a turn whose get_angles was answered: asks for the temperatures when
+  /// they are due and allowed (see poll_loop), publishes a plausible reading, and cuts the arm
+  /// when the detector trips. `new_target` says whether this turn is about to send one.
+  void watch_temperatures(bool new_target, std::optional<JointPositions> & last_sent);
+
+  /// After a cut, sends the power off again once a period, at the start of a turn.
+  void repeat_power_off(Clock::time_point turn_start);
+
+  /// The cut: holds every target, sends a stop and, after the settle, a power off. Then records
+  /// `trip`, so the plugin sees it with the arm already cut. True when the power off was
+  /// written.
+  bool cut_power(const Overheat & trip, std::optional<JointPositions> & last_sent);
+
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
+  const TemperatureGuard guard_;
   // Time since the last valid reply (#35). The poll thread feeds it; the plugin asks it.
   LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
@@ -180,6 +270,21 @@ private:
   // it. halt() sets it before request_, so the turn that sends the stop already sees the hold;
   // the thread clears it in the turn that sends the power on, so no target gets ahead of that.
   std::atomic<bool> halted_{false};
+  // The newest plausible temperatures. Written by the poll thread once a period, read by the
+  // plugin (on_activate). nullopt until the first plausible reading.
+  mutable realtime_tools::RealtimeBuffer<std::optional<ServoTemperatures>> temperatures_{
+    std::nullopt};
+  // Time since the last plausible temperature, the way watchdog_ counts the last pose.
+  LinkWatchdog temperature_watchdog_;
+  // The overheat cut: -1 until the thread cuts the arm, then the joint (0 = J1). The reading is
+  // stored first, so whoever sees the joint also finds its value.
+  std::atomic<int> overheat_joint_{-1};
+  std::atomic<int> overheat_celsius_{0};
+  // The guard's bookkeeping, used by the poll thread only.
+  OverheatDetector detector_;
+  Clock::time_point last_temperature_ask_;
+  Clock::time_point next_power_off_;
+  std::vector<std::uint8_t> temperature_buffer_;
   std::thread thread_;
 };
 

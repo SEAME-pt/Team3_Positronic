@@ -173,8 +173,7 @@ private:
   void on_switch_answer(std::uint64_t ticket, const SwitchController::Response & response);
 
   std::optional<bool> cancel_goals(std::uint64_t ticket);
-  void on_cancel_answer(
-    std::uint64_t ticket, const TrajectoryClient::CancelResponse & response);
+  void on_cancel_answer(std::uint64_t ticket, const TrajectoryClient::CancelResponse & response);
 
   void publish_status() const;
 

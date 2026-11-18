@@ -10,12 +10,19 @@ command to the first motion the arm reports. Three runs, one tool each way:
 | Load test: CPU saturated during a 2 minute run, period and jitter against the idle run | `load` run: every core busy, same measurement, side-by-side table |
 | `rt_profile_v1.md` with the plots and the numbers | the `--figure-dir` pngs and the printed blocks go into [`../rt_profile_v1.md`](../rt_profile_v1.md) |
 
+The pauses of `/joint_states` seen while `arm_controller` executes (#124) are measured with the
+same `rt_record.py` plus the tools marked #124 below, see [`../pauses.md`](../pauses.md).
+
 | File | What it is |
 |---|---|
 | `run_rt_profile.sh` | Runs the three runs on the Jetson. `idle` and `load` are read-only; `steps` moves one joint. |
 | `rt_record.py` | ROS 2 node: one row per `/joint_states` message into `cycles.csv`, and with `--steps N` the commanded steps into `steps.csv`. |
 | `analyze_rt.py` | No ROS 2: reads the csv files, prints period, jitter, late cycles, a histogram and the latency, writes the pngs and the Markdown table. |
 | `test_analyze_rt.py` | Unit tests of the analysis, no ROS 2 and no arm needed: `python3 -m pytest docs/03_verification/rt_profile/tools` |
+| `thread_sampler.py` | No ROS 2: state, wchan and run time of every thread of one process from `/proc`, every ~17 ms, into a csv. Used in #124 to show the loop keeps running during a `/joint_states` pause. |
+| `pauses_124.py` | No ROS 2: finds the gaps above 100 ms in the `cycles.csv` of a #124 run, prints what happened around each one, and draws the figure of `../pauses.md`. |
+| `bench/run124.sh` | The #124 runs on the Jetson: goals through the ros2 CLI (A), throwaway participants without goals (G), goals from one persistent node (H). |
+| `bench/goals_node.py` | ROS 2 node: the persistent action client of the H run, one goal every 23 s, send time and result logged. |
 
 ## What a cycle stamp is, and what it is not
 
