@@ -105,6 +105,10 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the unfollowed-command check (#103): no port, no thread, header-only.
   ament_add_gtest(test_tracking_check test/test_tracking_check.cpp)
   target_include_directories(test_tracking_check PRIVATE include)
+  # The request table (#149): the frame, the command and the wait of every request to the Atom.
+  ament_add_gtest(test_requests test/test_requests.cpp)
+  target_include_directories(test_requests PRIVATE include)
+  target_link_libraries(test_requests positronic_protocol::positronic_protocol)
   # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
   # moves the real arm (see the header of the file).
   add_executable(hil_link_timeout test/hil_link_timeout.cpp)
