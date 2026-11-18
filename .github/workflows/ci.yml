@@ -81,56 +81,6 @@ jobs:
             build/*/test_results
           if-no-files-found: ignore
 
-  # Experiment E5 (#144): the same clang-tidy run as the CI job's "Static analysis" step, split over
-  # 3 runners. scripts/tidy_shard.py balances the files by their measured cost. Each shard builds on
-  # its own, since run-clang-tidy needs build/compile_commands.json and the generated headers.
-  # Reads the image cache only: the CI job above writes it.
-  tidy-shard:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2]
-    env:
-      RUN_DEV: docker compose run --rm -T dev
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Read the runner's uid and gid
-        id: ids
-        run: |
-          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
-          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build the CI image
-        uses: docker/build-push-action@v6
-        with:
-          context: docker
-          target: ci
-          load: true
-          tags: positronic-dev:jazzy
-          build-args: |
-            ROS_DISTRO=jazzy
-            USER_UID=${{ steps.ids.outputs.uid }}
-            USER_GID=${{ steps.ids.outputs.gid }}
-          cache-from: type=gha,scope=image
-
-      - name: Build
-        run: make RUN="$RUN_DEV" build
-
-      - name: Static analysis (clang-tidy), shard ${{ matrix.shard }} of 3
-        run: |
-          filter=$(make -s --eval 'tidy-filter: ; @echo "$(TIDY_STRICT_FILES)"' tidy-filter)
-          $RUN_DEV bash -c "
-            files=\$(python3 scripts/tidy_shard.py --filter '$filter' --shards 3 --shard ${{ matrix.shard }}) &&
-            start=\$(date +%s) &&
-            run-clang-tidy -quiet -p build -warnings-as-errors='*' \"\$files\"; rc=\$? ;
-            echo \"clang-tidy wall time: \$((\$(date +%s) - start)) s, nproc \$(nproc)\" ;
-            exit \$rc"
-
   coverage:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
