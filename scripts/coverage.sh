@@ -47,7 +47,9 @@ rm -f "${BUILD}/.coverage"
 "${LCOV[@]}" --capture --initial --directory "${BUILD}" --output-file "${OUT}/cpp_base.info"
 
 # Without ROS_DOMAIN_ID, each test that talks over ROS gets a free domain (make test, #144).
+# LOCALHOST: test nodes never discover anything on the network, like the arm's, whatever domain.
 unset ROS_DOMAIN_ID
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 
 # C++ tests in parallel: packages (colcon) and the tests inside each (ctest -j). They write the
 # .gcda counters as they run; libgcov locks each file while it adds to it. No linters: they add
