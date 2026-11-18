@@ -43,12 +43,19 @@ export USER_UID USER_GID
 # Let's the container's user open windows (like RViz) on your desktop.
 ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
-# The packages that talk to the arm or command it (hardware, protocol, mission). A warning here fails
-# the build (CI runs this).
+# The packages that talk to the arm or command it (hardware, protocol, mission, safety). A warning
+# here fails the build (CI runs this). Test files get only .clang-tidy's bugprone checks: the
+# command-line checks are added after .clang-tidy, so they switch every other family of it off
+# (ADR 0007). A new family in .clang-tidy goes here too (scripts/test_tidy_changed.py checks it).
 TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
+TIDY_TEST_FILES := ^/ws/src/[^/]+/test/
+TIDY_TEST_CHECKS := -cert-*,-clang-analyzer-*,-concurrency-*,-cppcoreguidelines-*,-misc-*,-modernize-*,-performance-*,-portability-*,-readability-*
+TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)'
+# What make tidy-changed compares with. CI sets it to HEAD^1 (the PR's merge commit's base).
+TIDY_BASE ?= origin/dev
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test coverage format format-check tidy tidy-strict doctor clean fclean
+.PHONY: help image shell build test coverage format format-check tidy tidy-strict tidy-changed doctor clean fclean
 
 # Full output for make test and make format-check: "make test VERBOSE" or "make test VERBOSE=1".
 # Without =1, make reads VERBOSE as one more goal: it turns verbose on, and its rule does nothing.
@@ -92,8 +99,12 @@ format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's ful
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
 
+# scripts/tidy_changed.py: the selection, then clang-tidy in parallel, one line per file.
 tidy-strict: ## clang-tidy on the strict packages (TIDY_STRICT_FILES), any warning is an error (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build -warnings-as-errors="*" "$(TIDY_STRICT_FILES)"'
+	$(RUN) python3 scripts/tidy_changed.py --all $(TIDY_OPTIONS)
+
+tidy-changed: ## tidy-strict on only the files your branch can affect, vs TIDY_BASE=origin/dev (needs make build first)
+	$(RUN) python3 scripts/tidy_changed.py --base '$(TIDY_BASE)' $(TIDY_OPTIONS)
 
 doctor: ## Check the environment
 	$(ALLOW_X)

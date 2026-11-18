@@ -32,6 +32,7 @@ coverage/
 build_cov/
 install_cov/
 htmlcov/
+.ccache/
 .coverage
 
 __pycache__/
