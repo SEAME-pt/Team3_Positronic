@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!--
-  Arm model for the real myCobot 280 on the Jetson (#23). Includes the plain URDF of this
-  package and adds the <ros2_control> tag that loads our hardware plugin.
+  Arm model for the real myCobot 280 on the Jetson (#23). Includes the URDF of this package
+  with the wrist camera and adds the <ros2_control> tag that loads our hardware plugin.
 
   Differs from positronic_gazebo.urdf.xacro on purpose:
   - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
@@ -33,8 +33,13 @@
        The plugin accepts 30 to 60: lower only, to test the cut without heating anything. -->
   <xacro:arg name="servo_temp_limit_c" default="60"/>
 
-  <!-- Links, joints and meshes of the arm. -->
-  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
+  <!-- Links, joints and meshes of the arm, with the wrist camera: camera_flange and the
+       camera_link frame under joint 6, mounted as on the real arm (#97). camera_link is the
+       frame_id of the real camera images (camera.launch.py) and the link the Gazebo camera
+       sits on. The variant without the gripper: the gripper's joints have no state on the
+       real arm yet (#123), and a joint with no state would leave its links without TF. The
+       <gazebo> tags of that file are ignored outside Gazebo. -->
+  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
 
