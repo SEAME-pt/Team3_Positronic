@@ -212,9 +212,11 @@ jobs:
     steps:
       # fetch-depth 2: on a PR, HEAD is GitHub's merge commit and HEAD^1 the tip of the base
       # branch, so HEAD^1 to HEAD is what the PR changes.
+      # THROWAWAY (#144 test, revert before ready): depth 3 and TIDY_BASE=HEAD^2^ below, so the
+      # selection sees only the PR's last commit, not the Dockerfile change that forces a full run.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: ./.github/actions/ci-image
 
       # The same build as build-test, so the same cache. Only build-test saves it.
@@ -238,7 +240,7 @@ jobs:
         run: |
           target=tidy-strict
           [ "$EVENT" != pull_request ] || target=tidy-changed
-          make "$target" TIDY_BASE=HEAD^1 \
+          make "$target" TIDY_BASE=HEAD^2^ \
             RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/log/tidy-summary.md dev"
 
       - name: clang-tidy report in the job summary
