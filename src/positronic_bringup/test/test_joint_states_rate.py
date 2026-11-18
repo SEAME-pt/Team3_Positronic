@@ -37,14 +37,14 @@ from sensor_msgs.msg import JointState
 
 SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "scripts",
-    "joint_states_rate.py",
+    'scripts',
+    'joint_states_rate.py',
 )
 
 
 def load_script():
     """Import the script as a module, without running its main()."""
-    spec = importlib.util.spec_from_file_location("joint_states_rate", SCRIPT)
+    spec = importlib.util.spec_from_file_location('joint_states_rate', SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -59,7 +59,7 @@ def test_stamp_ns():
 def test_summary_line_counts_new_poses_and_the_longest_gap():
     """Check the line printed every second."""
     rate = load_script()
-    assert rate.summary([10.0, 66.0, 12.5]) == "3 new poses  max gap 66.0 ms"
+    assert rate.summary([10.0, 66.0, 12.5]) == '3 new poses  max gap 66.0 ms'
     assert rate.summary([]) is None
 
 
@@ -68,32 +68,32 @@ def test_final_summary_lists_count_min_median_p90_and_max():
     rate = load_script()
     samples = [(0.1, 10.0), (0.2, 66.0), (0.3, 200.0)]
     lines = rate.final_summary(samples)
-    assert lines[0] == "3 new poses in 0 s"
+    assert lines[0] == '3 new poses in 0 s'
     assert lines[1] == (
-        "interval min 10.0 ms  median 66.0 ms  p90 200.0 ms" "  max 200.0 ms at 0.3 s"
+        'interval min 10.0 ms  median 66.0 ms  p90 200.0 ms' '  max 200.0 ms at 0.3 s'
     )
 
 
 def test_final_summary_says_so_without_samples():
     """Check that measuring nothing is reported, not hidden."""
     rate = load_script()
-    assert rate.final_summary([]) == ["no new poses received"]
+    assert rate.final_summary([]) == ['no new poses received']
 
 
 def test_write_results_writes_the_csv_and_the_summary(tmp_path):
     """Check both files, in a folder that does not exist yet."""
     rate = load_script()
-    out = tmp_path / "run"
+    out = tmp_path / 'run'
     rate.write_results(
-        str(out), [(0.1, 10.0), (0.25, 66.0)], ["first line", "second line"]
+        str(out), [(0.1, 10.0), (0.25, 66.0)], ['first line', 'second line']
     )
-    assert (out / "intervals.csv").read_text() == (
-        "seconds,interval_ms\n" "0.100,10.000\n" "0.250,66.000\n"
+    assert (out / 'intervals.csv').read_text() == (
+        'seconds,interval_ms\n' '0.100,10.000\n' '0.250,66.000\n'
     )
-    assert (out / "summary.txt").read_text() == "first line\nsecond line\n"
+    assert (out / 'summary.txt').read_text() == 'first line\nsecond line\n'
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def ros():
     """Bring rclpy up for the node tests of this module, and down at the end."""
     rclpy.init()
