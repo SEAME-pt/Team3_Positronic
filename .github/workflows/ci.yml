@@ -10,8 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# packages: read: every job pulls the CI image from GHCR when it's there (.github/actions/ci-image).
 permissions:
   contents: read
+  packages: read
 
 env:
   # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
@@ -28,8 +30,10 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: false
 
 # The checks run as parallel jobs, so the wall time is the longest job, not the sum (#144).
-# Each job builds the CI image from the GHA layer cache (.github/actions/ci-image); build-test
-# is the only one that writes it. The check to require on dev is "CI", the last job.
+# Each job gets the CI image from GHCR, tagged by a hash of what it is built from, which the image
+# job publishes on pushes to dev. When that tag isn't there (a PR that changes the Dockerfile, the
+# first push after such a merge), the job builds it from the GHA layer cache instead; build-test
+# is the only one that writes that cache. The check required on dev is "CI", the last job.
 #
 # ccache: the builds restore the newest cache saved on dev (restore-keys prefix), so a PR only
 # recompiles what it changed. Only pushes to dev save, one job per cache: build-test saves the
@@ -74,6 +78,33 @@ jobs:
           [ "$n" -gt 0 ] || docs_only=false
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "$n files, docs_only=$docs_only" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Publishes the CI image to GHCR (ghcr.io/seame-pt/team3_positronic-ci), tagged with the hash of
+  # its inputs and "dev". Only here may a job write packages. Not part of "CI": a registry
+  # problem leaves the other jobs building the image as before, it doesn't block dev.
+  image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-image
+        with:
+          push: "true"
+
+      # One version per Dockerfile change: keep the newest 5 (the current one carries "dev"),
+      # older ones only serve old branches, which build the image themselves anyway.
+      # continue-on-error: if the token may push but not delete, the image is still published.
+      - name: Delete old versions of the image
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: team3_positronic-ci
+          package-type: container
+          min-versions-to-keep: 5
 
   lint:
     needs: changes

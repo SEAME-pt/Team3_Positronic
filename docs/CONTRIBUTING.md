@@ -271,10 +271,13 @@ Date, status (proposed / accepted / superseded by NNNN), deciders.
 | `tidy` | `make build`, then `make tidy-changed` on a PR, `make tidy-strict` on a push | yes |
 | `coverage` | `make coverage` | not yet: report-only until #46 (ADR 0005) |
 | `jetson` | the Jetson image and `NANO_PACKAGES` built in it | yes |
+| `image` | pushes to `dev` only: publishes the CI image to GHCR | no |
 | `CI` | green only if every job above passed | this is the check to require |
 
 - A PR that only changes `docs/` or `.md` files skips every job but `CI`, which passes.
 - The builds use ccache, filled by the pushes to `dev`, so a PR only recompiles what it changed.
+- Each job pulls the CI image from GHCR (`ghcr.io/seame-pt/team3_positronic-ci`, tagged with a hash of the Dockerfile) when `dev` has published it, and builds it otherwise, for example on a PR that changes the Dockerfile.
+- Tests run in parallel, packages and the tests inside each one. A test that starts ROS uses `ament_add_ros_isolated_gtest` (or `_pytest`), so it gets a `ROS_DOMAIN_ID` of its own and can't see another test's nodes.
 
 *Why parallel jobs and changed files only: one job with everything in a row took 13.6 minutes per PR (#144). Feedback on a draft should take minutes. The full clang-tidy run still happens after every merge.*
 

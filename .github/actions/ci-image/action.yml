@@ -1,15 +1,30 @@
 name: CI image
 description: >-
-  Build the "ci" target of docker/Dockerfile (build and lint tools plus MoveIt, no Gazebo or GUI)
-  from the GHA layer cache, tagged positronic-dev:jazzy because that is the image compose.yaml
-  runs, so `docker compose run` finds it and does not rebuild the full dev image.
+  The "ci" target of docker/Dockerfile (build and lint tools plus MoveIt, no Gazebo or GUI),
+  tagged positronic-dev:jazzy because that is the image compose.yaml runs, so
+  `docker compose run` finds it and does not rebuild the full dev image.
+  Pulled from GHCR when dev already published this exact image; otherwise built from the GHA
+  layer cache, as before (#144).
 
 inputs:
   save-cache:
     description: >-
-      "true" writes the layers back to the cache. Only one job per run does it, so parallel jobs
-      don't write the same scope at the same time.
+      "true" writes the layers back to the GHA cache when the image is built here. Only one job
+      per run does it, so parallel jobs don't write the same scope at the same time.
     default: "false"
+  push:
+    description: >-
+      "true" pushes the image to GHCR, tagged with its hash and "dev". Only the image job on a
+      push to dev, which has packages: write.
+    default: "false"
+
+outputs:
+  tag:
+    description: The hash tag of this image in GHCR
+    value: ${{ steps.hash.outputs.tag }}
+  pulled:
+    description: '"true" when the image came from GHCR'
+    value: ${{ steps.pull.outputs.pulled }}
 
 runs:
   using: composite
@@ -21,9 +36,44 @@ runs:
         echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
         echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
 
-    - uses: docker/setup-buildx-action@v3
+    # Everything the image is built from: the Dockerfile, the one file it copies, the target and
+    # the build args. The same hash means the same build; a new base image or new apt packages
+    # under the same Dockerfile don't change it, the same as with the GHA layer cache.
+    - name: Hash of the image's inputs
+      id: hash
+      shell: bash
+      env:
+        ARGS: target=ci ROS_DISTRO=jazzy USER_UID=${{ steps.ids.outputs.uid }} USER_GID=${{ steps.ids.outputs.gid }}
+      run: |
+        tag=$({ sha256sum docker/Dockerfile docker/setup-user.sh; echo "$ARGS"; } \
+          | sha256sum | cut -c1-16)
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "ghcr.io/seame-pt/team3_positronic-ci:$tag ($ARGS)"
+
+    # Read access is enough to pull. A failure here (a fork, the package not there yet) only
+    # means the build below runs.
+    - name: Pull the image from GHCR
+      id: pull
+      shell: bash
+      env:
+        IMAGE: ghcr.io/seame-pt/team3_positronic-ci:${{ steps.hash.outputs.tag }}
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null 2>&1 || true
+        if docker pull -q "$IMAGE"; then
+          docker tag "$IMAGE" positronic-dev:jazzy
+          echo "pulled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Not in GHCR: building it from the GHA layer cache"
+          echo "pulled=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - if: steps.pull.outputs.pulled != 'true'
+      uses: docker/setup-buildx-action@v3
 
     - name: Build the CI image
+      if: steps.pull.outputs.pulled != 'true'
       uses: docker/build-push-action@v6
       with:
         context: docker
@@ -36,3 +86,16 @@ runs:
           USER_GID=${{ steps.ids.outputs.gid }}
         cache-from: type=gha,scope=image
         cache-to: ${{ inputs.save-cache == 'true' && 'type=gha,mode=max,scope=image' || '' }}
+
+    # A pulled image is already there under its hash: only "dev" moves (no layer is uploaded).
+    - name: Push the image to GHCR
+      if: inputs.push == 'true'
+      shell: bash
+      env:
+        REPO: ghcr.io/seame-pt/team3_positronic-ci
+        TAG: ${{ steps.hash.outputs.tag }}
+      run: |
+        for tag in "$TAG" dev; do
+          docker tag positronic-dev:jazzy "$REPO:$tag"
+          docker push -q "$REPO:$tag"
+        done
