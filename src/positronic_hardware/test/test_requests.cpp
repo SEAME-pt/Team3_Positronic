@@ -18,6 +18,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   Unit tests for requests.hpp (#149): every factory carries the frame its command encodes and
+//   the command the arm echoes, what each one waits for, the command byte at index 3 of every
+//   frame, and ACK_TIMEOUT between the arm's 60 ms and the 200 ms watchdog.
+
 #include <gtest/gtest.h>
 
 #include <chrono>
