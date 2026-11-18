@@ -97,7 +97,7 @@ def original_urdf():
         get_package_share_directory('positronic_description'),
         'urdf',
         'mycobot_280_jn_sim',
-        'mycobot_280_jn.urdf',
+        'mycobot_280_jn_gripper_camera.urdf',
     )
     return ElementTree.parse(path).getroot()
 
@@ -179,7 +179,7 @@ def test_joints_are_the_urdf_revolute_joints_in_order():
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
 def test_every_joint_is_commanded_in_position(backend):
     """Check that each joint has position and velocity states and a position command."""
-    for joint in expand(backend=backend).findall('ros2_control/joint'):
+    for joint in arm_block(expand(backend=backend)).findall('joint'):
         states = [state.get('name') for state in joint.findall('state_interface')]
         assert states == ['position', 'velocity'], joint.get('name')
         commands = [
@@ -201,7 +201,7 @@ def test_every_commanded_joint_has_a_urdf_limit():
     """Check that the limits the plugin reads in on_init are in the URDF (#34)."""
     robot = expand()
     urdf_joints = {joint.get('name'): joint for joint in robot.findall('joint')}
-    for joint in robot.findall('ros2_control/joint'):
+    for joint in arm_block(robot).findall('joint'):
         limit = urdf_joints[joint.get('name')].find('limit')
         assert limit is not None, joint.get('name')
         assert float(limit.get('lower')) < float(limit.get('upper')), joint.get('name')
