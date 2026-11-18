@@ -80,10 +80,6 @@ if(BUILD_TESTING)
 
   foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
     ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
-    # One at a time even under ctest -j (make test, #144): on a loaded runner GoalSucceedsWhenIdle
-    # can miss its action feedback when the four run together. In series they take about as
-    # long as positronic_hardware's tests, so the wall time doesn't change.
-    set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE)
     target_link_libraries(${test_name} mission_node_component)
     ament_target_dependencies(${test_name} ${dependencies})
   endforeach()

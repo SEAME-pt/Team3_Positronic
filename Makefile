@@ -84,10 +84,15 @@ build: ## colcon build
 # Packages run in parallel (colcon's default) and so do the tests inside each one (ctest -j).
 # ROS_DOMAIN_ID is unset so the tests that talk over ROS (ament_add_ros_isolated_gtest) each get
 # a free domain: with it set (17, the arm's) they all share it and see each other's nodes (#144).
+# TEST_ALONE runs after the others, one test at a time: on a loaded CI runner, positronic_mission's
+# GoalSucceedsWhenIdle can miss the one feedback message the node sends (a race in the test).
 TEST_JOBS ?= 4
+TEST_ALONE := positronic_mission
+TEST_HANDLERS = $(if $(VERBOSE),,--event-handlers console_stderr-)
 test: ## colcon test, then a summary per package and each failure (VERBOSE: full output)
 	$(RUN) bash -c 'unset ROS_DOMAIN_ID; \
-	  colcon test $(if $(VERBOSE),,--event-handlers console_stderr-) --ctest-args -j$(TEST_JOBS); rc=$$?; \
+	  colcon test $(TEST_HANDLERS) --packages-skip $(TEST_ALONE) --ctest-args -j$(TEST_JOBS); rc=$$?; \
+	  colcon test $(TEST_HANDLERS) --packages-select $(TEST_ALONE) || rc=$$?; \
 	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
