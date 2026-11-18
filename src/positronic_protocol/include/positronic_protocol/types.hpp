@@ -29,6 +29,7 @@
 ///
 /// Frame layout: `FE FE LEN CMD [DATA...] FA`, where `LEN = N + 2` for N data bytes.
 /// There is no checksum. Angles travel as signed big-endian int16 in 0.01 deg.
+// #144 experiment E4: a throwaway comment so CI sees this file changed. Reverted next.
 namespace positronic_protocol
 {
 
