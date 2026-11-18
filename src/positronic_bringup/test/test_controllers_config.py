@@ -48,7 +48,7 @@ ROS2_CONTROLLERS = os.path.join(CONFIG_DIR, 'ros2_controllers.yaml')
 
 
 def test_gazebo_jtc_has_the_jetson_tolerances_and_rate():
-    """Check that Gazebo's arm_controller checks the same tolerances at the same rate as the Jetson (#33)."""
+    """Check that Gazebo's arm_controller uses the Jetson's tolerances and check rate (#33)."""
     with open(ROS2_CONTROLLERS) as file:
         gazebo = yaml.safe_load(file)
     jetson = load_config()
