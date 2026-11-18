@@ -1123,3 +1123,21 @@ TEST(SerialArmTemperature, ReportsStaleWhenTheArmNeverAnswersTheTemperature)
   EXPECT_TRUE(arm.temperature_stale());
   EXPECT_FALSE(arm.overheat().has_value());
 }
+
+// #103 part 2: what the plugin's unfollowed-command check reads.
+TEST(SerialArm, TheLastTargetFollowsTheWireAndAnAcknowledgedStopClearsIt)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  EXPECT_FALSE(arm.last_target().has_value());  // nothing sent yet
+
+  const JointPositions target{0.2, 0.0, 0.0, 0.0, 0.0, 0.0};
+  arm.write_angles(target);
+  ASSERT_GE(wait_for_sends(port, 1).size(), 1U);
+  EXPECT_EQ(arm.last_target(), std::optional<JointPositions>{target});
+
+  // The stop is acknowledged: the arm is heading nowhere, there is no target to follow.
+  ASSERT_TRUE(arm.halt());
+  EXPECT_FALSE(arm.last_target().has_value());
+}

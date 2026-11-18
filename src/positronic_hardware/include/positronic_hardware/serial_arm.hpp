@@ -111,10 +111,13 @@ public:
   /// reads per second on the Jetson.
   static constexpr std::chrono::milliseconds EMPTY_READ_BACKOFF{2};
 
-  /// Wait for the arm's ack (`FE FE 03 <cmd> 01 FA`) of a stop or power_on. On the bench the
-  /// ack comes in 1.8 ms, 3.6 ms at p99, once 58 ms. 80 ms covers that plus the 2 ms read
-  /// backoff, and keeps a request turn under the 200 ms link watchdog (~130 ms of silence at
-  /// worst). No ack by then: the frame goes out again next turn (#103).
+  /// Wait for the arm's ack (`FE FE 03 <cmd> 01 FA`) of a stop or power_on. On the bench (16 Nov
+  /// 2026, 259 stops and 69 power_on) a stop is acknowledged in 37 to 41 ms when the arm is not
+  /// moving, up to 45 ms right after a send_angles, once 86 ms mid-move. A power_on takes 58 to
+  /// 60 ms. 80 ms covers all of that but the one 86 ms, plus the 2 ms read backoff, and keeps a
+  /// request turn under the 200 ms link watchdog (~130 ms of silence at worst). No ack by then:
+  /// the frame goes out again next turn (#103). That is what the 86 ms ack costs, a second stop
+  /// one turn later.
   static constexpr std::chrono::milliseconds ACK_TIMEOUT{80};
 
   // REQUEST_TIMEOUT (300 ms, from the contract) covers the worst case: a turn already running
@@ -185,6 +188,7 @@ public:
 
   /// True when no plausible temperature has arrived for TemperatureGuard::stale_timeout.
   [[nodiscard]] bool temperature_stale() const override;
+  [[nodiscard]] std::optional<JointPositions> last_target() const override;
 
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -259,6 +263,14 @@ private:
   // nullopt until the first command: a readFromRT() that meets a write in progress keeps its old
   // box, and before the first swap that box must hold "no target", never a pose.
   realtime_tools::RealtimeBuffer<std::optional<JointPositions>> command_{std::nullopt};
+  // The last target the thread put on the wire, for the plugin's unfollowed-command check
+  // (#103). The thread writes it where it sends and clears it with an acknowledged stop or a
+  // cut; the control loop reads it. Same rule as latest_.
+  mutable realtime_tools::RealtimeBuffer<std::optional<JointPositions>> last_target_{std::nullopt};
+  /// Keeps the thread's `last_sent` and the plugin's last_target_ together: every change of
+  /// the one goes through here, so the two never disagree.
+  void set_last_sent(
+    std::optional<JointPositions> & last_sent, const std::optional<JointPositions> & value);
   std::atomic<bool> stop_{false};
   std::atomic<bool> has_sample_{false};
   // The frame the thread sends at the start of its next turn, before the get_angles. halt() and
