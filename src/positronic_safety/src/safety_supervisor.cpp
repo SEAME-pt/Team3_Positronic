@@ -124,8 +124,8 @@ bool SafetySupervisor::read_parameters()
       const std::int64_t value = get_parameter(name).as_int();
       if (value <= 0) {
         RCLCPP_ERROR(
-          get_logger(), "Parameter '%s' must be a positive number of ms, it is %" PRId64 ".",
-          name.c_str(), value);
+        get_logger(), "Parameter '%s' must be a positive number of ms, it is %" PRId64 ".",
+        name.c_str(), value);
         valid = false;
       }
       return milliseconds{value};
@@ -179,12 +179,11 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_configure(
   // rclcpp picks a service callback by its exact argument types: shared pointers by value.
   // Naming that std::function type lets the lambda take references instead of copies.
   using StopCallback =
-    std::function<void (std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response>)>;
-  const StopCallback on_stop =
-    [this](
+    std::function<void(std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response>)>;
+  const StopCallback on_stop = [this](
     const std::shared_ptr<Trigger::Request> & /*request*/,
     const std::shared_ptr<Trigger::Response> & response) {
-      // The answer only says that the halt is on its way; ~/status tells when it is over.
+    // The answer only says that the halt is on its way; ~/status tells when it is over.
       const bool started = begin_halt(Reason::STOP_SERVICE);
       response->success = true;
       response->message = started ? "Halt started." : "A halt is already running.";
@@ -193,12 +192,14 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_configure(
 
   hardware_client_ = create_client<SetHardwareComponentState>(
     config_.controller_manager + "/set_hardware_component_state");
-  switch_client_ = create_client<SwitchController>(
-    config_.controller_manager + "/switch_controller");
+  switch_client_ =
+    create_client<SwitchController>(config_.controller_manager + "/switch_controller");
   trajectory_client_ =
     rclcpp_action::create_client<FollowJointTrajectory>(this, config_.trajectory_action);
 
-  timer_ = create_wall_timer(config_.check_period, [this]() {check();});
+  timer_ = create_wall_timer(config_.check_period, [this]() {
+        check();
+  });
 
   publish_status();
   return CallbackReturn::SUCCESS;
@@ -326,8 +327,7 @@ void SafetySupervisor::check()
     RCLCPP_ERROR(
       get_logger(), "No usable %s/%s on '%s' for %" PRId64 " ms (limit %" PRId64 " ms).",
       config_.fault_gpio.c_str(), config_.fault_interface.c_str(), config_.fault_topic.c_str(),
-      silence_ms(fault_watchdog_, now),
-      static_cast<std::int64_t>(config_.fault_timeout.count()));
+      silence_ms(fault_watchdog_, now), static_cast<std::int64_t>(config_.fault_timeout.count()));
     begin_halt(Reason::FAULT_DATA_LOST);
   }
 }
@@ -377,8 +377,7 @@ std::optional<bool> SafetySupervisor::send(const Order & order)
 {
   pending_ = order;
   const bool halting = logic_.mode() == Mode::HALTING;
-  const milliseconds timeout =
-    halting ? config_.halt_step_timeout : config_.resume_step_timeout;
+  const milliseconds timeout = halting ? config_.halt_step_timeout : config_.resume_step_timeout;
   step_watchdog_ = DeadlineWatchdog{timeout};
   step_watchdog_.feed(Clock::now());
 
@@ -420,7 +419,8 @@ void SafetySupervisor::on_mode_changed()
         RCLCPP_ERROR(
           get_logger(),
           "Stopped (%s), but the hardware component did not confirm it: THE ARM MAY STILL MOVE. "
-          "Cut the servo power.", to_string(logic_.reason()));
+          "Cut the servo power.",
+          to_string(logic_.reason()));
       }
       // Stay stopped until a person activates the supervisor again. During a transition
       // (a halt that ended inside on_activate or on_deactivate) the state is not ACTIVE.
@@ -490,8 +490,7 @@ void SafetySupervisor::on_hardware_answer(
       label);
     ok = true;
   } else {
-    RCLCPP_ERROR(
-      get_logger(), "The hardware component did not leave ACTIVE (it is '%s').", label);
+    RCLCPP_ERROR(get_logger(), "The hardware component did not leave ACTIVE (it is '%s').", label);
   }
   advance(ticket, ok);
 }
@@ -512,8 +511,8 @@ std::optional<bool> SafetySupervisor::switch_controllers(
   request->activate_asap = false;
   // The controller manager gives up on the switch when the supervisor stops waiting for it.
   request->timeout = rclcpp::Duration{timeout};
-  const SwitchClient::CallbackType on_answer =
-    [this, ticket](const SwitchClient::SharedFuture & future) {
+  const SwitchClient::CallbackType on_answer = [this,
+      ticket](const SwitchClient::SharedFuture & future) {
       on_switch_answer(ticket, *future.get());
     };
   switch_client_->async_send_request(request, on_answer);

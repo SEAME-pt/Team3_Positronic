@@ -37,6 +37,8 @@
 #   Check that the <ros2_control> block has one <gpio name="driver"> with a fault_code state
 #   interface and no fault_code command interface, for both backends. Other interfaces on it
 #   are allowed (S3 adds a temperature, #115).
+# Follow-up prompt (servo over-temperature):
+#   The xacro now also passes servo_temp_limit_c (default 60) to the plugin.
 # Follow-up prompt (#45):
 #   The safety supervisor does not depend on positronic_hardware: it takes the names of the
 #   hardware component and of the fault interface from config/safety_supervisor.yaml. Check
@@ -105,15 +107,17 @@ def test_defaults_select_the_real_arm():
     """Check the default parameters: the serial backend on the Jetson UART."""
     assert hardware_params(expand()) == {
         'backend': 'serial', 'port': '/dev/ttyTHS1', 'baud': '1000000',
-        'moving_period_ms': '50', 'send_settle_ms': '30'}
+        'moving_period_ms': '50', 'send_settle_ms': '30', 'servo_temp_limit_c': '60'}
 
 
 def test_arguments_reach_the_plugin():
     """Check that the xacro arguments become the plugin parameters."""
     params = hardware_params(expand(backend='fake', port='/dev/null', baud='115200',
-                                    moving_period_ms='40', send_settle_ms='25'))
+                                    moving_period_ms='40', send_settle_ms='25',
+                                    servo_temp_limit_c='45'))
     assert params == {'backend': 'fake', 'port': '/dev/null', 'baud': '115200',
-                      'moving_period_ms': '40', 'send_settle_ms': '25'}
+                      'moving_period_ms': '40', 'send_settle_ms': '25',
+                      'servo_temp_limit_c': '45'}
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():

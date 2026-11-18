@@ -137,13 +137,14 @@ private:
   {
     heartbeat_publisher_ = create_publisher<Heartbeat>(
       "mission/heartbeat", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
-    joint_states_publisher_ = create_publisher<DynamicJointState>(
-      "dynamic_joint_states", rclcpp::SystemDefaultsQoS());
+    joint_states_publisher_ =
+      create_publisher<DynamicJointState>("dynamic_joint_states", rclcpp::SystemDefaultsQoS());
     // 100 Hz: well inside the supervisor's timeouts, so a halt in a test is never an accident.
-    publish_timer_ = create_wall_timer(milliseconds{10}, [this]() {publish();});
+    publish_timer_ = create_wall_timer(milliseconds{10}, [this]() {
+          publish();
+    });
     status_subscription_ = create_subscription<SafetyStatus>(
-      "safety_supervisor/status",
-      rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local(),
+      "safety_supervisor/status", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local(),
       [this](const SafetyStatus & status) {
         statuses.push_back(status);
       });
@@ -152,9 +153,8 @@ private:
   void create_services()
   {
     // This callback form answers by hand (send_response), so a test can also not answer.
-    using HardwareCallback = std::function<void (
-          std::shared_ptr<rmw_request_id_t>,
-          std::shared_ptr<SetHardwareComponentState::Request>)>;
+    using HardwareCallback = std::function<void(
+          std::shared_ptr<rmw_request_id_t>, std::shared_ptr<SetHardwareComponentState::Request>)>;
     const HardwareCallback on_hardware =
       [this](
       const std::shared_ptr<rmw_request_id_t> & header,
@@ -164,9 +164,8 @@ private:
     hardware_service_ = create_service<SetHardwareComponentState>(
       "controller_manager/set_hardware_component_state", on_hardware);
 
-    using SwitchCallback = std::function<void (
-          std::shared_ptr<SwitchController::Request>,
-          std::shared_ptr<SwitchController::Response>)>;
+    using SwitchCallback = std::function<void(
+          std::shared_ptr<SwitchController::Request>, std::shared_ptr<SwitchController::Response>)>;
     const SwitchCallback on_switch =
       [this](
       const std::shared_ptr<SwitchController::Request> & request,
@@ -276,7 +275,8 @@ protected:
   void SetUp() override
   {
     // The clock makes it unique across processes, the test name across tests.
-    const std::string ns = "/supervisor_test_" +
+    const std::string ns =
+      "/supervisor_test_" +
       std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + "_" +
       testing::UnitTest::GetInstance()->current_test_info()->name();
     fake_ = std::make_shared<FakeArmSide>(ns);
@@ -312,7 +312,11 @@ protected:
 
   void spin_for(milliseconds duration)
   {
-    spin_until([]() {return false;}, duration);
+    spin_until(
+      []() {
+        return false;
+      },
+      duration);
   }
 
   /// Lets some time pass, then activates the supervisor. True when it accepted.
@@ -328,9 +332,15 @@ protected:
     ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
     // Discovery takes a moment. Until the supervisor has heard a heartbeat and found the
     // services it refuses to activate, as it should: ask until it accepts.
-    ASSERT_TRUE(spin_until([this]() {return try_activate();}));
-    ASSERT_TRUE(spin_until([this]() {return mode_is(SafetyStatus::MODE_MONITORING);}));
-    ASSERT_TRUE(spin_until([this]() {return fake_->ready();}));
+    ASSERT_TRUE(spin_until([this]() {
+        return try_activate();
+    }));
+    ASSERT_TRUE(spin_until([this]() {
+        return mode_is(SafetyStatus::MODE_MONITORING);
+    }));
+    ASSERT_TRUE(spin_until([this]() {
+        return fake_->ready();
+    }));
     ASSERT_EQ(fake_->calls, RESUME);
     fake_->calls.clear();
   }
@@ -383,10 +393,14 @@ TEST_F(SafetySupervisorTest, StopServiceHaltsInOrderAndCancelsTheGoal)
 {
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
   fake_->send_goal();
-  ASSERT_TRUE(spin_until([this]() {return fake_->goal_running();}));
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->goal_running();
+  }));
 
   fake_->call_stop();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT_WITH_A_GOAL);
   const Calls expected{"arm_controller", "forward_position_controller"};
@@ -401,7 +415,9 @@ TEST_F(SafetySupervisorTest, LostHeartbeatHalts)
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
 
   fake_->publish_heartbeat = false;  // the mission node died, or its network did
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_HEARTBEAT_LOST);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_HEARTBEAT_LOST);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
@@ -412,7 +428,9 @@ TEST_F(SafetySupervisorTest, DriverFaultHalts)
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
 
   fake_->fault_code = 1.0;  // LINK_TIMEOUT in positronic_hardware
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_DOUBLE_EQ(fake_->statuses.back().fault_code, 1.0);
@@ -424,7 +442,9 @@ TEST_F(SafetySupervisorTest, MissingFaultDataHalts)
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
 
   fake_->publish_fault_data = false;  // the broadcaster was deactivated
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_FAULT_DATA_LOST);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_FAULT_DATA_LOST);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
 }
@@ -435,7 +455,9 @@ TEST_F(SafetySupervisorTest, FaultCodeThatIsNotANumberHalts)
 
   // Bad data: messages keep coming, but none of them says whether there is a fault.
   fake_->fault_code = std::numeric_limits<double>::quiet_NaN();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_FAULT_DATA_LOST);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_FAULT_DATA_LOST);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
 }
@@ -448,7 +470,9 @@ TEST_F(SafetySupervisorTest, UnconfiguredAfterAFailedDeactivateCountsAsStopped)
   // hardware component ends UNCONFIGURED.
   fake_->deactivation_succeeds = false;
   fake_->fault_code = 1.0;
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_TRUE(fake_->statuses.back().hardware_stopped);
@@ -461,7 +485,9 @@ TEST_F(SafetySupervisorTest, HardwareStillActiveIsNotReportedAsStopped)
   fake_->deactivation_succeeds = false;
   fake_->state_after_failed_deactivation = State::PRIMARY_STATE_ACTIVE;
   fake_->call_stop();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);  // the controllers were still deactivated
   EXPECT_FALSE(fake_->statuses.back().hardware_stopped);
@@ -474,7 +500,9 @@ TEST_F(SafetySupervisorTest, HaltGoesOnWhenTheControllerManagerDoesNotAnswer)
   fake_->answer_hardware = false;
   const auto start = std::chrono::steady_clock::now();
   fake_->call_stop();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
 
   // It waited for the answer (halt_step_timeout_ms is 200 here), then sent the rest anyway.
   EXPECT_GE(std::chrono::steady_clock::now() - start, milliseconds{200});
@@ -486,8 +514,12 @@ TEST_F(SafetySupervisorTest, FailedResumeBecomesAHalt)
 {
   fake_->activation_succeeds = false;  // the driver refuses to activate
   ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
-  ASSERT_TRUE(spin_until([this]() {return try_activate();}));
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_RESUME_FAILED);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_RESUME_FAILED);
+  }));
 
   // The controllers were never activated, and the full halt ran.
   const Calls expected{"hardware:active", "hardware:inactive", "controllers:off"};
@@ -499,7 +531,9 @@ TEST_F(SafetySupervisorTest, StaysStoppedUntilAPersonActivatesAgain)
 {
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
   fake_->call_stop();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
   fake_->calls.clear();
 
   // Heartbeat and fault code are fine, and still nothing comes back by itself.
@@ -508,8 +542,12 @@ TEST_F(SafetySupervisorTest, StaysStoppedUntilAPersonActivatesAgain)
   EXPECT_TRUE(stopped_because(SafetyStatus::REASON_STOP_SERVICE));
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
 
-  ASSERT_TRUE(spin_until([this]() {return try_activate();}));
-  ASSERT_TRUE(spin_until([this]() {return mode_is(SafetyStatus::MODE_MONITORING);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
   EXPECT_EQ(fake_->calls, RESUME);
 }
 
@@ -517,12 +555,18 @@ TEST_F(SafetySupervisorTest, ResumesAfterADriverFaultOnceTheDriverClearedIt)
 {
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
   fake_->fault_code = 1.0;
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
 
   // The fake clears the code when it is activated, like the driver. Messages that still carry
   // the old code may be on their way: they must not halt the arm again.
-  ASSERT_TRUE(spin_until([this]() {return try_activate();}));
-  ASSERT_TRUE(spin_until([this]() {return mode_is(SafetyStatus::MODE_MONITORING);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
   spin_for(milliseconds{500});
   EXPECT_TRUE(mode_is(SafetyStatus::MODE_MONITORING));
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_ACTIVE);
@@ -533,7 +577,9 @@ TEST_F(SafetySupervisorTest, DeactivatingTheSupervisorHalts)
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
 
   EXPECT_EQ(supervisor_->deactivate().id(), State::PRIMARY_STATE_INACTIVE);
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DEACTIVATED);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DEACTIVATED);
+  }));
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_TRUE(fake_->statuses.back().hardware_stopped);

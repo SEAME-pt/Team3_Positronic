@@ -50,6 +50,15 @@ TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positroni
 .DEFAULT_GOAL := help
 .PHONY: help image shell build test coverage format format-check tidy tidy-strict doctor clean fclean
 
+# Full output for make test and make format-check: "make test VERBOSE" or "make test VERBOSE=1".
+# Without =1, make reads VERBOSE as one more goal: it turns verbose on, and its rule does nothing.
+ifneq ($(filter VERBOSE,$(MAKECMDGOALS)),)
+  override VERBOSE := 1
+endif
+.PHONY: VERBOSE
+VERBOSE:
+	@:
+
 help: ## Show this help
 	@grep -h -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
@@ -63,8 +72,11 @@ shell: ## Shell in the dev container (GUI apps like rviz2 work from here)
 build: ## colcon build
 	$(RUN) bash -c 'colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
 
-test: ## colcon test and show results
-	$(RUN) bash -c 'colcon test && colcon test-result --verbose'
+# colcon's per package stderr is hidden: scripts/summarize_tests.py shows each failure once, at the end.
+# VERBOSE shows everything colcon prints, plus colcon test-result --verbose, before the summary.
+test: ## colcon test, then a summary per package and each failure (VERBOSE: full output)
+	$(RUN) bash -c 'colcon test $(if $(VERBOSE),,--event-handlers console_stderr-); rc=$$?; \
+	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
 # CI runs it as report-only (continue-on-error) until #46.
@@ -74,8 +86,8 @@ coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below
 format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 	$(RUN) bash scripts/lint.sh --fix
 
-format-check: ## ROS 2 lint on src/: uncrustify, cpplint, cppcheck, flake8, pep257, copyright
-	$(RUN) bash scripts/lint.sh
+format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's full output)
+	$(RUN) env VERBOSE=$(VERBOSE) bash scripts/lint.sh
 
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
