@@ -35,6 +35,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 #include "lifecycle_msgs/msg/state.hpp"
@@ -110,13 +111,17 @@ constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
 
 /// The <param> names the <hardware> tag may use. Anything else is a typo.
-constexpr std::array<std::string_view, 7> KNOWN_PARAMETERS{"backend",
-  "port",
-  "baud",
-  "velocity_filter_alpha",
-  "moving_period_ms",
-  "send_settle_ms",
-  "servo_temp_limit_c"};
+using Name = std::string_view;
+constexpr std::array KNOWN_PARAMETERS{
+  Name{"backend"},
+  Name{"port"},
+  Name{"baud"},
+  Name{"velocity_filter_alpha"},
+  Name{"moving_period_ms"},
+  Name{"send_settle_ms"},
+  Name{"servo_temp_limit_c"},
+  Name{"tracking_error_deg"},
+  Name{"tracking_error_ms"}};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(
@@ -140,24 +145,44 @@ std::optional<Number> parse_number(const std::string & text)
   return value;
 }
 
-/// Reads `name` into `out` when the URDF sets it: a whole number of ms in [min, max]. True
-/// when the parameter is absent or valid, false with the error logged otherwise.
-bool read_milliseconds(
+/// Reads `name` into `out` when the URDF sets it: a number in [min, max], whole for an integer
+/// type. True when the parameter is absent or valid, false with the error logged otherwise.
+template<typename Number>
+bool read_bounded(
   const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
-  const std::string & name, int min, int max, std::chrono::milliseconds & out)
+  const std::string & name, Number min, Number max, Number & out)
 {
   const std::string * text{find_parameter(parameters, name)};
   if (text == nullptr) {
     return true;
   }
-  const std::optional<int> value{parse_number<int>(*text)};
-  if (!value.has_value() || *value < min || *value > max) {
+  const std::optional<Number> value{parse_number<Number>(*text)};
+  if (value.has_value() && *value >= min && *value <= max) {
+    out = *value;
+    return true;
+  }
+  if constexpr (std::is_integral_v<Number>) {
     RCLCPP_ERROR(
       logger, "Parameter '%s' is '%s'; use a whole number in [%d, %d].", name.c_str(),
-      text->c_str(), min, max);
+      text->c_str(), static_cast<int>(min), static_cast<int>(max));
+  } else {
+    RCLCPP_ERROR(
+      logger, "Parameter '%s' is '%s'; use a number in [%.0f, %.0f].", name.c_str(), text->c_str(),
+      static_cast<double>(min), static_cast<double>(max));
+  }
+  return false;
+}
+
+/// read_bounded() for a whole number of milliseconds.
+bool read_milliseconds(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
+  const std::string & name, int min, int max, std::chrono::milliseconds & out)
+{
+  int value{static_cast<int>(out.count())};
+  if (!read_bounded(logger, parameters, name, min, max, value)) {
     return false;
   }
-  out = std::chrono::milliseconds{*value};
+  out = std::chrono::milliseconds{value};
   return true;
 }
 
@@ -186,28 +211,6 @@ bool read_timing(
   return true;
 }
 
-/// The servo temperature that cuts the arm, from the URDF when set: a whole number of degC in
-/// [MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C]. Only down from 60: a lower limit cuts a warm
-/// arm on purpose, which is how the hardware test exercises the cut without heating anything.
-bool read_servo_temp_limit(
-  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
-  int & out)
-{
-  const std::string * text{find_parameter(parameters, "servo_temp_limit_c")};
-  if (text == nullptr) {
-    return true;
-  }
-  const std::optional<int> value{parse_number<int>(*text)};
-  if (!value.has_value() || *value < MIN_SERVO_TEMP_LIMIT_C || *value > SERVO_TEMP_LIMIT_C) {
-    RCLCPP_ERROR(
-      logger, "Parameter 'servo_temp_limit_c' is '%s'; use a whole number in [%d, %d].",
-      text->c_str(), MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C);
-    return false;
-  }
-  out = *value;
-  return true;
-}
-
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
 
@@ -229,6 +232,33 @@ void log_fault(
     info.joints.at(check.joint).name.c_str(), check.value, check.value * RAD_TO_DEG,
     to_string(check.fault), limit.lower, limit.upper);
 }
+
+/// False, with the name logged, when a <param> is not one the plugin knows: a typo in the URDF
+/// must stop the driver, not be ignored.
+bool only_known_parameters(
+  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters)
+{
+  const auto known{[](const auto & entry) {
+      return std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(), entry.first) !=
+             KNOWN_PARAMETERS.end();
+    }};
+  const auto unknown{std::find_if_not(parameters.begin(), parameters.end(), known)};
+  if (unknown == parameters.end()) {
+    return true;
+  }
+  std::string known_names;
+  for (const std::string_view name : KNOWN_PARAMETERS) {
+    if (!known_names.empty()) {
+      known_names += ", ";
+    }
+    known_names += name;
+  }
+  RCLCPP_ERROR(
+    logger, "Unknown hardware parameter '%s'. Known: %s.", unknown->first.c_str(),
+    known_names.c_str());
+  return false;
+}
+
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -302,19 +332,9 @@ CallbackReturn RobotSystem::on_init(
 
 bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::string> & parameters)
 {
-  for (const auto & [key, value] : parameters) {
-    if (std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(),
-        key) == KNOWN_PARAMETERS.end())
-    {
-      RCLCPP_ERROR(
-        get_logger(),
-        "Unknown hardware parameter '%s'. Known: backend, port, baud, velocity_filter_alpha, "
-        "moving_period_ms, send_settle_ms, servo_temp_limit_c.",
-        key.c_str());
-      return false;
-    }
+  if (!only_known_parameters(get_logger(), parameters)) {
+    return false;
   }
-
   Config config{};
 
   if (const std::string * backend{find_parameter(parameters, "backend")}) {
@@ -366,19 +386,39 @@ bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::str
     return false;
   }
 
-  if (!read_servo_temp_limit(get_logger(), parameters, config.servo_temp_limit_c)) {
+  // servo_temp_limit_c only goes down from 60: a lower limit cuts a warm arm on purpose, which is
+  // how the hardware test exercises the cut without heating anything. The tracking ranges are
+  // wide for the bench to try values; the one rule the plugin cannot check is that the threshold
+  // stays wider than the controller's trajectory tolerance (#103).
+  if (
+    !read_bounded(
+      get_logger(), parameters, "servo_temp_limit_c", MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C,
+      config.servo_temp_limit_c) ||
+    !read_bounded(
+      get_logger(), parameters, "tracking_error_deg", MIN_TRACKING_ERROR_DEG,
+      MAX_TRACKING_ERROR_DEG, config.tracking_error_deg) ||
+    !read_bounded(
+      get_logger(), parameters, "tracking_error_ms", MIN_TRACKING_ERROR_MS, MAX_TRACKING_ERROR_MS,
+      config.tracking_error_ms))
+  {
     return false;
   }
 
   config_ = config;
+  log_config();
+  return true;
+}
+
+void RobotSystem::log_config() const
+{
   RCLCPP_INFO(
     get_logger(),
     "Backend '%s', port %s at %d baud, velocity filter alpha %.3f, moving period %d ms, "
-    "send settle %d ms, servo temperature limit %d degC.",
+    "send settle %d ms, servo temperature limit %d degC, tracking error %.1f deg for %d ms.",
     config_.backend == Backend::SERIAL ? "serial" : "fake", config_.port.c_str(), config_.baud,
     config_.velocity_filter_alpha, static_cast<int>(config_.timing.moving_period.count()),
-    static_cast<int>(config_.timing.send_settle.count()), config_.servo_temp_limit_c);
-  return true;
+    static_cast<int>(config_.timing.send_settle.count()), config_.servo_temp_limit_c,
+    config_.tracking_error_deg, config_.tracking_error_ms);
 }
 
 bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
@@ -430,6 +470,9 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
+  tracking_ = TrackingCheck{TrackingLimits{
+      config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
+      std::chrono::milliseconds{config_.tracking_error_ms}}};
   try {
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
@@ -554,6 +597,7 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   // #35: the one place a latched fault is cleared. Someone asked for motion again on purpose,
   // and the link was checked alive above.
   fault_.store(FaultCode::NONE);
+  tracking_.reset();
   std::ignore = set_state(fault_handle_, to_state(FaultCode::NONE), true);
   return CallbackReturn::SUCCESS;
 }
@@ -601,9 +645,14 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   const return_type temperatures{check_temperatures()};
   // #35: a link that goes silent while active is a fault. While inactive nothing can move the
   // arm, and on_activate refuses a silent link anyway.
-  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  const bool active{is_active()};
   if (active && arm_->link_timed_out()) {
     raise_fault(FaultCode::LINK_TIMEOUT);
+  }
+  // #103: a target the arm did not follow. After the link check: a silent arm has a stale
+  // pose, and the silence is the cause to report, not the lag that follows it.
+  if (active) {
+    check_tracking();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -670,7 +719,7 @@ return_type RobotSystem::check_temperatures()
   }
   // Blind while moving: halt (no power off, nothing is known to be hot). Not while inactive,
   // where nothing moves and on_activate checks the temperatures again.
-  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  const bool active{is_active()};
   if (active && arm_->temperature_stale()) {
     arm_->request_halt();
     RCLCPP_ERROR(
@@ -689,7 +738,7 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
   // backend holds every target anyway. This is a second guard for a caller outside the
   // controller manager (a test, a script). No log: nothing here is RT-safe to log, and the
   // normal path never reaches it.
-  const bool active{get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE};
+  const bool active{is_active()};
   if (!active) {
     return return_type::OK;
   }
@@ -720,6 +769,38 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
   arm_->write_angles(commands);
   return return_type::OK;
+}
+
+bool RobotSystem::is_active() const
+{
+  return get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+}
+
+void RobotSystem::check_tracking()
+{
+  if (fault_.load() != FaultCode::NONE || !arm_->has_sample()) {
+    return;
+  }
+  const std::optional<JointPositions> target{arm_->last_target()};
+  if (!target.has_value()) {
+    // Nothing on the wire to follow: before the first send, or after a stop. A clock that was
+    // running belongs to a target that is gone.
+    tracking_.reset();
+    return;
+  }
+  const std::optional<TrackingError> error{
+    tracking_.update(target.value(), arm_->read_angles(), TrackingCheck::Clock::now())};
+  if (!error.has_value()) {
+    return;
+  }
+  // Logged here, once: raise_fault() does not know the joint and the error.
+  RCLCPP_ERROR(
+    get_logger(),
+    "Fault %d: joint '%s' is %.1f deg from its target for over %d ms (limit %.1f deg). The arm "
+    "did not follow the command. Targets held until the next activate.",
+    static_cast<int>(FaultCode::TRACKING_ERROR), info_.joints.at(error->joint).name.c_str(),
+    error->error_rad * RAD_TO_DEG, config_.tracking_error_ms, config_.tracking_error_deg);
+  raise_fault(FaultCode::TRACKING_ERROR);
 }
 
 void RobotSystem::raise_fault(FaultCode code)

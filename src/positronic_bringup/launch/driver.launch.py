@@ -45,6 +45,8 @@ Launch arguments:
   moving_period_ms:=50        ms of a serial-thread turn that sends a command
   send_settle_ms:=30          ms the thread waits after a send_angles before a get_angles
   servo_temp_limit_c:=60      degC that cuts the arm (stop, then power off); 30 to 60
+  tracking_error_deg:=8       deg a joint may lag its target before the time counts (#103)
+  tracking_error_ms:=300      ms over that lag that make fault 2, the arm did not follow
   start_inactive:=false       true: the hardware component and arm_controller come up
                               inactive, and only the safety supervisor makes them active
                               (#45). supervised.launch.py sets it.
@@ -81,6 +83,13 @@ def generate_launch_description():
     servo_temp_limit_c = DeclareLaunchArgument(
         'servo_temp_limit_c', default_value='60',
         description='degC at which a servo stops the arm and powers it off (30 to 60).')
+    # The unfollowed-command fault (#103). Arguments so the bench can try other values.
+    tracking_error_deg = DeclareLaunchArgument(
+        'tracking_error_deg', default_value='8',
+        description='deg a joint may lag its target before the time counts (1 to 45).')
+    tracking_error_ms = DeclareLaunchArgument(
+        'tracking_error_ms', default_value='300',
+        description='ms a joint may stay over tracking_error_deg before fault 2 (50 to 5000).')
     # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
     # without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -110,6 +119,8 @@ def generate_launch_description():
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
             ' send_settle_ms:=', LaunchConfiguration('send_settle_ms'),
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
+            ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
+            ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
         ]),
         value_type=str)
 
@@ -171,6 +182,8 @@ def generate_launch_description():
         moving_period_ms,
         send_settle_ms,
         servo_temp_limit_c,
+        tracking_error_deg,
+        tracking_error_ms,
         update_rate,
         start_inactive,
         robot_state_publisher,
