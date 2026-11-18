@@ -72,7 +72,7 @@
   </ros2_control>
 
   <!-- Ros2 control for the gripper. Only needs one joint since the fingers mimic it.
-        It is a mock until #123 adds the real gripper interface”-->
+        It is a mock until #123 adds the real gripper interface -->
   <ros2_control name="positronic_gripper_mock" type="system">
     <hardware>
       <plugin>mock_components/GenericSystem</plugin>
