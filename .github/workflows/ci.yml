@@ -20,6 +20,13 @@ jobs:
     env:
       # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
       RUN_DEV: docker compose run --rm -T dev
+      # ccache (in the tools stage) for the builds: CMake reads the launcher from the environment at
+      # configure time, so the Makefile doesn't change. The cache lives in the workspace, so
+      # actions/cache can save it (#144).
+      CCACHE_ENV: >-
+        -e CCACHE_DIR=/ws/.ccache
+        -e CMAKE_C_COMPILER_LAUNCHER=ccache
+        -e CMAKE_CXX_COMPILER_LAUNCHER=ccache
     steps:
       - uses: actions/checkout@v4
 
@@ -65,8 +72,30 @@ jobs:
       - name: Script tests
         run: $RUN_DEV python3 -m pytest -q scripts
 
+      # Keyed on the sources and the Dockerfile (the compiler). A PR changing a few files misses the
+      # key and takes the newest cache through the prefix: only the changed TUs recompile.
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('docker/Dockerfile', 'src/**') }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Reset the ccache counters
+        run: docker compose run --rm -T $CCACHE_ENV dev ccache --zero-stats
+
       - name: Build
-        run: make RUN="$RUN_DEV" build
+        run: make RUN="docker compose run --rm -T $CCACHE_ENV dev" build
+
+      # Experiment #144 E3: hit rate of each build, and whether the launcher reached
+      # compile_commands.json (clang-tidy reads it).
+      - name: ccache stats after Build
+        run: |
+          docker compose run --rm -T $CCACHE_ENV dev bash -c \
+            'ccache --show-stats -v && ccache --show-config | grep -E "max_size|compression|cache_dir" && ccache --zero-stats'
+          echo "compile_commands.json entries that mention ccache: $(grep -c ccache build/compile_commands.json || true)"
+          grep -m1 '"command"' build/compile_commands.json | cut -c1-200
 
       # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint), then
       # scripts/summarize_tests.py: one line per package and each failure. Its table goes to the
@@ -95,7 +124,30 @@ jobs:
         continue-on-error: true
         run: >-
           make coverage
-          RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md dev"
+          RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md $CCACHE_ENV dev"
+
+      # Experiment #144 E3: with ccache the .gcno files come from the cache; same count and same
+      # lcov totals as a cold run means they are restored.
+      - name: ccache stats after Coverage
+        if: always()
+        run: |
+          docker compose run --rm -T $CCACHE_ENV dev ccache --show-stats -v
+          echo ".gcno files in build_cov: $(find build_cov -name '*.gcno' | wc -l)"
+          echo ".gcda files in build_cov: $(find build_cov -name '*.gcda' | wc -l)"
+          du -sh .ccache
+
+      # Plan: save only on pushes to dev, so every PR branch can restore it.
+      # Experiment #144 E3 only: also from this branch's PR (cache scoped to the PR ref, not dev),
+      # so a second run finds it. Drop the head_ref part before this goes anywhere.
+      - name: Save the ccache
+        if: >-
+          steps.ccache.outputs.cache-hit != 'true' &&
+          ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+          github.head_ref == 'exp/144-e3-ccache')
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Coverage report in the job summary
         if: always()

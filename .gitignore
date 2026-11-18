@@ -70,3 +70,4 @@ rosbag2_*/
 *.swp
 *~
 .DS_Store
+.ccache/
