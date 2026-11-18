@@ -57,6 +57,10 @@ Measured (#144, clang-tidy 18, one file at a time unless said otherwise):
   the packages that depend on it, and, locally, a new file not yet `git add`ed.
 - No style, `modernize`, `readability` or analyzer warnings fail CI in `test/`. The editor
   (clangd) still shows them there: they are advice.
+- A header gets the checks of the file that includes it. Every header in `include/` is included
+  by at least one `src/` file, so it still gets the full set; the 4 headers only tests include
+  live in `test/`. Checked in CI on this PR: a naming warning planted in `servo_temperature.hpp`
+  failed its 2 `src/` files and not its 3 test files.
 - A new check family in `.clang-tidy` must also be switched off in `TIDY_TEST_CHECKS`;
   `scripts/test_tidy_changed.py` fails until it is.
 - `make tidy-changed` runs git inside the dev container, so it doesn't work in a git worktree
