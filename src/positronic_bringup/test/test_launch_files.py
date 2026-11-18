@@ -36,9 +36,9 @@ import importlib.util
 import os
 
 from launch import LaunchDescription
-import pytest
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
+import pytest
 
 LAUNCH_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch'

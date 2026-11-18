@@ -51,9 +51,9 @@
 import os
 from xml.etree import ElementTree
 
+from ament_index_python.packages import get_package_share_directory
 import pytest
 import xacro
-from ament_index_python.packages import get_package_share_directory
 import yaml
 
 SUPERVISOR_CONFIG = os.path.join(

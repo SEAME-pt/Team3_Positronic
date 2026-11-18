@@ -30,8 +30,8 @@ built by hand, so no launch and no publisher are needed.
 import importlib.util
 import os
 
-import pytest
 from builtin_interfaces.msg import Time
+import pytest
 import rclpy
 from sensor_msgs.msg import JointState
 
