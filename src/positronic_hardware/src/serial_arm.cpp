@@ -269,6 +269,18 @@ bool SerialArm::temperature_stale() const
   return temperature_watchdog_.timed_out(Clock::now());
 }
 
+std::optional<JointPositions> SerialArm::last_target() const
+{
+  return *last_target_.readFromRT();
+}
+
+void SerialArm::set_last_sent(
+  std::optional<JointPositions> & last_sent, const std::optional<JointPositions> & value)
+{
+  last_sent = value;
+  last_target_.writeFromNonRT(value);
+}
+
 bool SerialArm::request_and_wait(Request request)
 {
   request_.store(request);
@@ -324,7 +336,7 @@ void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
     return;  // not taken: the request stays pending, the frame goes out again next turn
   }
   if (pending == Request::HALT) {
-    last_sent = std::nullopt;
+    set_last_sent(last_sent, std::nullopt);
   } else if (pending == Request::POWER_ON) {
     // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
     // right after it must find the hold already released, so its own hold cannot be undone by
@@ -430,7 +442,7 @@ bool SerialArm::cut_power(const Overheat & trip, std::optional<JointPositions> &
 {
   // The hold first, like halt(): from here on no target goes out, whatever the controller does.
   halted_.store(true);
-  last_sent = std::nullopt;
+  set_last_sent(last_sent, std::nullopt);
   const positronic_protocol::Frame stop{positronic_protocol::encode_stop()};
   static_cast<void>(transport_->write(stop.bytes.data(), stop.size));
   // The arm ignores the port for a moment after a frame (#32): the power off waits the settle,
@@ -559,7 +571,7 @@ void SerialArm::poll_loop()
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
       const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
-        last_sent = target;
+        set_last_sent(last_sent, target);
         sent = true;
         // The arm passes the command to the servos and ignores the port meanwhile: a
         // get_angles inside this window stalls, so the next turn must not start before it.
