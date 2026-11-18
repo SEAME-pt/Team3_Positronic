@@ -57,6 +57,9 @@ inline constexpr int MAX_PLAUSIBLE_C{99};
 /// cool arm; two in a row would not.
 inline constexpr int READINGS_TO_TRIP{2};
 
+/// #144 experiment E4: a planted clang-tidy warning (naming), must fail CI. Reverted next.
+inline constexpr int plantedTidyWarning{1};
+
 /// True when one reading can be a servo temperature.
 [[nodiscard]] inline bool plausible_celsius(std::uint8_t celsius)
 {
