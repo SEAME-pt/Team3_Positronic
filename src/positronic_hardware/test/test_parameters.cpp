@@ -25,6 +25,13 @@
 //   ends of every range accepted and one step past them refused with the range, a fraction where
 //   a whole number is expected, NaN and infinity, the settle below the period, the rules of
 //   backend, port, baud and velocity_filter_alpha, and the INFO line.
+// Follow-up prompt (#150):
+//   The moving turn waits for the sync-write, so the settle is only the wait of the overheat cut
+//   and may be longer than the period; the default period is 33 ms.
+// Follow-up prompt (#150):
+//   send_settle_ms is gone: the settle is a constant of the cut. echo_timeout_ms, the longest
+//   wait for the sync-write, is the parameter instead, 20 to 80 ms, and it may be longer than
+//   the period. The INFO line prints it in place of the settle.
 
 #include <gtest/gtest.h>
 
@@ -71,6 +78,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.baud, defaults.baud);
   EXPECT_DOUBLE_EQ(config.velocity_filter_alpha, defaults.velocity_filter_alpha);
   EXPECT_EQ(config.timing.moving_period, defaults.timing.moving_period);
+  EXPECT_EQ(config.timing.echo_timeout, defaults.timing.echo_timeout);
   EXPECT_EQ(config.timing.send_settle, defaults.timing.send_settle);
   EXPECT_EQ(config.servo_temp_limit_c, defaults.servo_temp_limit_c);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, defaults.tracking_error_deg);
@@ -85,7 +93,7 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"baud", "115200"},
       {"velocity_filter_alpha", "0.5"},
       {"moving_period_ms", "40"},
-      {"send_settle_ms", "25"},
+      {"echo_timeout_ms", "45"},
       {"servo_temp_limit_c", "45"},
       {"tracking_error_deg", "6.5"},
       {"tracking_error_ms", "200"}})};
@@ -96,7 +104,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_EQ(config.baud, 115200);
   EXPECT_DOUBLE_EQ(config.velocity_filter_alpha, 0.5);
   EXPECT_EQ(config.timing.moving_period, milliseconds{40});
-  EXPECT_EQ(config.timing.send_settle, milliseconds{25});
+  EXPECT_EQ(config.timing.echo_timeout, milliseconds{45});
   EXPECT_EQ(config.servo_temp_limit_c, 45);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, 6.5);
   EXPECT_EQ(config.tracking_error_ms, 200);
@@ -108,7 +116,7 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
   EXPECT_EQ(
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, port, baud, "
-    "velocity_filter_alpha, moving_period_ms, send_settle_ms, servo_temp_limit_c, "
+    "velocity_filter_alpha, moving_period_ms, echo_timeout_ms, servo_temp_limit_c, "
     "tracking_error_deg, tracking_error_ms.");
 }
 
@@ -123,14 +131,13 @@ TEST(Parameters, EveryUnknownNameIsReportedInOrder)
     "Unknown hardware parameters 'baudrate', 'tracking_eror_ms'");
 }
 
-// Each end of each range is a valid value. The shortest period needs a shorter settle than the
-// 30 ms default, or the settle rule refuses it.
+// Each end of each range is a valid value.
 TEST(Parameters, TheEndsOfEveryRangeAreAccepted)
 {
-  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}, {"send_settle_ms", "10"}}));
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}}));
   EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "100"}}));
-  EXPECT_TRUE(accepted(Parameters{{"send_settle_ms", "0"}}));
-  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "100"}, {"send_settle_ms", "99"}}));
+  EXPECT_TRUE(accepted(Parameters{{"echo_timeout_ms", "20"}}));
+  EXPECT_TRUE(accepted(Parameters{{"echo_timeout_ms", "80"}}));
   EXPECT_TRUE(accepted(Parameters{{"servo_temp_limit_c", "30"}}));
   EXPECT_TRUE(accepted(Parameters{{"servo_temp_limit_c", "60"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_deg", "1"}}));
@@ -149,11 +156,11 @@ TEST(Parameters, OneStepOutsideARangeIsRefusedWithTheRange)
     refusal("moving_period_ms", "101"),
     "Parameter 'moving_period_ms' is '101'; use a whole number in [20, 100].");
   EXPECT_EQ(
-    refusal("send_settle_ms", "-1"),
-    "Parameter 'send_settle_ms' is '-1'; use a whole number in [0, 99].");
+    refusal("echo_timeout_ms", "19"),
+    "Parameter 'echo_timeout_ms' is '19'; use a whole number in [20, 80].");
   EXPECT_EQ(
-    refusal("send_settle_ms", "100"),
-    "Parameter 'send_settle_ms' is '100'; use a whole number in [0, 99].");
+    refusal("echo_timeout_ms", "81"),
+    "Parameter 'echo_timeout_ms' is '81'; use a whole number in [20, 80].");
   EXPECT_EQ(
     refusal("servo_temp_limit_c", "29"),
     "Parameter 'servo_temp_limit_c' is '29'; use a whole number in [30, 60].");
@@ -194,12 +201,13 @@ TEST(Parameters, NotANumberIsRefused)
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", ""}}));
 }
 
-// The settle is part of a turn, so it must stay below the period, the 50 ms default here.
-TEST(Parameters, TheSettleMustStayBelowThePeriod)
+// #150: the wait for the sync-write only counts when the Atom is late, so it may be longer than
+// the period. The old settle is no parameter any more: its name is unknown, like a typo.
+TEST(Parameters, TheEchoTimeoutMayBeLongerThanThePeriod)
 {
-  EXPECT_TRUE(accepted(Parameters{{"send_settle_ms", "49"}}));
-  EXPECT_EQ(
-    refusal("send_settle_ms", "50"), "send_settle_ms (50) must be below moving_period_ms (50).");
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "25"}, {"echo_timeout_ms", "60"}}));
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}, {"echo_timeout_ms", "80"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_settle_ms", "30"}}));
 }
 
 TEST(Parameters, TheSpecialParametersKeepTheirRules)
@@ -220,6 +228,6 @@ TEST(Parameters, TheInfoLineHasEveryValue)
   EXPECT_EQ(
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
-    "period 50 ms, send settle 30 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
+    "period 33 ms, echo timeout 60 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
     "for 300 ms.");
 }

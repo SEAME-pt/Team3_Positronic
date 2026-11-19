@@ -2,19 +2,25 @@
 # Sweep of the serial-thread timings on the real arm (#32).
 #
 # Runs inside the Jetson container (make nano-shell), with the arm powered on and the bench
-# clear. For every point P:S (moving_period_ms:send_settle_ms) it starts the driver with those
-# timings, activates forward_position_controller, streams a command at 30 Hz for DURATION
-# seconds (joint 1 swings smoothly by DELTA rad, 4 s per cycle, so the target changes every
-# tick and the serial thread stays in its moving mode) while joint_states_rate.py records the
-# interval between new poses, then stops the driver and waits COOLDOWN seconds. Results go to
-# /ws/log/sweep_<date>/<P>_<S>/: summary.txt, intervals.csv, driver.log.
+# clear, and inside the URDF limits: a fold by hand can leave J3 at 154 deg, above its 150, and
+# the driver then refuses to activate. For every point P (moving_period_ms) it starts the driver
+# with that period, switches the joints from arm_controller to forward_position_controller,
+# streams a command at 30 Hz for DURATION seconds (joint 1 swings smoothly by DELTA rad, 4 s per
+# cycle, so the target changes every tick and the serial thread stays in its moving mode)
+# while joint_states_rate.py records the interval between new poses, then stops the driver and
+# waits COOLDOWN seconds. Results go to /ws/log/sweep_<date>/<P>/: summary.txt, intervals.csv,
+# driver.log.
+#
+# Since #150 the moving turn waits for the Atom's sync-write, so a point is the period alone.
+# P:E also sets echo_timeout_ms, the longest wait for that sync-write (send_settle_ms, which the
+# sweeps of #32 set with P:S, is no parameter any more).
 #
 #   bash docs/03_verification/write_sweep/tools/sweep.sh            # the default points
-#   POINTS="50:30 40:30" COOLDOWN=60 bash docs/03_verification/write_sweep/tools/sweep.sh
+#   POINTS="50 40 33" COOLDOWN=60 bash docs/03_verification/write_sweep/tools/sweep.sh
 #
 # Ctrl+C stops the driver and leaves the arm where it is.
 
-POINTS=${POINTS:-"50:30 40:30 35:25 30:20"}
+POINTS=${POINTS:-"50 40 33"}
 DURATION=${DURATION:-120}
 COOLDOWN=${COOLDOWN:-120}
 DELTA=${DELTA:-0.1745}  # 10 deg on joint 1
@@ -94,23 +100,37 @@ mkdir -p "$OUT"
 echo "results in $OUT"
 for point in $POINTS; do
   period=${point%%:*}
-  settle=${point##*:}
-  dir="$OUT/${period}_${settle}"
+  # The launch arguments of the point: the period, and the echo timeout when the point gives one.
+  timings=(moving_period_ms:="$period")
+  dir="$OUT/$period"
+  if [ "$point" != "$period" ]; then
+    timings+=(echo_timeout_ms:="${point##*:}")
+    dir="$OUT/${period}_${point##*:}"
+  fi
   mkdir -p "$dir"
   echo
-  echo "=== moving_period_ms=$period send_settle_ms=$settle ==="
+  echo "=== ${timings[*]} ==="
 
-  setsid ros2 launch positronic_bringup driver.launch.py port:="$PORT" \
-    moving_period_ms:="$period" send_settle_ms:="$settle" >"$dir/driver.log" 2>&1 &
+  setsid ros2 launch positronic_bringup driver.launch.py port:="$PORT" "${timings[@]}" \
+    >"$dir/driver.log" 2>&1 &
   driver_pid=$!
 
-  # Wait for the driver to be up: a first /joint_states.
-  if ! timeout 30 bash -c 'source /opt/ros/jazzy/setup.bash; ros2 topic echo --once /joint_states >/dev/null'; then
+  # Wait for the driver to be up: a first /joint_states. With the type given, echo waits for the
+  # topic; without it, it exits at once while the topic does not exist yet, and the point ends.
+  if ! timeout 30 bash -c 'source /opt/ros/jazzy/setup.bash; ros2 topic echo --once /joint_states sensor_msgs/msg/JointState >/dev/null'; then
     echo "no /joint_states within 30 s, see $dir/driver.log"
     stop_driver
     continue
   fi
-  ros2 run controller_manager spawner forward_position_controller >>"$dir/driver.log" 2>&1
+  # driver.launch.py starts arm_controller, which holds the six position commands: the streaming
+  # controller is loaded inactive and takes them over, or every command it gets is dropped.
+  ros2 run controller_manager spawner forward_position_controller --inactive >>"$dir/driver.log" 2>&1
+  if ! ros2 control switch_controllers --strict --deactivate arm_controller \
+    --activate forward_position_controller >>"$dir/driver.log" 2>&1; then
+    echo "no switch to forward_position_controller, see $dir/driver.log"
+    stop_driver
+    continue
+  fi
 
   echo "rest  $rest  (joint 1 swings +$DELTA rad)"
 
@@ -133,6 +153,11 @@ done
 
 echo
 echo "=== all points ==="
+# A point the driver refused (a bad parameter, no /joint_states) has no summary.
 for d in "$OUT"/*/; do
-  echo "$(basename "$d"): $(tr '\n' ' ' <"$d/summary.txt")"
+  if [ -f "$d/summary.txt" ]; then
+    echo "$(basename "$d"): $(tr '\n' ' ' <"$d/summary.txt")"
+  else
+    echo "$(basename "$d"): no summary, see $d/driver.log"
+  fi
 done
