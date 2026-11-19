@@ -73,6 +73,26 @@ MoveIt: evidence from sim or HIL, not unit tests.
 **Decision:** **fix now** (~1 h). A safety path (a stop before the motion) on the real arm with
 no test, and needed for the gate.
 
+**What the test found (2026-11-19):**
+1. **The destructor can hang forever.** `~MoveitBackend()` calls `executor_->cancel()`; if that
+   runs before the spin thread has entered `spin()`, the cancel is lost (`spin()` sets its
+   "spinning" flag again) and `join()` never returns. A backend built and destroyed at once hung
+   every time; with a 200 ms pause after construction the tests passed. Possible fix: the spin
+   thread runs `spin_until_future_complete` on a promise the destructor sets.
+2. **`ready()` is true with no `move_group`.** With the robot description present (as
+   `mission.launch.py` gives it) and no `move_group`, `MoveGroupInterface` only logs "action
+   client/server not ready" and does not throw. The node goes ACTIVE, its heartbeat says IDLE,
+   and every goal fails at planning: the M2 guard does not hold on the real system.
+3. **`ready()` crashes with no robot description** (e.g. `ros2 run`): "terminate called without
+   an active exception" instead of returning false; the `try/catch` cannot help (probably a
+   thread started inside MoveIt's constructor before it throws).
+
+Also: MoveIt waits 10 s for the URDF and 10 s for the SRDF by default; the test needs
+`robot_description_timeout` and `robot_description_semantic_timeout` set short.
+
+**Status:** sent to the package owner 2026-11-19. Item 1 of the work list is blocked until bug 1
+is fixed; bugs 2–3 are a new issue.
+
 ### M2. "MoveIt not ready → stay inactive" is untested
 
 **What:** `on_activate` (`src/mission_node.cpp:162`) returns FAILURE when `backend_->ready()` is

@@ -78,6 +78,8 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_ros REQUIRED)
 
+  # test_moveit_backend.cpp is not registered yet: it hangs until the MoveitBackend destructor
+  # race is fixed (docs/03_verification/test_review/positronic_mission.md, M1).
   foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
     ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mission_node_component)

@@ -74,6 +74,14 @@ Questions a review raised that belong to another package's review.
 Items 1–2 make the gate pass; do them first. Then Phase 3: remove `continue-on-error: true` from
 the coverage step in `.github/workflows/ci.yml`.
 
+### Progress
+
+| # | Result |
+|---|---|
+| 1 | **Blocked.** `test/test_moveit_backend.cpp` written; it found two bugs in `MoveitBackend` (see mission M1, "What the test found"). Sent to the package owner 2026-11-19. The test hangs until bug 1 is fixed, so it is not registered in `CMakeLists.txt` yet. **Mission stays below 80 % (about 76 %) until it runs: Phase 3 waits for it.** |
+| 2 | **Done.** `test/test_planning_scene_node.py`, 6 tests, 1.9 s. moveit_config 56 % → 98 % (left: line 38, C2; line 133, `__main__`). Mutation check: dropping `not result.success` fails `test_apply_is_false_when_move_group_refuses`. |
+| 3 | **Done.** M2 `ActivationRefusedWhenBackendNotReady` (`test_lifecycle.cpp`), M3 the pose check in `GoalSucceedsWhenIdle` + `EachGoalSendsItsOwnPose` (`test_goals.cpp`); `MockBackend` got `ready_result` and `last_pose()`. Mutation checks: a default pose sent to the backend fails both pose tests; deleting the ready check fails the M2 test. |
+
 ## Issues to open
 
 - **New issues:** reading plausibility in `SerialArm` (H2, F1); read the acks, starting with stop
