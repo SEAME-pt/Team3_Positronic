@@ -39,11 +39,11 @@ namespace
 
 using positronic_hardware::ACK_TIMEOUT;
 using positronic_hardware::Expect;
-using positronic_hardware::Request;
-using positronic_hardware::REQUEST_REPLY_TIMEOUT;
 using positronic_hardware::get_servo_temps_request;
 using positronic_hardware::power_off_request;
 using positronic_hardware::power_on_request;
+using positronic_hardware::Request;
+using positronic_hardware::REQUEST_REPLY_TIMEOUT;
 using positronic_hardware::stop_request;
 using positronic_protocol::CommandId;
 
