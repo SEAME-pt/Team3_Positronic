@@ -42,6 +42,8 @@ Decisions are added below as they are made.
   margin explained.
 - **M5.** Small gaps: reset while not active (lines 51–53), cleanup while a goal thread exists
   (line 150).
+- **M6.** `GoalSucceedsWhenIdle` was flaky: it required the one feedback message the node sends
+  when a goal starts (found in #161, added 2026-11-19).
 
 ### M1. `MoveitBackend` never runs in a test
 
@@ -139,11 +141,33 @@ the supervisor's 300 ms timeout (what matters is "no gap above the timeout", not
 Reset refused while the node is not active (lines 51–53); `on_cleanup` joining a goal thread
 (line 150). **Later.**
 
+### M6. A feedback check that depends on timing
+
+**What:** `GoalSucceedsWhenIdle` (`test/test_goals.cpp`) checked `feedback_count_ > 0`. The node
+publishes exactly one feedback message, when the goal starts. If the client's feedback
+subscription is not matched yet (a busy machine, tests in parallel), that message is lost, and
+no amount of waiting brings it back. Seen once in CI (run 44391150973) and in 2 of 11 local
+parallel runs, while making tests run in parallel for #144 (PR #161). The workaround there runs
+mission's tests alone (`TEST_ALONE` in the Makefile and `coverage.sh`, about 14 s per CI run).
+
+**Why the review missed it:** the assert used `wait_until`, which looks safe ("wait for
+evidence"). But waiting only helps if the evidence can still come; a single message that was
+lost never comes. Lesson: before trusting a wait, ask whether the thing waited for can be lost.
+
+**Fix (2026-11-19):** the feedback check is removed, with a comment why: feedback is information
+for the client, not a safety behaviour, and waiting for the subscription to match is not easy
+from the action client's public API. The unused `feedback_count_` and its callback are removed
+from the fixture. Check: `test_goals` passed 10 of 10 runs with the hardware and safety tests
+running at the same time.
+
+**Decision:** **fixed in #46.** Tell #161: `TEST_ALONE` for mission can go once this is merged.
+
 ## Summary
 
 | Decision | Items |
 |---|---|
 | Fix now (#46) | M1 `test_moveit_backend.cpp`: stop before planning, reset_stop, not connected, `ready()` false (~1 h, also lifts the gate to ~84 %); M2 activation refused when MoveIt not ready (~20 min); M3 the pose reaches the backend (~15 min) |
+| Fixed in #46 | M6 flaky feedback check removed |
 | Later (follow-up issue) | M4 timing margins in the heartbeat tests; M5 reset while inactive, cleanup join |
 | New issue | Linters switched off in `CMakeLists.txt` (side note) |
 

@@ -54,7 +54,7 @@ Questions a review raised that belong to another package's review.
 | positronic_protocol | Done 2026-11-17 | – | F1 test, F2 README note, F3 (with the acks issue), F4 cleanup | – |
 | positronic_hardware | Done 2026-11-17 | H1 shutdown test, H4 `power_on` failure test | H5 (top), H1 crash note, H4 `write()` while inactive | H2 reading plausibility, H3 read the acks |
 | positronic_safety | Done 2026-11-18 | S1 shutdown test, S2 stale fault code test, S3 controller manager gone test | S4 locking test + README sentence, S5 four refusal tests, RESUMING README note | S1 `main()` Ctrl+C halt (or #136), S4 heartbeat ADR |
-| positronic_mission | Done 2026-11-19 | M1 `MoveitBackend` tests (gate), M2 MoveIt not ready, M3 pose reaches the backend | M4 heartbeat timing margins, M5 small gaps | Linters off in `CMakeLists.txt` |
+| positronic_mission | Done 2026-11-19 | M1 `MoveitBackend` tests (gate), M2 MoveIt not ready, M3 pose reaches the backend, M6 flaky feedback check | M4 heartbeat timing margins, M5 small gaps | Linters off in `CMakeLists.txt` |
 | positronic_moveit_config | Done 2026-11-19 | C1 `apply()`/`main()` tests (gate) | C2 bad scene files, C3 joint limits config test | C1 a failed scene load must stop the system |
 | positronic_bringup | Done 2026-11-19 | – | B1 delay tool `main()`, B2 heartbeat timeout vs measured gap | – |
 
@@ -86,6 +86,7 @@ the coverage step in `.github/workflows/ci.yml`.
 | 6 | **Done.** S1 `ShutdownWhileMonitoringSendsHardwareInactive`. Mutation found that the installed rclcpp_lifecycle runs `on_deactivate` before `on_shutdown` on a shutdown from ACTIVE: `on_shutdown`'s halt is a second guard never reached here (see safety S1). The test checks the outcome. |
 | 7 | **Done.** S2 `StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes`: new fake knob `stale_fault_after_activation` (every other message for 500 ms carries code 1 stamped before the activation; alternating because the supervisor keeps only the newest message). A fresh code 1 afterwards still halts. Mutation: removing the filter fails it. |
 | 8 | **Done.** S3 `HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNotStopped`: the fake drops its services; the halt ends STOPPED in < 200 ms with `hardware_stopped == false`. Mutation: waiting for a missing service instead of failing at once fails it. |
+| + | **Done.** Mission M6 (from #161): the flaky feedback check in `GoalSucceedsWhenIdle` removed; `test_goals` 10/10 under parallel load. `TEST_ALONE` for mission (#161) can go after this merges. |
 
 ## Issues to open
 
