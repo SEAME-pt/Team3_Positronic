@@ -21,13 +21,13 @@
 #include "positronic_mission/moveit_backend.hpp"
 #include <chrono>
 #include <memory>
-#include <thread>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/utils/moveit_error_code.hpp>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/node.hpp>
 #include <rclcpp/node_options.hpp>
 #include <rclcpp_action/create_client.hpp>
+#include <thread>
 #include "moveit_msgs/action/move_group.hpp"
 #include "positronic_mission/motion_backend.hpp"
 
