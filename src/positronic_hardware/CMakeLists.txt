@@ -102,6 +102,9 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
   ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
   target_include_directories(test_link_watchdog PRIVATE include)
+  # Pure-logic unit test of when read() warns about sends without a sync-write (#150).
+  ament_add_gtest(test_echo_timeout_report test/test_echo_timeout_report.cpp)
+  target_include_directories(test_echo_timeout_report PRIVATE include)
 
   # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
   ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)

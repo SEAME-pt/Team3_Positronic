@@ -23,7 +23,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -35,6 +34,7 @@
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+#include "positronic_hardware/echo_timeout_report.hpp"
 #include "positronic_hardware/fake_arm.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/parameters.hpp"
@@ -139,8 +139,8 @@ private:
   /// line (joint, error, limits), once a joint has been off for too long.
   void check_tracking();
   /// read()'s report of the sends that got no sync-write (#150), while active: one warning line
-  /// with how many since the last one, at most every ECHO_REPORT_PERIOD, so turns that got slow
-  /// do not go unseen.
+  /// with how many since the last one, at most every EchoTimeoutReport::DEFAULT_PERIOD, so turns
+  /// that got slow do not go unseen.
   void report_echo_timeouts();
   /// True while the component is ACTIVE: the only state in which targets go out and faults count.
   [[nodiscard]] bool is_active() const;
@@ -169,10 +169,9 @@ private:
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
 
-  /// #150: the backend's echo_timeouts() already reported, and when read() may warn again.
-  /// Reset with every new backend, whose count starts at zero.
-  std::uint64_t echo_timeouts_reported_{0};
-  std::chrono::steady_clock::time_point next_echo_report_;
+  /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
+  /// whose count starts at zero.
+  EchoTimeoutReport echo_report_;
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
