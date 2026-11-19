@@ -20,6 +20,7 @@
 
 #include "positronic_protocol/decode.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -140,6 +141,66 @@ CentiDegrees read_int16_be(ByteView rx, std::size_t index) noexcept
   return static_cast<CentiDegrees>(raw);
 }
 
+/// The start of the Atom's sync-write to the six servos: header FF FF, broadcast id FE, LEN
+/// 0x34, SYNC_WRITE (0x83), first register 0x29, 7 data bytes per servo.
+constexpr std::array<std::uint8_t, 7> SYNC_WRITE_START{0xFF, 0xFF, 0xFE, 0x34, 0x83, 0x29, 0x07};
+
+/// One servo in it: the id and the 7 data bytes.
+constexpr std::size_t SYNC_WRITE_BYTES_PER_SERVO{8};
+
+/// The whole frame: the start, six servos and the checksum, 56 bytes.
+constexpr std::size_t SYNC_WRITE_SIZE{
+  SYNC_WRITE_START.size() + NUM_JOINTS * SYNC_WRITE_BYTES_PER_SERVO + 1};
+
+/// The checksum covers the frame from the id, right after FF FF, to the last data byte.
+constexpr std::size_t SYNC_WRITE_ID_OFFSET{2};
+
+/// True when the sync-write at `start`, whole in `rx`, carries the checksum of its bytes.
+bool sync_write_checksum_ok(ByteView rx, std::size_t start) noexcept
+{
+  const std::size_t checksum_index{start + SYNC_WRITE_SIZE - 1};
+  unsigned int sum{0};
+  for (std::size_t index{start + SYNC_WRITE_ID_OFFSET}; index < checksum_index; ++index) {
+    sum += detail::read_byte(rx, index);
+  }
+  return static_cast<std::uint8_t>(~sum) == detail::read_byte(rx, checksum_index);
+}
+
+/// find_frame() for the sync-write: the 7 start bytes, then the checksum. A mismatch after
+/// FF FF, or a bad checksum, counts as a rejected candidate. A buffer that ends while
+/// everything still matches is NEED_MORE_DATA, so a frame arriving in pieces is kept.
+Match find_sync_write(ByteView rx) noexcept
+{
+  Match match{};
+  for (std::size_t start{0}; start < rx.size; ++start) {
+    std::size_t matched{0};
+    while (matched < SYNC_WRITE_START.size() && start + matched < rx.size &&
+      detail::read_byte(rx, start + matched) == SYNC_WRITE_START.at(matched))
+    {
+      ++matched;
+    }
+    const bool start_matched{matched == SYNC_WRITE_START.size()};
+    const bool cut_in_start{!start_matched && start + matched == rx.size};
+    const bool cut_in_body{start_matched && start + SYNC_WRITE_SIZE > rx.size};
+    if (cut_in_start || cut_in_body) {
+      match.status = DecodeStatus::NEED_MORE_DATA;
+      match.consumed = start;
+      return match;
+    }
+    if (start_matched && sync_write_checksum_ok(rx, start)) {
+      match.status = DecodeStatus::FOUND;
+      match.start = start;
+      match.consumed = start + SYNC_WRITE_SIZE;
+      return match;
+    }
+    if (matched > 1) {
+      ++match.rejected;
+    }
+  }
+  match.consumed = rx.size;
+  return match;
+}
+
 /// Copies the bookkeeping of `match` into a Decoded result.
 template<typename T>
 Decoded<T> from_match(const Match & match) noexcept
@@ -187,6 +248,16 @@ Decoded<std::uint8_t> decode_ack(ByteView rx, CommandId command) noexcept
   auto result{from_match<std::uint8_t>(match)};
   if (match.status == DecodeStatus::FOUND) {
     result.value = detail::read_byte(rx, match.start + DATA_OFFSET);
+  }
+  return result;
+}
+
+Decoded<std::uint8_t> decode_sync_write_echo(ByteView rx) noexcept
+{
+  const Match match{find_sync_write(rx)};
+  auto result{from_match<std::uint8_t>(match)};
+  if (match.status == DecodeStatus::FOUND) {
+    result.value = static_cast<std::uint8_t>(NUM_JOINTS);
   }
   return result;
 }

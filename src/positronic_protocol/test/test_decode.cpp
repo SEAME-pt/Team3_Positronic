@@ -30,6 +30,10 @@
 //   recorded servo noise, a frame cut at every position (NEED_MORE_DATA, then FOUND), the
 //   echo of the request and a get_angles reply are not temperatures, a temperatures reply is
 //   not a get_angles reply, and a wrong LEN is rejected.
+// Follow-up prompt (#150, the sync-write echo):
+//   decode_sync_write_echo finds the Atom's sync-write to the six servos: the recorded frame,
+//   the same frame at the end of everything the Atom sent after one recorded send_angles, a
+//   frame cut at every position, a bad checksum, the other servo-bus frames, and our own replies.
 
 #include <gtest/gtest.h>
 
@@ -81,6 +85,22 @@ const Bytes SERVO_NOISE{parse_hex(
   "03 11 00 f9 07 00 00 00 00 7a 21 00 00 00 f9 07 00 00 50 ff ff 04 11 00 0e 08 00 00 00 00 4a 21 "
   "00 00 00 0e 08 00 00 53 ff ff 05 11 00 fb 07 00 00 00 00 4a 20 00 00 00 fb 07 00 00 7b ff ff 06 "
   "11 00 f9 07 00 00 00 00 49 23 00 00 00 f9 07 00 00 7c")};
+
+/// The Atom's sync-write to servos 1 to 6, recorded on the arm on 2026-11-13 (tap of #115).
+const Bytes RECORDED_SYNC_WRITE{parse_hex(
+  "ff ff fe 34 83 29 07 01 32 e8 07 00 00 f1 01 02 32 01 08 00 00 32 01 03 32 4a 08 00 00 2c 01 "
+  "04 32 3f 08 00 00 2c 01 05 32 13 08 00 00 9e 01 06 32 de 08 00 00 fe 01 2a")};
+
+/// Everything the Atom put on the line after one send_angles, same tap: the ack, a ping of
+/// servo 7, the sync-read and the six servo replies, and the sync-write last. 208 bytes.
+const Bytes RECORDED_AFTER_SEND{parse_hex(
+  "fe fe 03 22 01 fa ff ff 07 02 01 f5 ff ff fe 0a 82 38 0f 01 02 03 04 05 06 19 ff ff 01 11 00 e8 "
+  "07 00 00 00 00 79 23 00 00 00 e8 07 00 00 73 ff ff 02 11 00 02 08 00 00 00 00 79 20 00 00 00 01 "
+  "08 00 00 40 ff ff 03 11 00 4b 08 00 00 00 00 7a 1f 00 00 00 4a 08 00 00 ad ff ff 04 11 00 40 08 "
+  "00 00 00 00 4a 20 00 00 00 3f 08 00 00 f1 ff ff 05 11 00 14 08 00 00 00 00 4a 1e 00 00 00 13 08 "
+  "00 00 4a ff ff 06 11 00 df 08 00 00 00 00 49 22 00 00 00 de 08 00 00 b0 ff ff fe 34 83 29 07 01 "
+  "32 db 07 00 00 fe 01 02 32 01 08 00 00 2c 01 03 32 4a 08 00 00 2c 01 04 32 3f 08 00 00 2c 01 05 "
+  "32 13 08 00 00 2c 01 06 32 de 08 00 00 2c 01 74")};
 
 }  // namespace
 
@@ -456,4 +476,84 @@ TEST(DecodeTemps, WrongLengthIsRejected)
   const auto result{pp::decode_servo_temps_reply(view_of(rx))};
   EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
   EXPECT_EQ(result.rejected, 1U);
+}
+
+// ---------------------------------------------------------------------------
+// decode_sync_write_echo (#150): the last frame of the Atom after a send_angles
+// ---------------------------------------------------------------------------
+
+TEST(DecodeSyncWrite, RecordedFrameFromArm)
+{
+  const auto result{pp::decode_sync_write_echo(view_of(RECORDED_SYNC_WRITE))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value, pp::NUM_JOINTS);
+  EXPECT_EQ(result.consumed, RECORDED_SYNC_WRITE.size());
+  EXPECT_EQ(result.consumed, 56U);
+  EXPECT_EQ(result.rejected, 0U);
+}
+
+TEST(DecodeSyncWrite, LastFrameOfEverythingAfterASend)
+{
+  // The ack, the ping, the sync-read and the six servo replies all start with FE FE or FF FF:
+  // none is taken for the sync-write, which ends the recorded sequence.
+  const auto result{pp::decode_sync_write_echo(view_of(RECORDED_AFTER_SEND))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.consumed, RECORDED_AFTER_SEND.size());
+  EXPECT_EQ(RECORDED_AFTER_SEND.size(), 208U);
+}
+
+TEST(DecodeSyncWrite, EveryCutPosition)
+{
+  // A sync-write split by the UART: every prefix waits for more, nothing of it is dropped.
+  for (std::size_t cut{1}; cut < RECORDED_SYNC_WRITE.size(); ++cut) {
+    const Bytes head{
+      RECORDED_SYNC_WRITE.begin(), RECORDED_SYNC_WRITE.begin() + static_cast<std::ptrdiff_t>(cut)};
+    const auto result{pp::decode_sync_write_echo(view_of(head))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NEED_MORE_DATA) << "cut " << cut;
+    EXPECT_EQ(result.consumed, 0U) << "cut " << cut;
+  }
+}
+
+TEST(DecodeSyncWrite, EveryCutPositionBehindThePoll)
+{
+  // The same, with the servo replies in front: they are dropped, the start of the frame is kept.
+  const std::size_t before{RECORDED_AFTER_SEND.size() - RECORDED_SYNC_WRITE.size()};
+  for (std::size_t cut{before + 1}; cut < RECORDED_AFTER_SEND.size(); ++cut) {
+    const Bytes head{
+      RECORDED_AFTER_SEND.begin(), RECORDED_AFTER_SEND.begin() + static_cast<std::ptrdiff_t>(cut)};
+    const auto result{pp::decode_sync_write_echo(view_of(head))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NEED_MORE_DATA) << "cut " << cut;
+    EXPECT_EQ(result.consumed, before) << "cut " << cut;
+  }
+}
+
+TEST(DecodeSyncWrite, BadChecksumIsRejected)
+{
+  Bytes rx{RECORDED_SYNC_WRITE};
+  rx.back() = static_cast<std::uint8_t>(rx.back() + 1);
+  const auto result{pp::decode_sync_write_echo(view_of(rx))};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.consumed, rx.size());
+  EXPECT_EQ(result.rejected, 1U);
+}
+
+TEST(DecodeSyncWrite, OtherServoFramesAreNotIt)
+{
+  // The recorded poll: a ping, the sync-read (FF FF FE 0A 82, same broadcast id) and six
+  // replies. Nothing found, everything dropped.
+  const auto result{pp::decode_sync_write_echo(view_of(SERVO_NOISE))};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.consumed, SERVO_NOISE.size());
+}
+
+TEST(DecodeSyncWrite, OurRepliesAreNotIt)
+{
+  // Nor are the Atom's replies to us, and the sync-write is no reply either.
+  EXPECT_EQ(pp::decode_sync_write_echo(view_of(ANGLES_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(pp::decode_sync_write_echo(view_of(TEMPS_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(
+    pp::decode_get_angles_reply(view_of(RECORDED_SYNC_WRITE)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(
+    pp::decode_ack(view_of(RECORDED_SYNC_WRITE), pp::CommandId::SEND_ANGLES).status,
+    pp::DecodeStatus::NOT_FOUND);
 }

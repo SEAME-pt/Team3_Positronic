@@ -57,6 +57,7 @@ std::optional<pp::Frame> frame{pp::encode_send_angles(angles, 20)};  // nullopt 
 pp::Decoded<pp::JointAngles> reply{pp::decode_get_angles_reply(rx)};
 pp::Decoded<std::uint8_t> ack{pp::decode_ack(rx, pp::CommandId::STOP)};
 pp::Decoded<pp::ServoTemperatures> temps{pp::decode_servo_temps_reply(rx)};  // degC, J1 first
+pp::Decoded<std::uint8_t> echo{pp::decode_sync_write_echo(rx)};  // the Atom's sync-write (#150)
 
 std::optional<pp::JointAngles> wire{pp::to_centidegrees(radians)};  // ROS side -> wire
 pp::JointRadians state{pp::to_radians(reply.value)};                // wire -> ROS side
@@ -82,6 +83,13 @@ Degrees exist only inside the driver; ROS sees radians (REP 103).
 
 `rejected` counts `FE FE` candidates that turned out wrong (other command, bad LEN, bad
 footer, the echo of a request). It is for logs and debugging, not for control flow.
+
+`decode_sync_write_echo` is the one decoder of the servo bus, not of the Atom's protocol: after a
+`send_angles` the Atom passes the six targets on to the servos with one sync-write (`FF FF FE 34
+83 29 07`, six times id and 7 bytes, a checksum: 56 bytes), the last frame it puts on the line
+before it reads the port again. `FOUND` means that frame is whole with a good checksum (`value` is
+the number of servos, 6); `rejected` counts the `FF FF` starts that were not it (the other servo
+frames, a bad checksum). The serial thread waits for it after every `send_angles` (#150).
 
 ### How #22 uses `consumed`
 
@@ -227,7 +235,7 @@ make tidy                   # clang-tidy, must stay clean
 | `test_types.cpp`            | Constants, command ids against the capture, the byte access helper |
 | `test_encode.cpp`           | Every request byte for byte, big-endian, speed limits              |
 | `test_units.cpp`            | Rounding, round trips, NaN/inf/out of range                        |
-| `test_decode.cpp`           | Acks and angles, servo noise, echoes, bad footers, every cut point |
+| `test_decode.cpp`           | Acks and angles, servo noise, echoes, bad footers, every cut point; the sync-write recorded on the arm, alone and behind the poll, cut at every position, a bad checksum, other servo frames and our own replies (#150) |
 | `test_recorded_frames.cpp`  | The "judge": the library against the capture of 2026-10-16         |
 
 The judge reads `test/data/frames_*.txt` (written by `scripts/capture_frames/`). Each frame
