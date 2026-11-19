@@ -138,7 +138,9 @@
   </joint>
   <joint name="joint6output_to_gripper_base" type="fixed">
     <parent link="joint6_flange"/><child link="gripper_base"/>
-    <origin xyz="0 0 0.0505" rpy="1.5708 0 0"/>
+    <!-- Mounted as on the real arm: turned 180 deg on the flange, checked at joint 6 = 0 with
+         the gripper mounted (#94, docs/03_verification/joint6_zero). -->
+    <origin xyz="0 0 0.0505" rpy="1.5708 0 3.1416"/>
   </joint>
   <link name="gripper_base">
     <visual>
@@ -280,7 +282,11 @@
   </joint>
   <joint name="joint6output_to_camera_flange" type="fixed">
     <parent link="joint6_flange"/><child link="camera_flange"/>
-    <origin xyz="0 0 0.01" rpy="1.5708 0 0"/>
+    <!-- Camera mount (#97): the camera module 90 deg from the line the fingers open along, so
+         it looks into the gap between them and the gripper does not cover the view. As on the
+         real arm (docs/03_verification/camera_mount). The same in the four camera variants,
+         test_camera_mount.py checks it. -->
+    <origin xyz="0 0 0.01" rpy="1.5708 0 -1.5708"/>
   </joint>
   <link name="camera_flange">
     <visual>
@@ -299,7 +305,9 @@
   <link name="camera_link"/>
   <joint name="camera_flange_to_camera_link" type="fixed">
     <parent link="camera_flange"/><child link="camera_link"/>
-    <origin xyz="0.0415 0.0083 0.0000" rpy="0 0 1.5708"/>
+    <!-- The roll about the optical axis puts the gripper at the bottom of the image. The raw
+         image of the real camera matches it once turned 90 deg counterclockwise (#97). -->
+    <origin xyz="0.0415 0.0083 0.0000" rpy="1.5708 0 1.5708"/>
   </joint>
   <gazebo reference="camera_link">
     <sensor name="wrist_camera" type="camera">

@@ -143,6 +143,11 @@ def test_defaults_select_the_real_arm():
         'moving_period_ms': '50',
         'send_settle_ms': '30',
         'servo_temp_limit_c': '60',
+<<<<<<< HEAD
+=======
+        'tracking_error_deg': '8',
+        'tracking_error_ms': '300',
+>>>>>>> origin/dev
     }
 
 
@@ -156,6 +161,11 @@ def test_arguments_reach_the_plugin():
             moving_period_ms='40',
             send_settle_ms='25',
             servo_temp_limit_c='45',
+<<<<<<< HEAD
+=======
+            tracking_error_deg='6',
+            tracking_error_ms='200',
+>>>>>>> origin/dev
         )
     )
     assert params == {
@@ -165,6 +175,11 @@ def test_arguments_reach_the_plugin():
         'moving_period_ms': '40',
         'send_settle_ms': '25',
         'servo_temp_limit_c': '45',
+<<<<<<< HEAD
+=======
+        'tracking_error_deg': '6',
+        'tracking_error_ms': '200',
+>>>>>>> origin/dev
     }
 
 

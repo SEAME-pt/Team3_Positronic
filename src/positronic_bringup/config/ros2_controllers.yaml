@@ -4,7 +4,11 @@
 controller_manager:
   ros__parameters:
     # 30 Hz, the rate of the real arm, so the JTC samples trajectories the same way as on the Jetson
+<<<<<<< HEAD
     # Same rare used by ros2_control
+=======
+    # Same rate used by ros2_control
+>>>>>>> origin/dev
     update_rate: 30
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

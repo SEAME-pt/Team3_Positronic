@@ -21,6 +21,9 @@ if(BUILD_TESTING)
 
   # The zero of joint 6 is the same in the eight arm URDFs and matches the real arm (#94).
   ament_add_pytest_test(test_joint6_zero test/test_joint6_zero.py)
+
+  # The wrist camera mount is the same in the four camera URDFs and matches the real arm (#97).
+  ament_add_pytest_test(test_camera_mount test/test_camera_mount.py)
 endif()
 
 ament_package()

@@ -102,6 +102,9 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
   ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)
   target_include_directories(test_servo_temperature PRIVATE include)
+  # Pure-logic unit test for the unfollowed-command check (#103): no port, no thread, header-only.
+  ament_add_gtest(test_tracking_check test/test_tracking_check.cpp)
+  target_include_directories(test_tracking_check PRIVATE include)
   # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
   # moves the real arm (see the header of the file).
   add_executable(hil_link_timeout test/hil_link_timeout.cpp)
