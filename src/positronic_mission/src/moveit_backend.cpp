@@ -19,9 +19,11 @@
 // THE SOFTWARE.
 
 #include "positronic_mission/moveit_backend.hpp"
+#include <chrono>
 #include <memory>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/utils/moveit_error_code.hpp>
+#include <ratio>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/node_options.hpp>
 #include "positronic_mission/motion_backend.hpp"
@@ -43,6 +45,9 @@ MoveitBackend::MoveitBackend(std::string group_name)
   spin_thread_ = std::thread([this]() {
         executor_->spin();
   });
+  while (!executor_->is_spinning()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 }
 
 MoveitBackend::~MoveitBackend()

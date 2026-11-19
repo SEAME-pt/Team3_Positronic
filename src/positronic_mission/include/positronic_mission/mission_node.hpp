@@ -87,6 +87,7 @@ public:
   CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /* state */) override;
+  CallbackReturn on_error(const rclcpp_lifecycle::State & /* state */) override;
 
   // Backend interface (mock or moveit)
   void set_backend(std::shared_ptr<MotionBackend> backend)

@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
 namespace positronic_mission
@@ -51,6 +52,9 @@ public:
 
   // Blocking. Called from the execute thread.
   virtual MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) = 0;
+
+  virtual MotionOutcome plan_and_execute_cartesian(
+      const std::vector<geometry_msgs::msg::Pose> & path) = 0;
 
   // Must be safe to call from any thread. Makes a running
   // plan_and_execute return PREEMPTED.

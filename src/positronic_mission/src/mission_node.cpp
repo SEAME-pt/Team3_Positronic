@@ -86,6 +86,15 @@ void positronic_mission::MissionNode::handle_emergency_stop(
     (state_now == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
+void positronic_mission::MissionNode::reset_ptrs()
+{
+  mission_server_ = nullptr;
+  publisher_ = nullptr;
+  reset_state_ = nullptr;
+  emergency_stop_ = nullptr;
+  timer_ = nullptr;
+}
+
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(
   const rclcpp_lifecycle::State & /* state */)
 {
@@ -130,15 +139,6 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
   timer_->cancel();
 
   return CallbackReturn::SUCCESS;
-}
-
-void positronic_mission::MissionNode::reset_ptrs()
-{
-  mission_server_ = nullptr;
-  publisher_ = nullptr;
-  reset_state_ = nullptr;
-  emergency_stop_ = nullptr;
-  timer_ = nullptr;
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(
@@ -212,10 +212,26 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
   if (exec_thread_.joinable()) {
     exec_thread_.join();
   }
-
   reset_ptrs();
 
   return CallbackReturn::SUCCESS;
+}
+
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_error(
+    const rclcpp_lifecycle::State & /* state */)
+{
+    RCLCPP_INFO(get_logger(), "IN on_error");
+
+    state_ = State::INACTIVE;
+    if (backend_) {
+      backend_->stop();
+    }
+    if (exec_thread_.joinable()) {
+      exec_thread_.join();
+    }
+    reset_ptrs();
+
+    return CallbackReturn::SUCCESS;
 }
 
 void positronic_mission::MissionNode::heart_beat()
