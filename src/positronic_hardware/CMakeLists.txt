@@ -23,6 +23,7 @@ endforeach()
 
 # The plugin: a shared library that pluginlib loads at runtime
 add_library(${PROJECT_NAME} SHARED
+  src/parameters.cpp
   src/positronic_hardware.cpp
   src/serial_arm.cpp
 )
@@ -112,6 +113,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_requests test/test_requests.cpp)
   target_include_directories(test_requests PRIVATE include)
   target_link_libraries(test_requests positronic_protocol::positronic_protocol)
+  # The hardware parameters (#163): names, ranges, defaults and messages, without a ResourceManager.
+  ament_add_gtest(test_parameters test/test_parameters.cpp)
+  target_link_libraries(test_parameters ${PROJECT_NAME})
   # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
   # moves the real arm (see the header of the file).
   add_executable(hil_link_timeout test/hil_link_timeout.cpp)
