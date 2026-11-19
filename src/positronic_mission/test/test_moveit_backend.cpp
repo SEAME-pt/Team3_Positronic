@@ -58,8 +58,7 @@ protected:
     // MoveIt waits for the robot description (URDF and SRDF) on a topic before giving up; its
     // default wait is 10 s each. The backend's node takes parameters from the global arguments,
     // so short waits keep the ready() test fast. No robot description is ever published here.
-    const char * argv[] = {
-      "test", "--ros-args",
+    const char * argv[] = {"test", "--ros-args",
       "-p", "robot_description_timeout:=0.1",
       "-p", "robot_description_semantic_timeout:=0.1"};
     rclcpp::init(6, argv);

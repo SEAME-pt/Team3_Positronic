@@ -645,25 +645,29 @@ TEST_F(SafetySupervisorTest, ShutdownWhileMonitoringSendsHardwareInactive)
   EXPECT_EQ(supervisor_->shutdown().id(), State::PRIMARY_STATE_FINALIZED);
 
   // Step 1 is the one that stops the arm: it must leave even though the node is finalizing.
-  ASSERT_TRUE(
-    spin_until(
-      [this]() {
-        return !fake_->calls.empty() && fake_->calls.front() == "hardware:inactive";
-      }));
+  ASSERT_TRUE(spin_until([this]() {
+      return !fake_->calls.empty() && fake_->calls.front() == "hardware:inactive";
+  }));
 }
 
 TEST_F(SafetySupervisorTest, StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes)
 {
   ASSERT_NO_FATAL_FAILURE(start_monitoring());
   fake_->fault_code = 1.0;
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
 
   // Resume. For 500 ms after it activates the hardware, every other message from the fake has
   // code 1 and a stamp from before the activation. Without the filter, the first one seen in
   // MONITORING halts.
   fake_->stale_fault_after_activation = true;
-  ASSERT_TRUE(spin_until([this]() {return try_activate();}));
-  ASSERT_TRUE(spin_until([this]() {return mode_is(SafetyStatus::MODE_MONITORING);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
   spin_for(FakeArmSide::STALE_WINDOW + milliseconds{100});  // the whole stale window, and more
   EXPECT_TRUE(mode_is(SafetyStatus::MODE_MONITORING)) << "A stale fault code halted the arm";
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_ACTIVE);
@@ -671,7 +675,9 @@ TEST_F(SafetySupervisorTest, StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes
   // The filter is not too wide: a fault stamped after the activation still halts.
   fake_->calls.clear();
   fake_->fault_code = 1.0;
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
   EXPECT_EQ(fake_->calls, HALT);
 }
 
@@ -684,7 +690,9 @@ TEST_F(SafetySupervisorTest, HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNo
 
   const auto start = std::chrono::steady_clock::now();
   fake_->call_stop();
-  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
 
   // Every step failed at once ("not available"): no waiting for the 200 ms step timeouts.
   EXPECT_LT(std::chrono::steady_clock::now() - start, milliseconds{200});
