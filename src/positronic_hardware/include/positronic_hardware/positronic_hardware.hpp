@@ -36,6 +36,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/fake_arm.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
+#include "positronic_hardware/parameters.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/tracking_check.hpp"
@@ -103,32 +104,10 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-  /// Where the joint angles come from.
-  enum class Backend : std::uint8_t
-  {
-    SERIAL,
-    FAKE
-  };
-
-  /// The <param> values of the <hardware> tag, checked in on_init. A parameter the URDF does
-  /// not set keeps its default.
-  struct Config
-  {
-    Backend backend{Backend::SERIAL};
-    std::string port{"/dev/ttyTHS1"};
-    int baud{1000000};
-    double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
-    SerialArm::Timing timing{};
-    int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
-    double tracking_error_deg{TRACKING_ERROR_DEG};
-    int tracking_error_ms{TRACKING_ERROR_MS};
-  };
-
-  /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown
-  /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
+  /// Fills config_ from the <hardware> parameters through parameters.hpp, and logs the result:
+  /// the reason on a refusal, one INFO line with every value otherwise. A typo in the URDF must
+  /// stop the driver, not be ignored.
   bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
-  /// One INFO line with every parameter in use, after read_parameters().
-  void log_config() const;
 
   /// Fills limits_ from the <limit> tags of the URDF (#34). It parses the URDF itself
   /// (info.original_xml): with <limits enable="false"/> on the joints, ros2_control leaves no
@@ -174,7 +153,7 @@ private:
   /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
   void update_states(double dt);
 
-  Config config_{};
+  HardwareConfig config_{};
   std::unique_ptr<ArmBackend> arm_;
   VelocityEstimator velocity_estimator_;
   TrackingCheck tracking_;
