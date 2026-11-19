@@ -21,6 +21,8 @@
 #ifndef POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 #define POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 
+#include <optional>
+
 #include "positronic_hardware/arm_backend.hpp"
 
 namespace positronic_hardware
@@ -36,6 +38,9 @@ public:
   /// The pose the fake arm reports, in radians.
   static constexpr JointPositions START_POSE{0.0, 0.5, 0.3, 0.0, 0.0, 0.0};
 
+  /// The servo temperatures the fake arm reports, in degC: a cool arm.
+  static constexpr ServoTemperatures TEMPERATURES{30, 30, 30, 30, 30, 30};
+
   /// Where the joints are now.
   [[nodiscard]] JointPositions read_angles() const override
   {
@@ -46,17 +51,20 @@ public:
   void write_angles(const JointPositions & angles) override
   {
     angles_ = angles;
+    target_ = angles;
   }
 
   /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
   [[nodiscard]] bool halt() override
   {
+    target_.reset();
     return true;
   }
 
   /// Nothing to interrupt here either.
   void request_halt() override
   {
+    target_.reset();
   }
 
   /// The fake arm has no servos to power.
@@ -77,8 +85,33 @@ public:
     return false;
   }
 
+  /// The fake servos never warm up.
+  [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override
+  {
+    return TEMPERATURES;
+  }
+
+  /// So they never overheat either.
+  [[nodiscard]] std::optional<Overheat> overheat() const override
+  {
+    return std::nullopt;
+  }
+
+  /// And their temperature is always known.
+  [[nodiscard]] bool temperature_stale() const override
+  {
+    return false;
+  }
+
+  /// The last write_angles(), gone with a halt, as the serial backend's last target.
+  [[nodiscard]] std::optional<JointPositions> last_target() const override
+  {
+    return target_;
+  }
+
 private:
   JointPositions angles_{START_POSE};
+  std::optional<JointPositions> target_;
 };
 
 }  // namespace positronic_hardware

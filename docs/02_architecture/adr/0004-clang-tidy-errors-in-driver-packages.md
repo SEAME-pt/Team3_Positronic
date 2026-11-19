@@ -1,6 +1,6 @@
 # 0004. clang-tidy warnings are errors in the packages that move the arm
 
-2026-11-03, proposed, Felipe Suassuna (issue #38).
+2026-11-03, superseded by [0007](0007-clang-tidy-changed-files-on-prs.md), Felipe Suassuna (issue #38).
 
 ## Context
 

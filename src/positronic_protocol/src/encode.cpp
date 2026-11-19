@@ -120,6 +120,11 @@ Frame encode_get_angles() noexcept
   return build_frame(CommandId::GET_ANGLES, std::array<std::uint8_t, 0>{});
 }
 
+Frame encode_get_servo_temps() noexcept
+{
+  return build_frame(CommandId::GET_SERVO_TEMPS, std::array<std::uint8_t, 0>{});
+}
+
 std::optional<Frame> encode_send_angles(const JointAngles & angles, std::uint8_t speed) noexcept
 {
   if (speed < MIN_SPEED || speed > MAX_SPEED) {

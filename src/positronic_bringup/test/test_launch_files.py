@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2026 Positronic
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -38,13 +40,16 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
 import pytest
 
-LAUNCH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch')
+LAUNCH_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch'
+)
 
 
 def describe(name):
     """Return the LaunchDescription of launch/<name>, without launching anything."""
-    spec = importlib.util.spec_from_file_location(name.replace('.', '_'),
-                                                  os.path.join(LAUNCH_DIR, name))
+    spec = importlib.util.spec_from_file_location(
+        name.replace('.', '_'), os.path.join(LAUNCH_DIR, name)
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.generate_launch_description()
@@ -58,8 +63,11 @@ def test_launch_file_builds_its_description(name):
 
 def test_driver_starts_active_unless_asked():
     """Check that start_inactive exists and defaults to false: the launch is as it was."""
-    arguments = {entity.name: entity for entity in describe('driver.launch.py').entities
-                 if isinstance(entity, DeclareLaunchArgument)}
+    arguments = {
+        entity.name: entity
+        for entity in describe('driver.launch.py').entities
+        if isinstance(entity, DeclareLaunchArgument)
+    }
     assert 'start_inactive' in arguments
     default = ''.join(part.text for part in arguments['start_inactive'].default_value)
     assert default == 'false'
@@ -67,8 +75,11 @@ def test_driver_starts_active_unless_asked():
 
 def test_driver_has_both_variants_of_what_start_inactive_changes():
     """Check the two controller managers and the two arm_controller spawners."""
-    nodes = [entity for entity in describe('driver.launch.py').entities
-             if isinstance(entity, Node)]
+    nodes = [
+        entity
+        for entity in describe('driver.launch.py').entities
+        if isinstance(entity, Node)
+    ]
     managers = [node for node in nodes if node.node_executable == 'ros2_control_node']
     spawners = [node for node in nodes if node.node_executable == 'spawner']
     # One of each pair runs, chosen by its condition.

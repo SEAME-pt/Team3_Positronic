@@ -35,7 +35,14 @@ The clean, Gazebo-ready URDF variants (`*_gripper`, `*_camera`, `*_no_base`) and
   files equal and at that value.
 - Gripper mounting: the gripper fits the flange on the diagonal of the holes, in two ways 180
   deg apart. Mount it as the model has it (`docs/03_verification/joint6_zero`, Gazebo at zero),
-  or the camera ends up on the wrong side of the model.
+  or the camera ends up on the wrong side of the model. The camera variants with the gripper
+  carry this mount (`1.5708 0 3.1416`); the two gripper-only variants still have the upstream one.
+- Camera mounting (#97): the camera module sits 90 deg from the line the fingers open along,
+  looking into the gap between them, on the real arm and in the four camera variants
+  (`joint6output_to_camera_flange`, `rpy="1.5708 0 -1.5708"`), with the same `camera_link`
+  frame in all four (gripper at the bottom of the image; the real raw image matches it once
+  turned 90 deg counterclockwise). Mount the real camera as in `docs/03_verification/camera_mount`.
+  `test_camera_mount.py` keeps the four files equal and checks the mount.
 
 <!-- nav:auto -->
 <p align="left">

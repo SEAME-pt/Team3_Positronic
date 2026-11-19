@@ -1,3 +1,19 @@
+# How move_group watches a trajectory execution:
+# allowed_execution_duration_scaling: is a multiplier applied on the execution duration
+#   Moveit's default's value, adds an extra buffer based on the trajectory calculation
+#   the extra 10% of T also absorbs #124 pauses on long trajectories.
+# allowed_goal_duration_margin: is extra time added before MoveIt cancels the execution
+#   the value is based on JTC goal_time of 1.0 plus about one #124 pause.
+# allowed_start_tolerance: is how far the current state may be from the trajectory's first point
+#   the value is above the 1.5° resting error measured in #33 and below the 4° goal tolerance,
+#   0.04 rad ≈ 2.3°.
+# execution_duration_monitoring: just activates/deactivates the monitoring.
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.1
+  allowed_goal_duration_margin: 1.2
+  allowed_start_tolerance: 0.04
+  execution_duration_monitoring: true
+
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 moveit_simple_controller_manager:
