@@ -10,43 +10,110 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# packages: read: every job pulls the CI image from GHCR when it's there (.github/actions/ci-image).
 permissions:
   contents: read
+  packages: read
 
+env:
+  # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
+  RUN_DEV: docker compose run --rm -T dev
+  # ccache (in the tools stage) for every build in the CI image. CMake reads the launcher from the
+  # environment at configure time, so the Makefile doesn't change. The cache lives in the
+  # workspace so actions/cache can keep it. PYTHONHASHSEED=0: rosidl writes the #include lines
+  # of positronic_interfaces' generated C in a random order otherwise, and those files always miss.
+  CCACHE_ENV: >-
+    -e CCACHE_DIR=/ws/.ccache -e CCACHE_MAXSIZE=200M
+    -e CMAKE_C_COMPILER_LAUNCHER=ccache -e CMAKE_CXX_COMPILER_LAUNCHER=ccache
+    -e PYTHONHASHSEED=0
+  # docker/build-push-action uploads a build record artifact per image build otherwise.
+  DOCKER_BUILD_RECORD_UPLOAD: false
+
+# The checks run as parallel jobs, so the wall time is the longest job, not the sum (#144).
+# Each job gets the CI image from GHCR, tagged by a hash of what it is built from, which the image
+# job publishes on pushes to dev. When that tag isn't there (a PR that changes the Dockerfile, the
+# first push after such a merge), the job builds it from the GHA layer cache instead; build-test
+# is the only one that writes that cache. The check required on dev is "CI", the last job.
+#
+# ccache: the builds restore the newest cache saved on dev (restore-keys prefix), so a PR only
+# recompiles what it changed. Only pushes to dev save, one job per cache: build-test saves the
+# plain build (tidy restores the same one), coverage saves the --coverage build.
 jobs:
-  CI:
+  # Which files the PR changes: the merge commit against its first parent (the tip of the base
+  # branch), so the whole PR and not only the last push. Docs-only: every file is under docs/ or is
+  # a .md file. Nothing below reads those (scripts/lint.sh and colcon read src/, the script tests
+  # scripts/), so the other jobs are skipped and can't fail on them. --no-renames lists both
+  # paths of a move, so a file moved out of src/ counts as code. Pushes always run everything,
+  # and so does an empty diff. A change to this workflow is code: it runs everything.
+  changes:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      # The Makefile runs commands in a throwaway container. -T: no terminal in CI.
-      RUN_DEV: docker compose run --rm -T dev
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Read the runner's uid and gid
-        id: ids
-        run: |
-          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
-          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      # The "ci" target of docker/Dockerfile: build and lint tools plus MoveIt, no Gazebo or GUI.
-      # Tagged positronic-dev:jazzy because that is the image compose.yaml runs, so
-      # `docker compose run` finds it and does not rebuild the full dev image.
-      - name: Build the CI image
-        uses: docker/build-push-action@v6
         with:
-          context: docker
-          target: ci
-          load: true
-          tags: positronic-dev:jazzy
-          build-args: |
-            ROS_DISTRO=jazzy
-            USER_UID=${{ steps.ids.outputs.uid }}
-            USER_GID=${{ steps.ids.outputs.gid }}
-          cache-from: type=gha,scope=image
-          cache-to: type=gha,mode=max,scope=image
+          fetch-depth: 2
+
+      - name: Docs-only or code
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "$EVENT: everything runs"
+            exit 0
+          fi
+          docs_only=true
+          n=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              docs/* | *.md) echo "  docs  $f" ;;
+              *) echo "  code  $f"; docs_only=false ;;
+            esac
+            n=$((n + 1))
+          done < <(git diff --name-only --no-renames HEAD^1 HEAD)
+          [ "$n" -gt 0 ] || docs_only=false
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "$n files, docs_only=$docs_only" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Publishes the CI image to GHCR (ghcr.io/seame-pt/team3_positronic-ci), tagged with the hash of
+  # its inputs and "dev". Only here may a job write packages. Not part of "CI": a registry
+  # problem leaves the other jobs building the image as before, it doesn't block dev.
+  image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-image
+        with:
+          push: "true"
+
+      # One version per Dockerfile change: keep the newest 5 (the current one carries "dev"),
+      # older ones only serve old branches, which build the image themselves anyway.
+      # continue-on-error: if the token may push but not delete, the image is still published.
+      - name: Delete old versions of the image
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: team3_positronic-ci
+          package-type: container
+          min-versions-to-keep: 5
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-image
 
       # ament_uncrustify, cpplint, cppcheck, flake8, pep257, copyright (scripts/lint.sh).
       # FORCE_COLOR: the GitHub log shows colours, but -T gives the container no terminal.
@@ -61,16 +128,46 @@ jobs:
           make RUN="$RUN_DEV" format
           git diff --stat --exit-code || { git diff; exit 1; }
 
-      # The unit tests of scripts/ (coverage gate, test summary). No build needed, no ROS.
+      # The unit tests of scripts/ (coverage gate, test summary, tidy selection). No build, no ROS.
       - name: Script tests
         run: $RUN_DEV python3 -m pytest -q scripts
 
+  build-test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-image
+        with:
+          save-cache: "true"
+
+      # Keyed on the sources and the Dockerfile (the compiler). A PR misses the exact key and
+      # takes the newest cache saved on dev through the prefix.
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-build-${{ hashFiles('docker/Dockerfile', 'src/**') }}
+          restore-keys: ccache-build-
+
       - name: Build
-        run: make RUN="$RUN_DEV" build
+        run: make RUN="docker compose run --rm -T $CCACHE_ENV dev" build
+
+      - name: Save the ccache
+        if: >-
+          steps.ccache.outputs.cache-hit != 'true' &&
+          github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       # Unit tests plus each package's linters (the same ones, plus lint_cmake and xmllint), then
       # scripts/summarize_tests.py: one line per package and each failure. Its table goes to the
-      # job summary through log/, like the coverage report below.
+      # job summary through log/: the container can't see the runner's file.
       - name: Test
         run: >-
           make test
@@ -81,34 +178,123 @@ jobs:
         if: always()
         run: cat log/test-summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No test report"
 
+      - name: Keep the logs when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colcon-logs
+          path: |
+            log
+            build/*/test_results
+          if-no-files-found: ignore
+
+  coverage:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-image
+
+      # Its own cache: --coverage objects never match the plain build's.
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-coverage-${{ hashFiles('docker/Dockerfile', 'src/**') }}
+          restore-keys: ccache-coverage-
+
       # Line coverage of src/, C++ and Python (scripts/coverage.sh, scripts/coverage_gate.py).
-      # Each package must reach 80 %; the total is only shown. Own build in build_cov/, so the
-      # build/ of the steps around it is not touched.
+      # Each package must reach 80 %; the total is only shown. Own build in build_cov/.
       #   Counted:  C++ and Python under src/, including files no test runs (at 0 %)
       #   Excluded: */test/* (tests covering themselves), */launch/* (configuration, checked in
       #             the simulation), */setup.py (packaging), see .coveragerc
       # Report-only until #46 (Sprint 03): a package below 80 % marks this step red, but the job
       # still passes. Remove continue-on-error then.
       # The gate writes its table to GITHUB_STEP_SUMMARY. The container can't see the runner's
-      # file, so it writes into coverage/ (the repo is mounted at /ws) and the next step copies it.
+      # file, so it writes into coverage/ (the repo is mounted at /ws) and a step below copies it.
       - name: Coverage (report-only)
         continue-on-error: true
         run: >-
           make coverage
-          RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md dev"
+          RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md
+          $CCACHE_ENV dev"
+
+      - name: Save the ccache
+        if: >-
+          steps.ccache.outputs.cache-hit != 'true' &&
+          github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Coverage report in the job summary
         if: always()
         run: cat coverage/summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No coverage report"
 
-      # clang-tidy on the strict packages (TIDY_STRICT_FILES in the Makefile): any warning fails.
-      # Needs the Build step above, which writes build/compile_commands.json
-      - name: Static analysis (clang-tidy)
-        run: make RUN="$RUN_DEV" tidy-strict
+  tidy:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # fetch-depth 2: on a PR, HEAD is GitHub's merge commit and HEAD^1 the tip of the base
+      # branch, so HEAD^1 to HEAD is what the PR changes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: ./.github/actions/ci-image
 
-      # The Jetson builds this target, so CI checks that it still builds. Since it shares the core
-      # layers with the image above, it costs little. No cache-to: writing to the same scope
-      # would replace the ci image's cache.
+      # The same build as build-test, so the same cache. Only build-test saves it.
+      - name: Restore the ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-build-${{ hashFiles('docker/Dockerfile', 'src/**') }}
+          restore-keys: ccache-build-
+
+      # clang-tidy reads build/compile_commands.json and the depfiles, so this job builds too.
+      - name: Build
+        run: make RUN="docker compose run --rm -T $CCACHE_ENV dev" build
+
+      # Every warning is an error, in the strict packages (TIDY_STRICT_FILES in the Makefile);
+      # test files get the bugprone checks only (ADR 0007). On a PR: only the files it can
+      # affect (make tidy-changed, scripts/tidy_changed.py). On a push: all of them.
+      - name: Static analysis (clang-tidy)
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          target=tidy-strict
+          [ "$EVENT" != pull_request ] || target=tidy-changed
+          make "$target" TIDY_BASE=HEAD^1 \
+            RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/log/tidy-summary.md dev"
+
+      - name: clang-tidy report in the job summary
+        if: always()
+        run: cat log/tidy-summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No clang-tidy report"
+
+  jetson:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the runner's uid and gid
+        id: ids
+        run: |
+          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The Jetson builds this target, so CI checks that it still builds. It shares the core
+      # layers with the CI image, so it reads the same cache. No cache-to: writing to the same
+      # scope would replace the ci image's cache.
       - name: Build the Jetson image
         uses: docker/build-push-action@v6
         with:
@@ -124,8 +310,8 @@ jobs:
 
       # Same build as `make nano-build`: the Jetson's packages (NANO_PACKAGES in the Makefile) in
       # the runtime image. If one of them needs something only in tools or sim (MoveIt, Gazebo,
-      # clang tools), it fails here, not on the Jetson. Outputs go to /tmp so they don't mix with
-      # the build/ of the steps above.
+      # clang tools), it fails here, not on the Jetson. Outputs go to /tmp. No ccache: the
+      # runtime image doesn't have it, and this build is small.
       # Limit: CI is amd64 and the Jetson arm64, so an arm64-only problem still shows up there.
       - name: Build the Jetson packages in the Jetson image
         run: |
@@ -137,12 +323,25 @@ jobs:
               --build-base /tmp/build --install-base /tmp/install \
               --packages-up-to $packages"
 
-      - name: Keep the logs when something failed
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: colcon-logs
-          path: |
-            log
-            build/*/test_results
-          if-no-files-found: ignore
+  # The one check to require on dev. always(): it also runs, and fails, when a job before it
+  # failed or was cancelled; without it a failed job would leave CI "skipped", which a required
+  # check counts as passed. Green only when every job passed, or when the PR is docs-only and
+  # every job after "changes" was skipped.
+  CI:
+    needs: [changes, lint, build-test, coverage, tidy, jetson]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "docs_only: $DOCS_ONLY"
+          echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" '
+            .changes.result == "success" and
+            ([del(.changes)[].result] as $r
+             | ($r | all(. == "success")) or ($docs == "true" and ($r | all(. == "skipped"))))
+          ' > /dev/null
