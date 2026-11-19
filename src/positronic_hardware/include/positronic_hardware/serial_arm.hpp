@@ -42,22 +42,32 @@
 namespace positronic_hardware
 {
 
-/// The two timings of a serial-thread turn that sends a command. The defaults are the measured
-/// values; the plugin lets the URDF override them (moving_period_ms, send_settle_ms) so a sweep
-/// on the arm needs no rebuild. A namespace-level struct so it can be a default argument.
+/// The timings of a serial-thread turn that sends a command. The defaults are the measured
+/// values; the plugin lets the URDF override two of them (moving_period_ms, send_settle_ms) so a
+/// sweep on the arm needs no rebuild. A namespace-level struct so it can be a default argument.
 struct SerialTiming
 {
-  /// One turn while the arm moves: a get_angles and a send_angles. The arm answers in 8 ms
-  /// (20 ms worst seen), a send_angles costs under 1 ms and the settle 30 ms, so 50 ms leaves
-  /// 11 ms of slack and the next get_angles comes 42 ms after the send. 50 held five 2-minute
-  /// runs with zero stalls; 40 had one stall in five (the arm still busy 31 ms after a send).
-  /// A worst-case reply overruns the turn by 1 ms and the next turn starts at once.
-  std::chrono::milliseconds moving_period{50};
+  /// One turn while the arm moves: a get_angles, a send_angles and the wait for the Atom's
+  /// sync-write (#150). In the 10 minutes at 33 ms of 19 Nov 2026 the reply came 7.7 ms after
+  /// the request (p99 9.6) and the sync-write ended 19.3 ms after the send (p99 28.0), so a
+  /// turn takes about 27 ms and 33 ms is one control period at 30 Hz: 17202 sends, 0 stalls.
+  /// A slow turn overruns and the next one starts at once. A shorter period gains nothing at
+  /// 30 Hz: the controller has no new target for every turn.
+  std::chrono::milliseconds moving_period{33};
 
-  /// How long the thread waits after a send_angles before the next get_angles. Measured on
-  /// the arm with turns just above the settle: 30 ms gave 0 stalls in 4464 requests, 25 ms
-  /// gave 43, 20 ms gave 110 and once froze the arm for 20 s.
+  /// The fixed wait after a frame that leaves no sign of when the arm is free again: between the
+  /// stop and the power off of the overheat cut. Measured on the arm as the old wait after a
+  /// send_angles: 30 ms gave 0 stalls in 4464 requests, 25 ms gave 43, 20 ms gave 110 and once
+  /// froze the arm for 20 s.
   std::chrono::milliseconds send_settle{30};
+
+  /// The longest the thread waits after a send_angles for the Atom's sync-write to the servos,
+  /// which ends the wait (#150): 20 ms after the send at p50, 27 ms at p99 in the tap of 13 Nov
+  /// 2026, 19.3 and 28.0 ms in the 10 minutes of 19 Nov. It may be longer than moving_period,
+  /// as it only counts when the Atom is late: on 19 Nov two sync-writes came 32.7 and 54 ms
+  /// after their send, past the old 30 ms, and the get_angles sent at 30 ms was lost both
+  /// times. With 60, 10 minutes lost no reply.
+  std::chrono::milliseconds echo_timeout{60};
 };
 
 /// How the serial thread watches the servo temperatures. The plugin sets the limit from the URDF
@@ -114,9 +124,12 @@ public:
 
   // REQUEST_TIMEOUT (300 ms, from the contract) covers the worst case: a turn already running
   // with a late arm (~50 ms for get_angles, ~70 ms when its temperature request goes unanswered
-  // too), its send and settle (30 ms), then the ack (up to 80 ms), so an accepted request is
-  // acknowledged within ~190 ms, and one lost frame still fits a retry. No temperature request
-  // is written while a stop or power_on is pending. ACK_TIMEOUT itself lives in requests.hpp.
+  // too), its send and the wait for the sync-write (~20 ms, up to echo_timeout, 60 ms, when the
+  // Atom is late, #150), then the ack (up to 80 ms), so an accepted request is acknowledged
+  // within ~170 ms, ~210 ms with a late sync-write. One lost frame still fits a retry while the
+  // sync-write comes in time; with a late one as well, the retry can pass the 300 ms. No
+  // temperature request is written while a stop or power_on is pending. ACK_TIMEOUT itself
+  // lives in requests.hpp.
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
@@ -179,6 +192,9 @@ public:
   [[nodiscard]] bool temperature_stale() const override;
   [[nodiscard]] std::optional<JointPositions> last_target() const override;
 
+  /// The sends whose sync-write did not come within SerialTiming::echo_timeout (#150).
+  [[nodiscard]] std::uint64_t echo_timeouts() const override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   /// What halt() and power_on() leave for the thread to send at the start of its next turn.
@@ -206,6 +222,11 @@ private:
   /// EMPTY_READ_BACKOFF between empty reads. Serial thread only. Serves the ack today, and any
   /// other frame to wait for later (the Atom's sync-write after a send_angles). True when found.
   bool read_until(Clock::time_point deadline, const Scanner & scan);
+
+  /// After a send_angles: reads until the Atom's sync-write to the servos has passed, the last
+  /// frame it sends while it ignores the port (#150), or until echo_timeout when it never comes.
+  /// Serial thread only.
+  void wait_for_sync_write();
 
   /// Writes `request` and waits for what it expects (requests.hpp): nothing, the ack of its
   /// command with status 1, or a reply that `reply` recognises, with the request's timeout from
@@ -281,6 +302,8 @@ private:
   // stored first, so whoever sees the joint also finds its value.
   std::atomic<int> overheat_joint_{-1};
   std::atomic<int> overheat_celsius_{0};
+  // Sends whose sync-write did not come within echo_timeout (#150). Written by the poll thread.
+  std::atomic<std::uint64_t> echo_timeouts_{0};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   Clock::time_point last_temperature_ask_;

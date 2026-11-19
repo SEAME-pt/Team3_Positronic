@@ -103,6 +103,12 @@ public:
     return false;
   }
 
+  /// No serial line, so no send waits for a sync-write.
+  [[nodiscard]] std::uint64_t echo_timeouts() const override
+  {
+    return 0;
+  }
+
   /// The last write_angles(), gone with a halt, as the serial backend's last target.
   [[nodiscard]] std::optional<JointPositions> last_target() const override
   {

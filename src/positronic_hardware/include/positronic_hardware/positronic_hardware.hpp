@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -137,6 +138,10 @@ private:
   /// pose with the backend's last target and latches FaultCode::TRACKING_ERROR, with one log
   /// line (joint, error, limits), once a joint has been off for too long.
   void check_tracking();
+  /// read()'s report of the sends that got no sync-write (#150), while active: one warning line
+  /// with how many since the last one, at most every ECHO_REPORT_PERIOD, so turns that got slow
+  /// do not go unseen.
+  void report_echo_timeouts();
   /// True while the component is ACTIVE: the only state in which targets go out and faults count.
   [[nodiscard]] bool is_active() const;
 
@@ -163,6 +168,11 @@ private:
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
+
+  /// #150: the backend's echo_timeouts() already reported, and when read() may warn again.
+  /// Reset with every new backend, whose count starts at zero.
+  std::uint64_t echo_timeouts_reported_{0};
+  std::chrono::steady_clock::time_point next_echo_report_;
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.

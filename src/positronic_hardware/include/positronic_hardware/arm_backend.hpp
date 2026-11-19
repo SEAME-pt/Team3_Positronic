@@ -136,6 +136,12 @@ public:
   /// nothing the pose should follow. What the plugin's unfollowed-command check (#103) compares
   /// the pose with every cycle. Safe from the control loop.
   [[nodiscard]] virtual std::optional<JointPositions> last_target() const = 0;
+
+  /// How many send_angles got no sync-write from the arm within the backend's echo timeout,
+  /// since the backend started (#150). Each made its turn wait the whole timeout: the arm took
+  /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
+  /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
+  [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
 };
 
 }  // namespace positronic_hardware

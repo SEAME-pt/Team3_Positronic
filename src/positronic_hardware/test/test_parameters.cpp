@@ -25,6 +25,9 @@
 //   ends of every range accepted and one step past them refused with the range, a fraction where
 //   a whole number is expected, NaN and infinity, the settle below the period, the rules of
 //   backend, port, baud and velocity_filter_alpha, and the INFO line.
+// Follow-up prompt (#150):
+//   The moving turn waits for the sync-write, so the settle is only the wait of the overheat cut
+//   and may be longer than the period; the default period is 33 ms.
 
 #include <gtest/gtest.h>
 
@@ -123,11 +126,10 @@ TEST(Parameters, EveryUnknownNameIsReportedInOrder)
     "Unknown hardware parameters 'baudrate', 'tracking_eror_ms'");
 }
 
-// Each end of each range is a valid value. The shortest period needs a shorter settle than the
-// 30 ms default, or the settle rule refuses it.
+// Each end of each range is a valid value.
 TEST(Parameters, TheEndsOfEveryRangeAreAccepted)
 {
-  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}, {"send_settle_ms", "10"}}));
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}}));
   EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "100"}}));
   EXPECT_TRUE(accepted(Parameters{{"send_settle_ms", "0"}}));
   EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "100"}, {"send_settle_ms", "99"}}));
@@ -194,12 +196,12 @@ TEST(Parameters, NotANumberIsRefused)
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", ""}}));
 }
 
-// The settle is part of a turn, so it must stay below the period, the 50 ms default here.
-TEST(Parameters, TheSettleMustStayBelowThePeriod)
+// #150: the moving turn waits for the sync-write, and the settle is only the wait of the overheat
+// cut between its stop and its power off, so it may be longer than the period.
+TEST(Parameters, TheSettleMayBeLongerThanThePeriod)
 {
-  EXPECT_TRUE(accepted(Parameters{{"send_settle_ms", "49"}}));
-  EXPECT_EQ(
-    refusal("send_settle_ms", "50"), "send_settle_ms (50) must be below moving_period_ms (50).");
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "25"}, {"send_settle_ms", "30"}}));
+  EXPECT_TRUE(accepted(Parameters{{"moving_period_ms", "20"}, {"send_settle_ms", "99"}}));
 }
 
 TEST(Parameters, TheSpecialParametersKeepTheirRules)
@@ -220,6 +222,6 @@ TEST(Parameters, TheInfoLineHasEveryValue)
   EXPECT_EQ(
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
-    "period 50 ms, send settle 30 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
+    "period 33 ms, send settle 30 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
     "for 300 ms.");
 }

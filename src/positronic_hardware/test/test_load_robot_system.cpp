@@ -93,6 +93,8 @@
 //   wire for longer than tracking_error_ms latches fault 2 while active. On the pseudo-terminal
 //   arm, which answers the same pose whatever it is told: 2 deg away is never a fault, 9 deg for
 //   300 ms is, 9 deg for 100 ms and then back is not. A bad parameter value is rejected.
+// Follow-up prompt (#150):
+//   The settle is only the wait of the overheat cut now: a settle longer than the period loads.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -807,15 +809,16 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
   }
 }
 
-TEST_F(LoadRobotSystem, InitRejectsASettleThatFillsTheTurn)
+TEST_F(LoadRobotSystem, InitAcceptsASettleLongerThanThePeriod)
 {
-  // Both in range on their own, but the settle leaves no room for the reply in the turn.
+  // #150: the moving turn waits for the sync-write, the settle is only the wait of the overheat
+  // cut, so it no longer has to fit in the turn.
   load(urdf_with(
     all_good_joints(),
-    std::string{FAKE_BACKEND} + param("moving_period_ms", "30") + param("send_settle_ms", "30")));
+    std::string{FAKE_BACKEND} + param("moving_period_ms", "25") + param("send_settle_ms", "30")));
 
-  EXPECT_FALSE(loaded_);
-  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  EXPECT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)

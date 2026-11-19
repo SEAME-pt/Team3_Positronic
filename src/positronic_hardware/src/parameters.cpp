@@ -62,9 +62,11 @@ struct NumericParameter
   Store store{nullptr};
 };
 
-// The two timings of the serial thread (#32): a period above the arm's own busy time and at most
-// half the #35 link timeout, a settle that fits below the longest period. servo_temp_limit_c only
-// goes down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
+// The two timings of the serial thread that the URDF sets (#32): a period above the arm's own
+// busy time and at most half the #35 link timeout, and the settle of the overheat cut, the wait
+// between its stop and its power off. Since #150 the moving turn waits for the sync-write instead
+// of the settle, so the settle no longer has to fit in the period. servo_temp_limit_c only goes
+// down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
 // controller's trajectory tolerance (#103).
@@ -247,13 +249,6 @@ ParsedParameters parse_hardware_parameters(const Parameters & parameters)
     if (error.empty()) {
       error = read_numeric(parameters, parameter, config);
     }
-  }
-  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
-  // only stretch every turn by itself and hide the value under test in a sweep.
-  if (error.empty() && config.timing.send_settle >= config.timing.moving_period) {
-    error = "send_settle_ms (" + std::to_string(config.timing.send_settle.count()) +
-      ") must be below moving_period_ms (" +
-      std::to_string(config.timing.moving_period.count()) + ").";
   }
   if (!error.empty()) {
     return {std::nullopt, error};

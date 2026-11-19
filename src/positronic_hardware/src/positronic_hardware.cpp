@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cinttypes>
 #include <cstddef>
 #include <exception>
 #include <iterator>
@@ -102,6 +103,10 @@ constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 /// How long on_activate waits for the first servo temperatures. The serial thread asks on its
 /// first idle turn and then once a second, so two seconds is two tries.
 constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
+
+/// At most one warning per period about sends that got no sync-write (#150): a target the arm
+/// refuses comes back every turn, and one line a turn would flood the log.
+constexpr std::chrono::seconds ECHO_REPORT_PERIOD{5};
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
@@ -257,6 +262,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
+  echo_timeouts_reported_ = 0;
+  next_echo_report_ = std::chrono::steady_clock::time_point{};
   tracking_ = TrackingCheck{TrackingLimits{
       config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
@@ -440,6 +447,7 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // pose, and the silence is the cause to report, not the lag that follows it.
   if (active) {
     check_tracking();
+    report_echo_timeouts();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -447,6 +455,23 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // as well, because the arm is already cut and must not be driven again before a configure.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
   return temperatures;
+}
+
+void RobotSystem::report_echo_timeouts()
+{
+  const std::uint64_t count{arm_->echo_timeouts()};
+  const auto now{std::chrono::steady_clock::now()};
+  if (count <= echo_timeouts_reported_ || now < next_echo_report_) {
+    return;
+  }
+  RCLCPP_WARN(
+    get_logger(),
+    "%" PRIu64
+    " send_angles got no sync-write from the arm since the last report: each of their "
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    count - echo_timeouts_reported_);
+  echo_timeouts_reported_ = count;
+  next_echo_report_ = now + ECHO_REPORT_PERIOD;
 }
 
 bool RobotSystem::temperatures_allow_activation()

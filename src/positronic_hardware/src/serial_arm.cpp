@@ -277,6 +277,11 @@ std::optional<JointPositions> SerialArm::last_target() const
   return *last_target_.readFromRT();
 }
 
+std::uint64_t SerialArm::echo_timeouts() const
+{
+  return echo_timeouts_.load();
+}
+
 std::optional<JointPositions> SerialArm::last_sent() const
 {
   return *last_target_.readFromNonRT();
@@ -366,6 +371,21 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
   return false;
 }
 
+void SerialArm::wait_for_sync_write()
+{
+  const auto sync_write_seen{[](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> echo{
+        positronic_protocol::decode_sync_write_echo(rx)};
+      const bool found{echo.status == positronic_protocol::DecodeStatus::FOUND};
+      return ScanResult{found, echo.consumed};
+    }};
+  const bool seen{read_until(Clock::now() + timing_.echo_timeout, sync_write_seen)};
+  // A wait cut short by the destructor is not the arm's doing.
+  if (!seen && !stop_.load()) {
+    echo_timeouts_.fetch_add(1);
+  }
+}
+
 bool SerialArm::perform(const Request & request, const Scanner & reply)
 {
   if (!transport_->write(request.frame.bytes.data(), request.frame.size)) {
@@ -442,7 +462,7 @@ bool SerialArm::cut_power(const Overheat & trip)
 /// The temperatures, once a period, when the arm's input is free (it has just answered) and no
 /// stop or power on is waiting. On a turn that sends no target; a reading older than max_age is
 /// taken before the send of a moving turn, so a long motion cannot hide a hot servo. Never
-/// between a send and its settle: that is the end of the turn.
+/// between a send and its sync-write: that is the end of the turn.
 void SerialArm::watch_temperatures(bool new_target)
 {
   const auto now{Clock::now()};
@@ -535,9 +555,9 @@ void SerialArm::poll_loop()
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
     const std::optional<JointPositions> target{*command_.readFromRT()};
-    // Only a changed command goes out: a send_angles keeps the arm busy for the settle, and while
-    // it stands still the port is better spent on fresh poses. last_sent() is the thread's view
-    // of last_target_, the one memory of what went out.
+    // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
+    // and while it stands still the port is better spent on fresh poses. last_sent() is the
+    // thread's view of last_target_, the one memory of what went out.
     const bool new_target{
       replied && !halted_.load() && target.has_value() && target != last_sent()};
 
@@ -556,7 +576,7 @@ void SerialArm::poll_loop()
         sent = true;
         // The arm passes the command to the servos and ignores the port meanwhile: a
         // get_angles inside this window stalls, so the next turn must not start before it.
-        std::this_thread::sleep_for(timing_.send_settle);
+        wait_for_sync_write();
       }
     }
 
