@@ -7,7 +7,8 @@ Static analysis on the packages that talk to the arm or command it. A warning th
 | Command | What it does |
 |---|---|
 | `make tidy` | clang-tidy on all of `src/`. Warnings are printed, nothing fails. Use it while you work. |
-| `make tidy-strict` | The same tool on the strict packages only (`TIDY_STRICT_FILES` in the Makefile), with `-warnings-as-errors="*"`. CI runs it after the build. |
+| `make tidy-strict` | The same tool on the strict packages only (`TIDY_STRICT_FILES` in the Makefile), every warning an error. Test files get the `bugprone-*` checks only (`TIDY_TEST_CHECKS`). CI runs it on every push to `dev`. |
+| `make tidy-changed` | `make tidy-strict` on only the files a branch can affect (`scripts/tidy_changed.py`). CI runs it on PRs (#144, ADR 0007). |
 
 Both need `make build` first: clang-tidy reads `build/compile_commands.json` to get the include
 paths and flags of each file. To check one file while you work:
