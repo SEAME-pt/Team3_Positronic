@@ -18,6 +18,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   Unit tests for parameters.hpp (#163), without a ResourceManager: the defaults, every
+//   parameter reaching its field, every unknown name in one message with the known names, both
+//   ends of every range accepted and one step past them refused with the range, a fraction where
+//   a whole number is expected, NaN and infinity, the settle below the period, the rules of
+//   backend, port, baud and velocity_filter_alpha, and the INFO line.
+
 #include <gtest/gtest.h>
 
 #include <chrono>
