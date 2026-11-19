@@ -94,6 +94,8 @@ hardware 94.4 %, safety 88.3 %, bringup 82.4 %, moveit_config 97.8 %, **mission 
 
 ## Issues to open
 
+The text of each issue, ready to paste into GitHub: [issues.md](issues.md).
+
 - **New issues:** reading plausibility in `SerialArm` (H2, F1); supervisor `main()` halts on Ctrl+C (S1, or add to #136); what must the heartbeat
   prove, with an ADR (S4); a failed planning scene load must stop the system (C1); linters off in
   `positronic_mission` (side note).
