@@ -38,9 +38,13 @@ ExecStartPre=-/bin/sh -c '\
   c=$$(/usr/bin/nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null); \
   if [ -z "$$c" ] || [ "$$c" = "--" ]; then \
     echo "wlan0 has no active connection, Wi-Fi power saving not changed"; exit 1; fi; \
-  /usr/bin/nmcli connection modify "$$c" 802-11-wireless.powersave 2 \
-  && /sbin/iw dev wlan0 set power_save off \
-  && echo "Wi-Fi power saving off on wlan0 (profile $$c)"'
+  failed=0; \
+  if ! /usr/bin/nmcli connection modify "$$c" 802-11-wireless.powersave 2; then \
+    echo "profile $$c not changed: power saving comes back at the next reconnect"; failed=1; fi; \
+  if ! /sbin/iw dev wlan0 set power_save off; then \
+    echo "iw failed: power saving still on for the link that is up"; failed=1; fi; \
+  if [ "$$failed" = "0" ]; then echo "Wi-Fi power saving off on wlan0 (profile $$c)"; fi; \
+  exit $$failed'
 # Runs in the foreground (no -d) so systemd supervises the real process.
 # --rm and no --restart: systemd is the only supervisor.
 # --init: forwards SIGTERM to the process, so `docker stop` ends it at once.
