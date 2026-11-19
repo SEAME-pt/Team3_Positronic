@@ -40,7 +40,8 @@ For every point it starts the driver with that period, switches the joints from
 `arm_controller` to `forward_position_controller`, streams a command at 30 Hz for 120 s (joint 1
 swinging 10 deg, 4 s per cycle) while `joint_states_rate.py` records the interval between new
 poses on `/joint_states`, then stops the driver and cools down for 2 min. Results: `log/sweep_<date>/<period>/summary.txt`. A point
-`P:S` also sets `send_settle_ms`, as the sweeps of #32 did.
+`P:E` also sets `echo_timeout_ms`, the longest wait for the sync-write (the sweeps of #32 set
+`send_settle_ms` the same way; it is no parameter since #150).
 
 `/joint_states` shows the rate the rest of ROS sees, not stalls: the arm stands still at the
 ends of the swing and now and then answers with the position it already had, and both look
@@ -100,8 +101,9 @@ the line, and drops a frame that comes before that. The tap of 13 Nov put the la
 of the sync-write at 20.4 ms after the send median, 26.7 at p99 and 31.0 at most: the fixed
 30 ms settle sat at the edge of the worst case and every turn paid it in full. Since #150 the
 thread reads the line until the sync-write is whole, and sends the next `get_angles` at once.
-`echo_timeout` (60 ms) bounds the wait when the sync-write never comes; `send_settle_ms` is left
-only for the overheat cut, between its stop and its power off.
+`echo_timeout_ms` (60 ms, 20 to 80) bounds the wait when the sync-write never comes and is the
+parameter in place of the settle, which is left only for the overheat cut, between its stop and
+its power off, as a constant.
 
 Arm alone (no gripper, no camera) unless the row says otherwise, joint 1 swinging 10 deg, 19 Nov
 2026, every point tapped.

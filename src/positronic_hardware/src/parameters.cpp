@@ -50,6 +50,13 @@ using Parameters = std::unordered_map<std::string, std::string>;
 /// bad turn never trips the fault.
 constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count() / 2)};
 
+/// #150: the wait for the sync-write is the first part of the silence after a send. With two
+/// lost replies (2 x 50 ms) and a late reply (20 ms) after it, 80 ms fills the 200 ms link
+/// timeout exactly; the default 60 leaves 20 ms. Below 20 ms almost every sync-write would be
+/// late (it ends 19 ms after the send at p50).
+constexpr int MIN_ECHO_TIMEOUT_MS{20};
+constexpr int MAX_ECHO_TIMEOUT_MS{80};
+
 /// One numeric <param>: its name, the range it accepts, whether it must be a whole number, and
 /// the field of the config it fills. A new numeric parameter is one row of NUMERIC_PARAMETERS.
 struct NumericParameter
@@ -62,10 +69,11 @@ struct NumericParameter
   Store store{nullptr};
 };
 
-// The two timings of the serial thread that the URDF sets (#32): a period above the arm's own
-// busy time and at most half the #35 link timeout, and the settle of the overheat cut, the wait
-// between its stop and its power off. Since #150 the moving turn waits for the sync-write instead
-// of the settle, so the settle no longer has to fit in the period. servo_temp_limit_c only goes
+// The two timings of the serial thread that the URDF sets (#32, #150): a period above the arm's
+// own busy time and at most half the #35 link timeout, and the longest wait for the Atom's
+// sync-write after a send. The echo timeout may be longer than the period: it only counts when
+// the Atom is late. The settle of the overheat cut is a constant since #150, when the moving
+// turn stopped using it (SerialTiming::send_settle). servo_temp_limit_c only goes
 // down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
@@ -77,9 +85,9 @@ constexpr std::array NUMERIC_PARAMETERS{
       config.timing.moving_period = std::chrono::milliseconds{static_cast<int>(value)};
     }},
   NumericParameter{
-    "send_settle_ms", 0, MAX_MOVING_PERIOD_MS - 1, true,
+    "echo_timeout_ms", MIN_ECHO_TIMEOUT_MS, MAX_ECHO_TIMEOUT_MS, true,
     [](HardwareConfig & config, double value) {
-      config.timing.send_settle = std::chrono::milliseconds{static_cast<int>(value)};
+      config.timing.echo_timeout = std::chrono::milliseconds{static_cast<int>(value)};
     }},
   NumericParameter{
     "servo_temp_limit_c", MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C, true,
@@ -265,8 +273,8 @@ std::string describe(const HardwareConfig & config)
   std::ostringstream line;
   line << std::fixed << "Backend '" << backend << "', port " << config.port << " at " << config.baud
        << " baud, velocity filter alpha " << std::setprecision(3) << config.velocity_filter_alpha
-       << ", moving period " << config.timing.moving_period.count() << " ms, send settle "
-       << config.timing.send_settle.count() << " ms, servo temperature limit "
+       << ", moving period " << config.timing.moving_period.count() << " ms, echo timeout "
+       << config.timing.echo_timeout.count() << " ms, servo temperature limit "
        << config.servo_temp_limit_c << " degC, tracking error " << std::setprecision(1)
        << config.tracking_error_deg << " deg for " << config.tracking_error_ms << " ms.";
   return line.str();

@@ -43,8 +43,8 @@ namespace positronic_hardware
 {
 
 /// The timings of a serial-thread turn that sends a command. The defaults are the measured
-/// values; the plugin lets the URDF override two of them (moving_period_ms, send_settle_ms) so a
-/// sweep on the arm needs no rebuild. A namespace-level struct so it can be a default argument.
+/// values; the plugin lets the URDF override two of them (moving_period_ms, echo_timeout_ms) so
+/// a sweep on the arm needs no rebuild. A namespace-level struct so it can be a default argument.
 struct SerialTiming
 {
   /// One turn while the arm moves: a get_angles, a send_angles and the wait for the Atom's
@@ -58,7 +58,8 @@ struct SerialTiming
   /// The fixed wait after a frame that leaves no sign of when the arm is free again: between the
   /// stop and the power off of the overheat cut. Measured on the arm as the old wait after a
   /// send_angles: 30 ms gave 0 stalls in 4464 requests, 25 ms gave 43, 20 ms gave 110 and once
-  /// froze the arm for 20 s.
+  /// froze the arm for 20 s. Not a parameter since #150: what the cut needs between its two
+  /// frames was never measured on its own, and nothing else uses it.
   std::chrono::milliseconds send_settle{30};
 
   /// The longest the thread waits after a send_angles for the Atom's sync-write to the servos,
@@ -67,7 +68,8 @@ struct SerialTiming
   /// as it only counts when the Atom is late: on 19 Nov two sync-writes came 32.7 and 54 ms
   /// after their send, past the old 30 ms, and the get_angles sent at 30 ms was lost both
   /// times. The 54 ms is an outlier, the only sync-write above 50 ms in normal operation that
-  /// day, but the bound must cover it. With 60, 10 minutes lost no reply.
+  /// day, but the bound must cover it. With 60, 10 minutes lost no reply. The URDF sets it as
+  /// echo_timeout_ms, 20 to 80: at 80 two lost replies after it fill the 200 ms link timeout.
   std::chrono::milliseconds echo_timeout{60};
 };
 

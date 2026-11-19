@@ -11,9 +11,9 @@
 # waits COOLDOWN seconds. Results go to /ws/log/sweep_<date>/<P>/: summary.txt, intervals.csv,
 # driver.log.
 #
-# Since #150 the moving turn waits for the Atom's sync-write and send_settle_ms is only the wait
-# of the overheat cut, so a point is the period alone. P:S still sets send_settle_ms too, as the
-# sweeps of #32 did.
+# Since #150 the moving turn waits for the Atom's sync-write, so a point is the period alone.
+# P:E also sets echo_timeout_ms, the longest wait for that sync-write (send_settle_ms, which the
+# sweeps of #32 set with P:S, is no parameter any more).
 #
 #   bash docs/03_verification/write_sweep/tools/sweep.sh            # the default points
 #   POINTS="50 40 33" COOLDOWN=60 bash docs/03_verification/write_sweep/tools/sweep.sh
@@ -100,11 +100,11 @@ mkdir -p "$OUT"
 echo "results in $OUT"
 for point in $POINTS; do
   period=${point%%:*}
-  # The launch arguments of the point: the period, and the settle when the point gives one.
+  # The launch arguments of the point: the period, and the echo timeout when the point gives one.
   timings=(moving_period_ms:="$period")
   dir="$OUT/$period"
   if [ "$point" != "$period" ]; then
-    timings+=(send_settle_ms:="${point##*:}")
+    timings+=(echo_timeout_ms:="${point##*:}")
     dir="$OUT/${period}_${point##*:}"
   fi
   mkdir -p "$dir"

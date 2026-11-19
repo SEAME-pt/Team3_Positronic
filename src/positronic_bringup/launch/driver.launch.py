@@ -45,7 +45,7 @@ over the driver's and hide a change made there.
   port:=                      the arm's UART
   baud:=                      the arm's firmware rate (115200 or 1000000)
   moving_period_ms:=          ms of a serial-thread turn that sends a command
-  send_settle_ms:=            ms the overheat cut waits between its stop and its power off
+  echo_timeout_ms:=           ms the thread waits at most for the arm's sync-write after a send
   servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
@@ -94,9 +94,9 @@ def generate_launch_description():
     moving_period_ms = DeclareLaunchArgument(
         'moving_period_ms', default_value='',
         description='ms of a serial-thread turn that sends a command.')
-    send_settle_ms = DeclareLaunchArgument(
-        'send_settle_ms', default_value='',
-        description='ms the overheat cut waits between its stop and its power off.')
+    echo_timeout_ms = DeclareLaunchArgument(
+        'echo_timeout_ms', default_value='',
+        description="ms the thread waits at most for the arm's sync-write after a send.")
     # The over-temperature cut. Only lower it, for the hardware test of the cut.
     servo_temp_limit_c = DeclareLaunchArgument(
         'servo_temp_limit_c', default_value='',
@@ -135,7 +135,7 @@ def generate_launch_description():
             ' port:=', LaunchConfiguration('port'),
             ' baud:=', LaunchConfiguration('baud'),
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
-            ' send_settle_ms:=', LaunchConfiguration('send_settle_ms'),
+            ' echo_timeout_ms:=', LaunchConfiguration('echo_timeout_ms'),
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
@@ -198,7 +198,7 @@ def generate_launch_description():
         port,
         baud,
         moving_period_ms,
-        send_settle_ms,
+        echo_timeout_ms,
         servo_temp_limit_c,
         tracking_error_deg,
         tracking_error_ms,

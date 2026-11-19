@@ -12,7 +12,7 @@
   - the gripper is a fixed-value mock, while Gazebo commands it. Until #123.
 
   The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
-  moving_period_ms, send_settle_ms, servo_temp_limit_c, tracking_error_deg, tracking_error_ms.
+  moving_period_ms, echo_timeout_ms, servo_temp_limit_c, tracking_error_deg, tracking_error_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
 
   The defaults are the driver's, in one place: HardwareConfig and SerialTiming in
@@ -31,9 +31,9 @@
   <xacro:arg name="port" default=""/>
   <xacro:arg name="baud" default=""/>
   <!-- Timings of the serial thread, in ms (#32, #150): the length of a turn that sends, and
-       the wait of the overheat cut between its stop and its power off. -->
+       the longest wait for the Atom's sync-write after a send. -->
   <xacro:arg name="moving_period_ms" default=""/>
-  <xacro:arg name="send_settle_ms" default=""/>
+  <xacro:arg name="echo_timeout_ms" default=""/>
   <!-- A servo at or above this temperature (degC) stops the arm and powers its servos off.
        Lower only, to test the cut without heating anything. -->
   <xacro:arg name="servo_temp_limit_c" default=""/>
@@ -70,7 +70,7 @@
       <xacro:driver_param name="port"/>
       <xacro:driver_param name="baud"/>
       <xacro:driver_param name="moving_period_ms"/>
-      <xacro:driver_param name="send_settle_ms"/>
+      <xacro:driver_param name="echo_timeout_ms"/>
       <xacro:driver_param name="servo_temp_limit_c"/>
       <xacro:driver_param name="tracking_error_deg"/>
       <xacro:driver_param name="tracking_error_ms"/>
