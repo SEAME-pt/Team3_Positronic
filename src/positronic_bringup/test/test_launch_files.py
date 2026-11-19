@@ -77,6 +77,8 @@ def test_driver_starts_active_unless_asked():
     assert default == 'false'
 
 
+# Not supervisor_timeout_ms: it defaults to 0 here on purpose, the dead-man check off for a run
+# without the supervisor (#136). Its own tests are below.
 DRIVER_ARGUMENTS = [
     'backend', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms', 'servo_temp_limit_c',
     'tracking_error_deg', 'tracking_error_ms',
@@ -97,6 +99,20 @@ def test_driver_arguments_have_no_default_of_their_own():
     defaults = launch_defaults('driver.launch.py')
     assert {name: defaults[name] for name in DRIVER_ARGUMENTS} == dict.fromkeys(
         DRIVER_ARGUMENTS, '')
+
+
+def test_driver_alone_has_the_dead_man_check_off():
+    """Check that driver.launch.py alone runs without the supervisor's heartbeat (#136)."""
+    assert launch_defaults('driver.launch.py')['supervisor_timeout_ms'] == '0'
+
+
+def test_supervised_launch_turns_the_dead_man_check_on():
+    """Check that supervised.launch.py forces start_inactive and the 500 ms check."""
+    include = next(
+        entity for entity in describe('supervised.launch.py').entities
+        if isinstance(entity, IncludeLaunchDescription))
+    assert dict(include.launch_arguments) == {
+        'start_inactive': 'true', 'supervisor_timeout_ms': '500'}
 
 
 def test_update_rate_defaults_to_the_yaml():

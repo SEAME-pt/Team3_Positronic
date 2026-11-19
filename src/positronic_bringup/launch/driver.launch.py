@@ -49,6 +49,9 @@ over the driver's and hide a change made there.
   servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
+  supervisor_timeout_ms:=0    ms without the safety supervisor's heartbeat that halt the arm
+                              (#136). 0 here, the check off: this launch alone has no
+                              supervisor. supervised.launch.py sets 500.
   update_rate:=               Hz, of the control loop and of /joint_states; by default the
                               update_rate of jetson_controllers.yaml
   start_inactive:=false       true: the hardware component and arm_controller come up
@@ -108,6 +111,13 @@ def generate_launch_description():
     tracking_error_ms = DeclareLaunchArgument(
         'tracking_error_ms', default_value='',
         description='ms a joint may stay over tracking_error_deg before fault 2 (50 to 5000).')
+    # The dead-man check (#136). The one driver argument with a default here, on purpose: it is a
+    # mode, not a tuned value. This launch alone runs no supervisor (bench, sweep.sh, HIL), and
+    # with the driver's own 500 ms the arm would never activate. supervised.launch.py sets 500.
+    # The driver keeps 500 as its default, so a URDF that forgets the parameter is safe.
+    supervisor_timeout_ms = DeclareLaunchArgument(
+        'supervisor_timeout_ms', default_value='0',
+        description='ms without a supervisor heartbeat that halt the arm (0: check off).')
     # The yaml's value by default, read from the yaml. Here so the 10 minute run can try another
     # rate without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -139,6 +149,7 @@ def generate_launch_description():
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
+            ' supervisor_timeout_ms:=', LaunchConfiguration('supervisor_timeout_ms'),
         ]),
         value_type=str)
 
@@ -202,6 +213,7 @@ def generate_launch_description():
         servo_temp_limit_c,
         tracking_error_deg,
         tracking_error_ms,
+        supervisor_timeout_ms,
         update_rate,
         start_inactive,
         robot_state_publisher,

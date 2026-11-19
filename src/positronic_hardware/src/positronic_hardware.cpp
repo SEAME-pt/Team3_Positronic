@@ -38,7 +38,6 @@
 #include <unordered_map>
 #include <vector>
 #include "lifecycle_msgs/msg/state.hpp"
-#include "positronic_hardware/link_watchdog.hpp"
 #include "urdf/model.h"
 
 namespace positronic_hardware
@@ -194,7 +193,47 @@ CallbackReturn RobotSystem::on_init(
   if (!read_parameters(info.hardware_parameters)) {
     return CallbackReturn::ERROR;
   }
+  if (!start_supervisor_check()) {
+    return CallbackReturn::ERROR;
+  }
   return CallbackReturn::SUCCESS;
+}
+
+bool RobotSystem::start_supervisor_check()
+{
+  if (config_.supervisor_timeout_ms == 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Dead-man check off (supervisor_timeout_ms = 0): if the safety supervisor dies, nothing "
+      "stops the arm. Only for a run without the supervisor.");
+    return true;
+  }
+  // The controller manager gives each component a node of its own, spun by its executor, so
+  // the callback runs on an executor thread and never on the control loop. No node means the
+  // component was loaded without an executor: never run with the check silently skipped.
+  const rclcpp::Node::SharedPtr node{get_node()};
+  if (node == nullptr) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "supervisor_timeout_ms is %d but the component has no ROS node to subscribe to %s with. "
+      "Set it to 0 for a run without the safety supervisor.",
+      config_.supervisor_timeout_ms, std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str());
+    return false;
+  }
+  supervisor_watchdog_.emplace(std::chrono::milliseconds{config_.supervisor_timeout_ms});
+  // Only the arrival counts, so best effort and keep last 1, like the supervisor's publisher: a
+  // lost heartbeat is not worth sending again, the next one is 20 ms away.
+  heartbeat_subscription_ = node->create_subscription<positronic_interfaces::msg::Heartbeat>(
+    std::string{SUPERVISOR_HEARTBEAT_TOPIC}, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+    [this](const positronic_interfaces::msg::Heartbeat & /*message*/) {
+      // When it arrived on this machine's steady clock, not the stamp it carries: a clock that
+      // jumps, or sim time, cannot fake or hide a heartbeat.
+      supervisor_watchdog_->on_reply(LinkWatchdog::Clock::now());
+    });
+  RCLCPP_INFO(
+    get_logger(), "Dead-man check on: the arm halts after %d ms without a heartbeat on %s.",
+    config_.supervisor_timeout_ms, std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str());
+  return true;
 }
 
 bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::string> & parameters)
@@ -329,6 +368,11 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   // "Allow motion": every command starts at the measured position, so the first thing a
   // controller sees is "stay where you are" and write() sends nothing new until a controller
   // writes.
+  // #136: no motion without someone watching it. Otherwise read() would raise the fault again
+  // at once.
+  if (!supervisor_allows_activation()) {
+    return CallbackReturn::ERROR;
+  }
   // Never activate on a placeholder pose: wait for the arm to answer. Sleeping is fine here,
   // outside the control loop.
   const auto deadline{std::chrono::steady_clock::now() + FIRST_SAMPLE_TIMEOUT};
@@ -438,6 +482,20 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   if (active && arm_->link_timed_out()) {
     raise_fault(FaultCode::LINK_TIMEOUT);
   }
+  // #136: the supervisor went silent while active. After the link check, so a link that died
+  // first keeps its fault, the cause. Returned as ERROR even then: with no supervisor left, the
+  // controller manager is the one that takes the controllers and the component out of ACTIVE.
+  // Logged here, once, for the same reason as the overheat: read() is not called again until
+  // the component is configured.
+  const bool supervisor_lost{active && supervisor_silent()};
+  if (supervisor_lost) {
+    raise_fault(FaultCode::SUPERVISOR_LOST);
+    RCLCPP_ERROR(
+      get_logger(),
+      "Fault %d: no heartbeat from the safety supervisor for over %d ms. Arm halted, targets "
+      "held. Start the supervisor again and activate it to resume.",
+      static_cast<int>(FaultCode::SUPERVISOR_LOST), config_.supervisor_timeout_ms);
+  }
   // #103: a target the arm did not follow. After the link check: a silent arm has a stale
   // pose, and the silence is the cause to report, not the lag that follows it.
   if (active) {
@@ -446,10 +504,42 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
-  // anyone reading it sees the latched value. The overheat is the exception: it returns ERROR
-  // as well, because the arm is already cut and must not be driven again before a configure.
+  // anyone reading it sees the latched value. Two exceptions return ERROR as well: the
+  // overheat, because the arm is already cut and must not be driven again before a configure,
+  // and the supervisor loss, because there is no supervisor to decide.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
+  if (supervisor_lost) {
+    return return_type::ERROR;
+  }
   return temperatures;
+}
+
+bool RobotSystem::supervisor_allows_activation()
+{
+  if (!supervisor_watchdog_.has_value()) {
+    return true;
+  }
+  // The supervisor publishes from its configure on, so the heartbeat is normally there already;
+  // the wait only covers a late one. Sleeping is fine here, outside the control loop.
+  const auto deadline{LinkWatchdog::Clock::now() + supervisor_watchdog_->timeout()};
+  while (supervisor_silent()) {
+    if (LinkWatchdog::Clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "No heartbeat from the safety supervisor on %s for %d ms; not activating. Start "
+        "supervised.launch.py, or set supervisor_timeout_ms:=0 for a run without the supervisor.",
+        std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str(), config_.supervisor_timeout_ms);
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+bool RobotSystem::supervisor_silent() const
+{
+  return supervisor_watchdog_.has_value() &&
+         supervisor_watchdog_->timed_out(LinkWatchdog::Clock::now());
 }
 
 void RobotSystem::report_echo_timeouts()
@@ -621,7 +711,8 @@ void RobotSystem::raise_fault(FaultCode code)
   // included: only cutting the servo power does.
   arm_->request_halt();
   // Logged once, at the transition, like a refusal (#34): read() does not log on later cycles.
-  // An overheat is logged by check_temperatures(), which knows the joint and the value.
+  // An overheat is logged by check_temperatures(), which knows the joint and the value, and a
+  // supervisor loss by read(), which logs it even when another fault came first.
   if (code == FaultCode::LINK_TIMEOUT) {
     RCLCPP_ERROR(
       get_logger(),

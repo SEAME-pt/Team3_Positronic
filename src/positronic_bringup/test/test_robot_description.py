@@ -165,6 +165,7 @@ def test_arguments_reach_the_plugin():
             servo_temp_limit_c='45',
             tracking_error_deg='6',
             tracking_error_ms='200',
+            supervisor_timeout_ms='300',
         )
     )
     assert params == {
@@ -176,6 +177,7 @@ def test_arguments_reach_the_plugin():
         'servo_temp_limit_c': '45',
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
+        'supervisor_timeout_ms': '300',
     }
 
 

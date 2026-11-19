@@ -11,6 +11,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  positronic_interfaces
   positronic_protocol
   realtime_tools
   urdf
@@ -37,6 +38,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   pluginlib::pluginlib
   rclcpp::rclcpp
   rclcpp_lifecycle::rclcpp_lifecycle
+  ${positronic_interfaces_TARGETS}
   positronic_protocol::positronic_protocol
   realtime_tools::realtime_tools
   urdf::urdf
@@ -78,6 +80,7 @@ if(BUILD_TESTING)
     ament_index_cpp::ament_index_cpp
     hardware_interface::hardware_interface
     ${lifecycle_msgs_TARGETS}
+    ${positronic_interfaces_TARGETS}
     rclcpp::rclcpp
     rclcpp_lifecycle::rclcpp_lifecycle
   )

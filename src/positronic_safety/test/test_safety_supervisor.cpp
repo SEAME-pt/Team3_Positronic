@@ -35,15 +35,23 @@
 //   a halt; the supervisor stays stopped until it is activated again; it resumes after a driver
 //   fault once the driver cleared it; a person deactivating the supervisor halts the arm.
 //   Every test uses its own namespace, so tests running at the same time do not hear each other.
+// Follow-up prompt (#136):
+//   The supervisor publishes ~/heartbeat at every check for the driver's dead-man check, and
+//   halt_before_exit() is main()'s Ctrl+C hook. Test that the heartbeat arrives while STOPPED
+//   and while MONITORING; that the hook, called from another thread while the test spins,
+//   sends "hardware inactive" while MONITORING and returns; and that it sends nothing while
+//   STOPPED.
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "control_msgs/action/follow_joint_trajectory.hpp"
@@ -120,6 +128,9 @@ public:
   Calls deactivated;
   /// Every status the supervisor published, oldest first.
   std::vector<SafetyStatus> statuses;
+  /// How many heartbeats of the supervisor arrived (#136), and the state of the last one.
+  std::size_t supervisor_heartbeats{0};
+  std::uint8_t supervisor_heartbeat_state{Heartbeat::STATE_IDLE};
 
   bool publish_heartbeat{true};
   bool publish_fault_data{true};
@@ -147,6 +158,12 @@ private:
       "safety_supervisor/status", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local(),
       [this](const SafetyStatus & status) {
         statuses.push_back(status);
+      });
+    supervisor_heartbeat_subscription_ = create_subscription<Heartbeat>(
+      "safety_supervisor/heartbeat", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+      [this](const Heartbeat & heartbeat) {
+        ++supervisor_heartbeats;
+        supervisor_heartbeat_state = heartbeat.state;
       });
   }
 
@@ -253,6 +270,7 @@ private:
   rclcpp::Publisher<Heartbeat>::SharedPtr heartbeat_publisher_;
   rclcpp::Publisher<DynamicJointState>::SharedPtr joint_states_publisher_;
   rclcpp::Subscription<SafetyStatus>::SharedPtr status_subscription_;
+  rclcpp::Subscription<Heartbeat>::SharedPtr supervisor_heartbeat_subscription_;
   rclcpp::Service<SetHardwareComponentState>::SharedPtr hardware_service_;
   rclcpp::Service<SwitchController>::SharedPtr switch_service_;
   rclcpp::Client<Trigger>::SharedPtr stop_client_;
@@ -592,4 +610,57 @@ int main(int argc, char ** argv)
   const int result = RUN_ALL_TESTS();
   rclcpp::shutdown();
   return result;
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileStoppedAndWhileMonitoring)
+{
+  // #136: from configure on, so a resume finds the driver already hearing it.
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->supervisor_heartbeats > 0;
+  }));
+  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_STOPPED);
+
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
+  const std::size_t before = fake_->supervisor_heartbeats;
+  // 20 ms period: 500 ms holds about 25, so 5 leaves room for a slow runner.
+  spin_for(milliseconds{500});
+  EXPECT_GE(fake_->supervisor_heartbeats, before + 5);
+  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_MOVING);
+}
+
+TEST_F(SafetySupervisorTest, ExitWhileMonitoringSendsHardwareInactiveFirst)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // As rclcpp's signal thread does on Ctrl+C, while the executor (here the test) still spins.
+  std::atomic<bool> returned{false};
+  std::thread hook{[this, &returned]() {
+      supervisor_->halt_before_exit();
+      returned = true;
+    }};
+  const bool done = spin_until([&returned]() {
+        return returned.load();
+  });
+  hook.join();
+
+  ASSERT_TRUE(done);
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
+}
+
+TEST_F(SafetySupervisorTest, ExitWhileStoppedSendsNothing)
+{
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  spin_for(milliseconds{100});
+
+  // Returns at once: nothing to wait for, so no thread and no spinning needed.
+  supervisor_->halt_before_exit();
+  spin_for(milliseconds{100});
+  EXPECT_TRUE(fake_->calls.empty());
 }

@@ -39,7 +39,8 @@ Both run on the Jetson, next to each other (ADR 0006). The parameters of the sup
 in config/safety_supervisor.yaml.
 
 Launch arguments: the ones of driver.launch.py, which this launch passes on (backend, port,
-baud, update_rate, moving_period_ms, echo_timeout_ms).
+baud, update_rate, moving_period_ms, echo_timeout_ms), except start_inactive and
+supervisor_timeout_ms, which it sets.
 """
 
 from launch import LaunchDescription
@@ -58,11 +59,12 @@ def generate_launch_description():
     bringup = FindPackageShare('positronic_bringup')
 
     # The arguments given to this launch (backend:=fake, ...) reach driver.launch.py by
-    # themselves; only start_inactive is forced.
+    # themselves; two are forced. supervisor_timeout_ms turns the driver's dead-man check on
+    # (#136), which driver.launch.py alone has off: this launch runs the supervisor it watches.
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup, 'launch', 'driver.launch.py'])),
-        launch_arguments={'start_inactive': 'true'}.items())
+        launch_arguments={'start_inactive': 'true', 'supervisor_timeout_ms': '500'}.items())
 
     supervisor = LifecycleNode(
         package='positronic_safety',

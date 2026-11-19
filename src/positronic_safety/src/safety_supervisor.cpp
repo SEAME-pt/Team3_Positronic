@@ -26,6 +26,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -175,6 +176,8 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_configure(
   // Latched: whoever subscribes later still gets the current status.
   status_publisher_ = rclcpp::create_publisher<SafetyStatus>(
     *this, "~/status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+  // Same QoS as the mission heartbeat above: only the arrival matters to the driver.
+  heartbeat_publisher_ = rclcpp::create_publisher<Heartbeat>(*this, "~/heartbeat", newest_only);
 
   // rclcpp picks a service callback by its exact argument types: shared pointers by value.
   // Naming that std::function type lets the lambda take references instead of copies.
@@ -265,6 +268,7 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_cleanup(
   switch_client_.reset();
   trajectory_client_.reset();
   status_publisher_.reset();
+  heartbeat_publisher_.reset();
   return CallbackReturn::SUCCESS;
 }
 
@@ -299,9 +303,63 @@ void SafetySupervisor::on_joint_states(const DynamicJointState & message)
   }
 }
 
+void SafetySupervisor::halt_before_exit()
+{
+  // get_current_state() and get_parameter() take their own locks: safe from this thread.
+  if (get_current_state().id() != LifecycleState::PRIMARY_STATE_ACTIVE) {
+    return;  // STOPPED, or a halt already running: the arm is stopped or about to be
+  }
+  const milliseconds timeout{get_parameter("halt_step_timeout_ms").as_int()};
+  exit_requested_.store(true);
+  std::unique_lock<std::mutex> lock{exit_mutex_};
+  if (!exit_condition_.wait_for(lock, timeout, [this]() {
+      return exit_ready_;
+      }))
+  {
+    // The request may still have reached the controller manager. If not, the driver's
+    // dead-man check stops the arm once the heartbeat is gone.
+    RCLCPP_ERROR(
+      get_logger(), "No answer to the halt within %" PRId64 " ms; exiting anyway.",
+      static_cast<std::int64_t>(timeout.count()));
+  }
+}
+
+void SafetySupervisor::serve_exit()
+{
+  if (!exit_halt_started_) {
+    exit_halt_started_ = true;
+    if (logic_.mode() == Mode::RESUMING || logic_.mode() == Mode::MONITORING) {
+      RCLCPP_WARN(get_logger(), "Shutting down while the arm may move: halting it first.");
+      begin_halt(Reason::DEACTIVATED);
+    }
+  }
+  // Step 1 is enough: once the hardware component is inactive, the driver has sent the stop.
+  if (logic_.mode() == Mode::HALTING && logic_.step() == Step::HARDWARE_INACTIVE) {
+    return;
+  }
+  {
+    const std::lock_guard<std::mutex> lock{exit_mutex_};
+    exit_ready_ = true;
+  }
+  exit_condition_.notify_all();
+}
+
 void SafetySupervisor::check()
 {
   const Clock::time_point now = Clock::now();
+
+  // #136: from this callback, not a timer of its own, so a supervisor whose executor is stuck
+  // goes silent as well. In every mode: the driver only checks it while the arm may move.
+  Heartbeat heartbeat;
+  heartbeat.stamp = this->now();  // the node's clock; `now` above is the steady one
+  heartbeat.node_name = get_name();
+  heartbeat.state =
+    logic_.mode() == Mode::MONITORING ? Heartbeat::STATE_MOVING : Heartbeat::STATE_STOPPED;
+  heartbeat_publisher_->publish(heartbeat);
+
+  if (exit_requested_.load()) {
+    serve_exit();
+  }
 
   if (logic_.step() != Step::NONE && step_watchdog_.expired(now)) {
     RCLCPP_ERROR(
