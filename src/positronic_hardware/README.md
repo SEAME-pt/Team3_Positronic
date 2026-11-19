@@ -311,6 +311,25 @@ Run on 2026-11-10, 6 trials, J1 ±5° at 30 % speed (raw CSV in
 
 So on silence the arm **finished** its last target, as in #20.
 
+## Requests to the Atom (#149)
+
+A request is data, in `requests.hpp`: the command, the frame, what the arm sends back and how
+long to wait for it. The serial thread performs every one of them through `SerialArm::perform()`:
+write the frame, then wait for nothing, for the ack of the command (status 1) or for a reply the
+caller knows how to decode. Nothing in the loop knows a request by name.
+
+| Request | Frame | Expects | Waits | Who sends it |
+|---|---|---|---|---|
+| `stop_request()` | `FE FE 02 29 FA` | ack `FE FE 03 29 01 FA` | `ACK_TIMEOUT`, 80 ms | `halt()`, `request_halt()`, the overheat cut (without the wait) |
+| `power_on_request()` | `FE FE 02 10 FA` | ack `FE FE 03 10 01 FA` | 80 ms | `power_on()` |
+| `power_off_request()` | `FE FE 02 11 FA` | nothing | | the overheat cut, then once a period |
+| `get_servo_temps_request()` | `FE FE 02 E5 FA` | the temperature reply | `REQUEST_REPLY_TIMEOUT`, 50 ms | the temperature guard, after a get_angles reply |
+
+A new request in three steps: a factory in `requests.hpp` (command, encoder, what it expects, the
+timeout), its test in `test_requests` (frame bytes and the pair command-frame), and the call to
+`perform()` where the thread needs it. Lifecycle requests that the plugin waits for also need a
+`Pending` value, the one-request-at-a-time mechanism of `halt()` and `power_on()`.
+
 ## Tests
 
 ```bash
@@ -329,6 +348,7 @@ No arm is needed:
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
 | `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
 | `test_servo_temperature`   | The over-temperature logic alone: plausible range, hottest servo, activation cool-down, two readings in a row to trip, implausible readings, the trip stays, a lowered limit. |
+| `test_requests`            | The request table (#149): every factory carries the frame its command encodes, the command sits in byte 3 of the frame, what each one waits for, and `ACK_TIMEOUT` between the arm's 60 ms and the 200 ms watchdog. |
 | `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99, below the longest period), a fraction where a whole number is expected, NaN and infinity, the settle below the period, the rules of `backend`, `port`, `baud` and `velocity_filter_alpha`, and the INFO line. |
 | `test_tracking_check`      | The unfollowed-command logic alone (#103): the defaults, below the threshold never trips, trips once a joint has been over for the time, coming back inside forgets the clock, the joint and the signed error reported, an unknown pose (NaN) does not count, reset forgets every clock. |
 
@@ -374,9 +394,10 @@ does not move and the log names the joint.
 - `fake_arm.hpp`: `FakeArm`.
 - `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
 - `servo_temperature.hpp`: `SERVO_TEMP_LIMIT_C`, `OverheatDetector`, the over-temperature logic.
+- `requests.hpp`: `Request`, `Expect`, `ACK_TIMEOUT`, `REQUEST_REPLY_TIMEOUT`, the factories `stop_request()`, `power_on_request()`, `power_off_request()`, `get_servo_temps_request()` (#149).
 - `parameters.hpp`, `src/parameters.cpp`: `HardwareConfig`, `Backend`, `parse_hardware_parameters()`, `describe()`, the table of numeric parameters (#163).
 - `tracking_check.hpp`: `TRACKING_ERROR_DEG`, `TRACKING_ERROR_MS`, `TrackingCheck`, the unfollowed-command logic (#103).
-- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `ACK_TIMEOUT`, `REQUEST_TIMEOUT`, `TEMPERATURE_REPLY_TIMEOUT`) and `PosixSerialPort`.
+- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
 - `link_watchdog.hpp`: `LinkWatchdog`, the 200 ms link timeout (#35).
 - `test/hil_link_timeout.cpp`: the #35 check on the real arm, run by hand.
 - `serial_transport.hpp`: the `SerialTransport` interface.
