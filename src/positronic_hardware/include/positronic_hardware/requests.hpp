@@ -67,11 +67,8 @@ struct Request
   std::chrono::milliseconds timeout;
 };
 
-namespace requests
-{
-
 /// Stops the current motion. Acknowledged; the thread resends it every turn until it is (#103).
-inline Request stop()
+inline Request stop_request()
 {
   return {
     positronic_protocol::CommandId::STOP, positronic_protocol::encode_stop(), Expect::ACK,
@@ -79,7 +76,7 @@ inline Request stop()
 }
 
 /// Powers the servos on. Acknowledged (#103).
-inline Request power_on()
+inline Request power_on_request()
 {
   return {
     positronic_protocol::CommandId::POWER_ON, positronic_protocol::encode_power_on(), Expect::ACK,
@@ -87,7 +84,7 @@ inline Request power_on()
 }
 
 /// Powers the servos off. The arm answers nothing: the overheat cut repeats it once a period.
-inline Request power_off()
+inline Request power_off_request()
 {
   return {
     positronic_protocol::CommandId::POWER_OFF, positronic_protocol::encode_power_off(),
@@ -95,14 +92,12 @@ inline Request power_off()
 }
 
 /// Asks the six servo temperatures. Answered with a reply frame.
-inline Request get_servo_temps()
+inline Request get_servo_temps_request()
 {
   return {
     positronic_protocol::CommandId::GET_SERVO_TEMPS, positronic_protocol::encode_get_servo_temps(),
     Expect::REPLY, REQUEST_REPLY_TIMEOUT};
 }
-
-}  // namespace requests
 
 }  // namespace positronic_hardware
 

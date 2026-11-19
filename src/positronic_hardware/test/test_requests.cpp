@@ -41,10 +41,10 @@ using positronic_hardware::ACK_TIMEOUT;
 using positronic_hardware::Expect;
 using positronic_hardware::Request;
 using positronic_hardware::REQUEST_REPLY_TIMEOUT;
-using positronic_hardware::requests::get_servo_temps;
-using positronic_hardware::requests::power_off;
-using positronic_hardware::requests::power_on;
-using positronic_hardware::requests::stop;
+using positronic_hardware::get_servo_temps_request;
+using positronic_hardware::power_off_request;
+using positronic_hardware::power_on_request;
+using positronic_hardware::stop_request;
 using positronic_protocol::CommandId;
 
 std::vector<std::uint8_t> bytes_of(const positronic_protocol::Frame & frame)
@@ -63,7 +63,7 @@ CommandId command_byte(const Request & request)
 // will echo: a wrong pair would make perform() wait for an ack that never matches.
 TEST(Requests, StopIsTheStopFrameAndWaitsForItsAck)
 {
-  const Request request{stop()};
+  const Request request{stop_request()};
   EXPECT_EQ(request.command, CommandId::STOP);
   EXPECT_EQ(bytes_of(request.frame), bytes_of(positronic_protocol::encode_stop()));
   EXPECT_EQ(request.expect, Expect::ACK);
@@ -72,7 +72,7 @@ TEST(Requests, StopIsTheStopFrameAndWaitsForItsAck)
 
 TEST(Requests, PowerOnIsThePowerOnFrameAndWaitsForItsAck)
 {
-  const Request request{power_on()};
+  const Request request{power_on_request()};
   EXPECT_EQ(request.command, CommandId::POWER_ON);
   EXPECT_EQ(bytes_of(request.frame), bytes_of(positronic_protocol::encode_power_on()));
   EXPECT_EQ(request.expect, Expect::ACK);
@@ -81,7 +81,7 @@ TEST(Requests, PowerOnIsThePowerOnFrameAndWaitsForItsAck)
 
 TEST(Requests, PowerOffWaitsForNothing)
 {
-  const Request request{power_off()};
+  const Request request{power_off_request()};
   EXPECT_EQ(request.command, CommandId::POWER_OFF);
   EXPECT_EQ(bytes_of(request.frame), bytes_of(positronic_protocol::encode_power_off()));
   EXPECT_EQ(request.expect, Expect::NONE);
@@ -90,7 +90,7 @@ TEST(Requests, PowerOffWaitsForNothing)
 
 TEST(Requests, GetServoTempsWaitsForAReply)
 {
-  const Request request{get_servo_temps()};
+  const Request request{get_servo_temps_request()};
   EXPECT_EQ(request.command, CommandId::GET_SERVO_TEMPS);
   EXPECT_EQ(bytes_of(request.frame), bytes_of(positronic_protocol::encode_get_servo_temps()));
   EXPECT_EQ(request.expect, Expect::REPLY);
@@ -101,10 +101,10 @@ TEST(Requests, GetServoTempsWaitsForAReply)
 // in perform() relies on the factory's command being that byte.
 TEST(Requests, TheCommandIsTheFourthByteOfEveryFrame)
 {
-  EXPECT_EQ(command_byte(stop()), CommandId::STOP);
-  EXPECT_EQ(command_byte(power_on()), CommandId::POWER_ON);
-  EXPECT_EQ(command_byte(power_off()), CommandId::POWER_OFF);
-  EXPECT_EQ(command_byte(get_servo_temps()), CommandId::GET_SERVO_TEMPS);
+  EXPECT_EQ(command_byte(stop_request()), CommandId::STOP);
+  EXPECT_EQ(command_byte(power_on_request()), CommandId::POWER_ON);
+  EXPECT_EQ(command_byte(power_off_request()), CommandId::POWER_OFF);
+  EXPECT_EQ(command_byte(get_servo_temps_request()), CommandId::GET_SERVO_TEMPS);
 }
 
 // 80 ms sits above the 60 ms power_on ack measured on the arm and under the 200 ms link watchdog.

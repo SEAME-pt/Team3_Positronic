@@ -313,10 +313,10 @@ caller knows how to decode. Nothing in the loop knows a request by name.
 
 | Request | Frame | Expects | Waits | Who sends it |
 |---|---|---|---|---|
-| `requests::stop()` | `FE FE 02 29 FA` | ack `FE FE 03 29 01 FA` | `ACK_TIMEOUT`, 80 ms | `halt()`, `request_halt()`, the overheat cut (without the wait) |
-| `requests::power_on()` | `FE FE 02 10 FA` | ack `FE FE 03 10 01 FA` | 80 ms | `power_on()` |
-| `requests::power_off()` | `FE FE 02 11 FA` | nothing | | the overheat cut, then once a period |
-| `requests::get_servo_temps()` | `FE FE 02 E5 FA` | the temperature reply | `REQUEST_REPLY_TIMEOUT`, 50 ms | the temperature guard, after a get_angles reply |
+| `stop_request()` | `FE FE 02 29 FA` | ack `FE FE 03 29 01 FA` | `ACK_TIMEOUT`, 80 ms | `halt()`, `request_halt()`, the overheat cut (without the wait) |
+| `power_on_request()` | `FE FE 02 10 FA` | ack `FE FE 03 10 01 FA` | 80 ms | `power_on()` |
+| `power_off_request()` | `FE FE 02 11 FA` | nothing | | the overheat cut, then once a period |
+| `get_servo_temps_request()` | `FE FE 02 E5 FA` | the temperature reply | `REQUEST_REPLY_TIMEOUT`, 50 ms | the temperature guard, after a get_angles reply |
 
 A new request in three steps: a factory in `requests.hpp` (command, encoder, what it expects, the
 timeout), its test in `test_requests` (frame bytes and the pair command-frame), and the call to
@@ -386,7 +386,7 @@ does not move and the log names the joint.
 - `fake_arm.hpp`: `FakeArm`.
 - `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
 - `servo_temperature.hpp`: `SERVO_TEMP_LIMIT_C`, `OverheatDetector`, the over-temperature logic.
-- `requests.hpp`: `Request`, `Expect`, `ACK_TIMEOUT`, `REQUEST_REPLY_TIMEOUT`, the factories `requests::stop()`, `power_on()`, `power_off()`, `get_servo_temps()` (#149).
+- `requests.hpp`: `Request`, `Expect`, `ACK_TIMEOUT`, `REQUEST_REPLY_TIMEOUT`, the factories `stop_request()`, `power_on_request()`, `power_off_request()`, `get_servo_temps_request()` (#149).
 - `tracking_check.hpp`: `TRACKING_ERROR_DEG`, `TRACKING_ERROR_MS`, `TrackingCheck`, the unfollowed-command logic (#103).
 - `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
 - `link_watchdog.hpp`: `LinkWatchdog`, the 200 ms link timeout (#35).

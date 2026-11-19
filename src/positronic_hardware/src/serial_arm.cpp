@@ -317,7 +317,7 @@ void SerialArm::send_pending_request()
     request_.compare_exchange_strong(expected, Pending::NONE);
     return;
   }
-  const Request request{pending == Pending::HALT ? requests::stop() : requests::power_on()};
+  const Request request{pending == Pending::HALT ? stop_request() : power_on_request()};
   if (!perform(request)) {
     return;  // not taken: the request stays pending, the frame goes out again next turn
   }
@@ -407,7 +407,7 @@ std::optional<ServoTemperatures> SerialArm::ask_temperatures()
 {
   std::optional<ServoTemperatures> temperatures{};
   const bool replied{
-    perform(requests::get_servo_temps(), [&temperatures](positronic_protocol::ByteView rx) {
+    perform(get_servo_temps_request(), [&temperatures](positronic_protocol::ByteView rx) {
         const positronic_protocol::Decoded<positronic_protocol::ServoTemperatures> decoded{
           positronic_protocol::decode_servo_temps_reply(rx)};
         if (decoded.status == positronic_protocol::DecodeStatus::FOUND) {
@@ -425,13 +425,13 @@ bool SerialArm::cut_power(const Overheat & trip)
   halted_.store(true);
   last_target_.writeFromNonRT(std::nullopt);
   // The stop goes out without waiting for its ack: the power off must follow at once.
-  Request stop{requests::stop()};
+  Request stop{stop_request()};
   stop.expect = Expect::NONE;
   std::ignore = perform(stop);
   // The arm ignores the port for a moment after a frame (#32): the power off waits the settle,
   // so it is not dropped.
   std::this_thread::sleep_for(timing_.send_settle);
-  const bool off_written{perform(requests::power_off())};
+  const bool off_written{perform(power_off_request())};
   // Recorded after the frames, the value before the joint: the plugin that sees the cut finds
   // the arm already told to stop and power off.
   overheat_celsius_.store(trip.celsius);
@@ -481,7 +481,7 @@ void SerialArm::repeat_power_off(Clock::time_point turn_start)
   if (!overheated() || turn_start < next_power_off_) {
     return;
   }
-  std::ignore = perform(requests::power_off());
+  std::ignore = perform(power_off_request());
   next_power_off_ = turn_start + guard_.period;
 }
 
