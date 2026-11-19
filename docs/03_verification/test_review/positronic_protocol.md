@@ -118,6 +118,16 @@ ack could then hide a refused command.
 acks" issue, its acceptance criteria include these three tests (bad footer, split across reads,
 empty buffer). Otherwise they go to the general "later" list.
 
+### Recheck after merging `dev` (2026-11-19)
+
+- **F2:** `decode_ack` is now used outside the tests: #146 (issue #103) reads the ack of every
+  stop and power_on in `SerialArm`. The "acks are ignored" part of F2 is out of date; "the
+  package translates, it does not protect" still holds (no checksum, F1).
+- **F3: still open, and it matters more now.** `dev` added decode tests for temperatures only, not
+  for acks. The stop path now depends on `decode_ack` (a missed ack means a resend and, after
+  300 ms, a failed deactivate), so the ack edge tests (noise before it, cut at every position,
+  wrong command, wrong status) are worth doing. Still **later**, at the top of the protocol items.
+
 ### F4. Some tests prove nothing
 
 **What:**

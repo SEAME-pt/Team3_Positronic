@@ -222,11 +222,28 @@ the chance to do it.
 |---|---|
 | H1. Stop on shutdown depends on ros2_control, untested | Test "shutdown from ACTIVE sends a stop": **fix now**. Crash note in safety docs: later |
 | H2. `read()` trusts every reading | **New issue** (check in the serial thread) |
-| H3. Acks never read | **New issue**, "read the acks, starting with stop" |
-| H4. `power_on` failure on activate untested | Test: **fix now**. `write()` while inactive: later. Rest: accept |
+| H3. Acks never read | ~~New issue~~ **done in `dev`** (#146, #159), see the recheck |
+| H4. `power_on` failure on activate untested | Test: ~~fix now~~ **already covered in `dev`** (#146). `write()` while inactive: later. Rest: accept |
 | H5. Fixed sleeps in "nothing happened" tests | Later, top of the list |
 
 **Fix now (#46):** two tests in `test/test_load_robot_system.cpp`, about 2 h in total.
+
+## Recheck after merging `dev` (2026-11-19)
+
+The review above was done on an old base (11 commits behind `dev`). After merging `dev` into
+`46-coverage-gate-at-80` (merge commit `d9cffaa`), each finding was checked again on the new code.
+
+| Finding | Was | Now |
+|---|---|---|
+| H1 stop on shutdown | Fix now | **Still needed, done.** `dev` has no ACTIVE → FINALIZED test. `ShutdownFromActiveSendsAStop` kept, rewritten with `dev`'s helpers (`load_on_pseudo_terminal()`, `received_requests(0x29)`). With acks, `halt()` returns only after the arm confirmed the stop, so the test needs no wait. Mutation check on the merged code: `on_deactivate` without `halt()` fails it. |
+| H2 readings trusted | New issue | **Still open.** Only temperatures get a plausibility check (`serial_arm.cpp:459`); joint angles are still taken as they come. The tracking fault (#159) catches an arm that does not follow its target, not a wrong reading. New issue stays. |
+| H3 acks never read | New issue | **Done in `dev`.** #146 (issue #103) waits for the ack of every stop and power_on and resends until it comes; a `send_angles` the arm does not follow raises `TRACKING_ERROR` after `tracking_error_ms` (#159). No new issue. |
+| H4 `power_on` failure untested | Fix now | **Already covered in `dev`.** `ActivateFailsWhenTheArmDoesNotAcknowledgeThePowerOn` (#146) runs the same path (`power_on()` false → ERROR after ≥ `REQUEST_TIMEOUT`, then UNCONFIGURED) and checks more (a stop follows, no target leaves). Our test was dropped in the merge. The H4 remark "`TRACKING_ERROR` is reserved but not raised" is out of date (#159). |
+| H5 fixed sleeps | Later (top) | **Still there**, and more: `test_serial_arm.cpp` has about 13 `3 * moving_period` sleeps plus the new temperature tests' sleeps. Stays later, top. |
+| Side note: unthrottled logs in `read()`/`write()` | Team question | **Still there** (`RCLCPP_ERROR` in `read()`, lines 671–725). |
+
+**Lesson:** review against the newest `dev`, or merge it first. A review of old code finds problems
+that may already be fixed.
 
 ## Side notes (not test findings)
 
