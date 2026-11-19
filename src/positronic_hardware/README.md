@@ -273,7 +273,9 @@ driver up, 259 stops and 69 power_on sent), the numbers behind `ACK_TIMEOUT`:
 `REPLY_TIMEOUT` (50 ms). While the arm moves, one lost reply is up to ~130 ms of silence (a
 sync-write as late as the 60 ms `echo_timeout`, the 50 ms of the lost reply, a late 20 ms reply;
 a turn without a reply sends nothing, so no wait follows it) and two are ~180 ms. 200 ms
-tolerates two lost replies and faults on the third. The fault is seen at the next `read()`, so the
+tolerates two lost replies and faults on the third. A temperature request (8 ms, 50 ms when it
+goes unanswered) does not reset this watchdog, only a `get_angles` reply does, so the turn that
+asks sends nothing: its request never adds to the silence of a send and its sync-write. The fault is seen at the next `read()`, so the
 supervisor gets it within 200 ms plus one control period (33 ms at 30 Hz).
 
 **What the arm does on silence.** It finishes its last commanded target and holds there: 8 of

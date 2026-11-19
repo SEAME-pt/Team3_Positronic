@@ -83,7 +83,7 @@ struct TemperatureGuard
   std::chrono::milliseconds period{1000};
 
   /// A reading older than this is taken even on a turn that sends a target, before the send,
-  /// so a long motion cannot hide a hot servo. 47 of the 50 ms of a moving turn.
+  /// so a long motion cannot hide a hot servo. It adds ~8 ms to that turn, once every 3 s.
   std::chrono::milliseconds max_age{3000};
 
   /// No plausible reading for this long and temperature_stale() turns true: the guard is blind.
@@ -252,8 +252,9 @@ private:
 
   /// The guard's part of a turn whose get_angles was answered: asks for the temperatures when
   /// they are due and allowed (see poll_loop), publishes a plausible reading, and cuts the arm
-  /// when the detector trips. `new_target` says whether this turn is about to send one.
-  void watch_temperatures(bool new_target);
+  /// when the detector trips. `new_target` says whether this turn has one to send. True when
+  /// it asked: the turn sends nothing, the target goes out next turn.
+  bool watch_temperatures(bool new_target);
 
   /// After a cut, sends the power off again once a period, at the start of a turn.
   void repeat_power_off(Clock::time_point turn_start);

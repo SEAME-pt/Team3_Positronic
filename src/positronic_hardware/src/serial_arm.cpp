@@ -461,27 +461,30 @@ bool SerialArm::cut_power(const Overheat & trip)
 
 /// The temperatures, once a period, when the arm's input is free (it has just answered) and no
 /// stop or power on is waiting. On a turn that sends no target; a reading older than max_age is
-/// taken before the send of a moving turn, so a long motion cannot hide a hot servo. Never
-/// between a send and its sync-write: that is the end of the turn.
-void SerialArm::watch_temperatures(bool new_target)
+/// taken in a moving turn too, so a long motion cannot hide a hot servo. Never between a send
+/// and its sync-write: that is the end of the turn. Returns true when it asked: the turn then
+/// sends nothing and the target goes out next turn, ~10 ms later. A request (8 ms, 50 ms when
+/// unanswered) plus a send and its sync-write would run past the period, and would eat the
+/// link watchdog's margin for two lost replies, which only the get_angles reply resets.
+bool SerialArm::watch_temperatures(bool new_target)
 {
   const auto now{Clock::now()};
   const bool due{now - last_temperature_ask_ >= guard_.period};
   const bool overdue{now - last_temperature_ask_ >= guard_.max_age};
   if (!due || (new_target && !overdue) || request_.load() != Pending::NONE) {
-    return;
+    return false;
   }
   last_temperature_ask_ = now;
   const std::optional<ServoTemperatures> temperatures{ask_temperatures()};
   if (!temperatures.has_value()) {
-    return;
+    return true;
   }
   if (plausible(temperatures.value())) {
     temperatures_.writeFromNonRT(temperatures);
     temperature_watchdog_.on_reply(Clock::now());
   }
   if (overheated()) {
-    return;
+    return true;
   }
   if (const std::optional<Overheat> trip{detector_.update(temperatures.value())}) {
     // The cut is the thread's own: it does not wait for the control loop, and it works with
@@ -489,6 +492,7 @@ void SerialArm::watch_temperatures(bool new_target)
     const bool off_written{cut_power(trip.value())};
     next_power_off_ = off_written ? Clock::now() + guard_.period : Clock::now();
   }
+  return true;
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
@@ -561,14 +565,14 @@ void SerialArm::poll_loop()
     const bool new_target{
       replied && !halted_.load() && target.has_value() && target != last_sent()};
 
-    if (replied) {
-      watch_temperatures(new_target);
-    }
+    // The guard only runs after a reply: the arm's input is free then.
+    const bool asked_temperatures{replied && watch_temperatures(new_target)};
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
-    // A turn without a reply sends nothing, the command waits in command_ for the next.
+    // A turn without a reply sends nothing, the command waits in command_ for the next. So
+    // does a turn that asked the temperatures: the request took the time of the send.
     // halted_ again: a cut in this turn holds the target that was about to go.
-    if (new_target && !halted_.load()) {
+    if (new_target && !asked_temperatures && !halted_.load()) {
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
       const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {

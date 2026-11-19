@@ -67,6 +67,10 @@
 //   replayed arm's 20 ms, check: the next get_angles never goes out before the sync-write is
 //   whole on the line, and goes out long before the echo_timeout; an arm that never sync-writes
 //   makes the wait last the whole echo_timeout.
+// Follow-up prompt (#150):
+//   A turn that asks the temperatures (the reading overdue) no longer sends in the same turn:
+//   the target goes out next turn. Check that the frame after a temperature request in a
+//   stream is a get_angles, never a send_angles.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1127,7 +1131,7 @@ TEST(SerialArmTemperature, NoTemperatureRequestInTurnsThatSendUntilItIsOverdue)
   EXPECT_EQ(frames_with_id(during, TEMPS_ID).size(), 0U);
 }
 
-TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
+TEST(SerialArmTemperature, AnOverdueReadingTakesTheTurnAndTheSendWaitsForTheNext)
 {
   auto transport{std::make_unique<ScriptedArm>()};
   ScriptedArm & port{*transport};
@@ -1139,11 +1143,13 @@ TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
   stream_targets(arm, std::chrono::milliseconds{1200});
   const auto during{between_sends(port.written())};
   // max_age 300 ms over a 1.2 s stream: a few readings, each right after a get_angles, so
-  // never between a send and its sync-write.
+  // never between a send and its sync-write. The turn that asked sends nothing: the frame after
+  // the request is the next turn's get_angles, and the target goes out after that one.
   EXPECT_GE(frames_with_id(during, TEMPS_ID).size(), 2U);
-  for (std::size_t i{1}; i < during.size(); ++i) {
+  for (std::size_t i{1}; i + 1 < during.size(); ++i) {
     if (request_id(during[i]) == TEMPS_ID) {
       EXPECT_EQ(request_id(during[i - 1]), GET_ANGLES_ID) << i;
+      EXPECT_EQ(request_id(during[i + 1]), GET_ANGLES_ID) << i;
     }
   }
   EXPECT_FALSE(arm.temperature_stale());
