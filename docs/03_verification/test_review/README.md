@@ -34,6 +34,9 @@ code that coverage counts.
 - [positronic_protocol](positronic_protocol.md)
 - [positronic_hardware](positronic_hardware.md)
 - [positronic_safety](positronic_safety.md)
+- [positronic_mission](positronic_mission.md)
+- [positronic_moveit_config](positronic_moveit_config.md)
+- [positronic_bringup](positronic_bringup.md)
 
 ## Carried to other packages
 
@@ -50,7 +53,31 @@ Questions a review raised that belong to another package's review.
 |---|---|---|---|---|
 | positronic_protocol | Done 2026-11-17 | – | F1 test, F2 README note, F3 (with the acks issue), F4 cleanup | – |
 | positronic_hardware | Done 2026-11-17 | H1 shutdown test, H4 `power_on` failure test | H5 (top), H1 crash note, H4 `write()` while inactive | H2 reading plausibility, H3 read the acks |
-| positronic_safety | In progress 2026-11-18 | | | |
-| positronic_mission | | | | |
-| positronic_moveit_config | | | | |
-| positronic_bringup | | | | |
+| positronic_safety | Done 2026-11-18 | S1 shutdown test, S2 stale fault code test, S3 controller manager gone test | S4 locking test + README sentence, S5 four refusal tests, RESUMING README note | S1 `main()` Ctrl+C halt (or #136), S4 heartbeat ADR |
+| positronic_mission | Done 2026-11-19 | M1 `MoveitBackend` tests (gate), M2 MoveIt not ready, M3 pose reaches the backend | M4 heartbeat timing margins, M5 small gaps | Linters off in `CMakeLists.txt` |
+| positronic_moveit_config | Done 2026-11-19 | C1 `apply()`/`main()` tests (gate) | C2 bad scene files, C3 joint limits config test | C1 a failed scene load must stop the system |
+| positronic_bringup | Done 2026-11-19 | – | B1 delay tool `main()`, B2 heartbeat timeout vs measured gap | – |
+
+## Phase 2 work list (fix now)
+
+| # | Package | Test | Estimate |
+|---|---|---|---|
+| 1 | mission | M1 `test_moveit_backend.cpp` (stop before planning, `reset_stop`, not connected, `ready()` false) | 1 h |
+| 2 | moveit_config | C1 `apply()` with a fake `/apply_planning_scene`: success, refused, no service; `main()` exit code | 1 h |
+| 3 | mission | M2 activation refused when MoveIt is not ready; M3 the goal's pose reaches the backend | 35 min |
+| 4 | hardware | H1 ACTIVE → FINALIZED sends a stop on the pseudo-terminal | 1 h |
+| 5 | hardware | H4 `on_activate` when `power_on` cannot be sent | 1 h |
+| 6 | safety | S1 `shutdown()` while MONITORING sends "hardware inactive" | 30 min |
+| 7 | safety | S2 stale fault code with a stamp from before the resume (+ opposite case, mutation check) | 45 min |
+| 8 | safety | S3 halt with the controller manager gone | 45 min |
+
+Items 1–2 make the gate pass; do them first. Then Phase 3: remove `continue-on-error: true` from
+the coverage step in `.github/workflows/ci.yml`.
+
+## Issues to open
+
+- **New issues:** reading plausibility in `SerialArm` (H2, F1); read the acks, starting with stop
+  (H3, F3); supervisor `main()` halts on Ctrl+C (S1, or add to #136); what must the heartbeat
+  prove, with an ADR (S4); a failed planning scene load must stop the system (C1); linters off in
+  `positronic_mission` (side note).
+- **One follow-up issue** with every "later" item in the Status table.
