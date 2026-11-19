@@ -34,6 +34,8 @@
 //   decode_sync_write_echo finds the Atom's sync-write to the six servos: the recorded frame,
 //   the same frame at the end of everything the Atom sent after one recorded send_angles, a
 //   frame cut at every position, a bad checksum, the other servo-bus frames, and our own replies.
+//   Then: an empty buffer, and a frame with a bad checksum followed by a good one, which is found
+//   with the bad start counted as rejected.
 
 #include <gtest/gtest.h>
 
@@ -556,4 +558,24 @@ TEST(DecodeSyncWrite, OurRepliesAreNotIt)
   EXPECT_EQ(
     pp::decode_ack(view_of(RECORDED_SYNC_WRITE), pp::CommandId::SEND_ANGLES).status,
     pp::DecodeStatus::NOT_FOUND);
+}
+
+TEST(DecodeSyncWrite, AnEmptyBufferFindsNothing)
+{
+  const auto result{pp::decode_sync_write_echo(pp::ByteView{})};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.consumed, 0U);
+  EXPECT_EQ(result.rejected, 0U);
+}
+
+// On the wire the thread must step over a damaged frame and still find the next good one.
+TEST(DecodeSyncWrite, AGoodFrameAfterABadChecksumIsFound)
+{
+  Bytes rx{RECORDED_SYNC_WRITE};
+  rx.back() = static_cast<std::uint8_t>(rx.back() + 1);
+  rx.insert(rx.end(), RECORDED_SYNC_WRITE.begin(), RECORDED_SYNC_WRITE.end());
+  const auto result{pp::decode_sync_write_echo(view_of(rx))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.consumed, rx.size());
+  EXPECT_EQ(result.rejected, 1U);
 }
