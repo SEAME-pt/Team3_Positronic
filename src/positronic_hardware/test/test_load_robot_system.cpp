@@ -87,6 +87,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -283,6 +284,21 @@ public:
     const std::lock_guard<std::mutex> lock{mutex_};
     return std::search(received_.begin(), received_.end(), HEADER.begin(), HEADER.end()) !=
            received_.end();
+  }
+
+  /// True if `frame` arrived since this arm started (or since forget()).
+  bool received(const std::vector<std::uint8_t> & frame)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return std::search(received_.begin(), received_.end(), frame.begin(), frame.end()) !=
+           received_.end();
+  }
+
+  /// Drops everything received so far, so a test can check what one step sent.
+  void forget()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    received_.clear();
   }
 
   /// True once the driver has sent anything at all.
@@ -930,6 +946,110 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsCo
   const auto elapsed{std::chrono::steady_clock::now() - start};
   EXPECT_GE(elapsed, positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
   EXPECT_LT(elapsed, 2 * positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+
+  resource_manager_.reset();
+}
+
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review H1: on a clean exit the controller manager takes the component from ACTIVE
+//   straight to FINALIZED; check that a stop frame reaches the port on the way. H4: an activate
+//   whose power_on frame cannot be written must fail (ERROR, then UNCONFIGURED), not leave an
+//   ACTIVE component whose targets never go out.
+
+namespace
+{
+// The stop frame, FE FE LEN CMD FA with no data: LEN = 2.
+const std::vector<std::uint8_t> STOP_FRAME{0xFE, 0xFE, 0x02, 0x29, 0xFA};
+
+/// Polls `done` every 10 ms until it is true or `timeout` passes.
+bool wait_until(const std::function<bool()> & done, std::chrono::milliseconds timeout)
+{
+  const auto end{std::chrono::steady_clock::now() + timeout};
+  while (std::chrono::steady_clock::now() < end) {
+    if (done()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return done();
+}
+}  // namespace
+
+TEST_F(LoadRobotSystem, ShutdownFromActiveSendsAStop)
+{
+  // A clean exit (Ctrl+C, launch stopped): the controller manager's pre-shutdown callback takes
+  // every component to FINALIZED. From ACTIVE, ros2_control runs on_deactivate (which sends the
+  // stop) and then on_shutdown (which closes the port). Our safety on exit depends on that order
+  // in code we do not own: this test locks it in.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  arm->forget();  // only what the shutdown sends counts
+  ASSERT_FALSE(arm->received(STOP_FRAME));
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED,
+      hardware_interface::lifecycle_state_names::FINALIZED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED);
+
+  // halt() returns once the stop was written to the port; the arm side reads it on its next
+  // poll (10 ms). 1 s is a wide margin for a slow runner.
+  EXPECT_TRUE(
+    wait_until(
+      [&arm]() {return arm->received(STOP_FRAME);},
+      std::chrono::milliseconds{1000})) << "No stop reached the port on shutdown";
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+TEST_F(LoadRobotSystem, ActivateFailsWhenPowerOnCannotBeSent)
+{
+  // An arm that answers, so the component reaches INACTIVE and gets a first reading.
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+      hardware_interface::lifecycle_state_names::INACTIVE),
+    hardware_interface::return_type::OK);
+  ASSERT_TRUE(
+    wait_until(
+      [this]() {
+        return read_once() == hardware_interface::return_type::OK &&
+               !std::isnan(state(JOINTS.at(0), "position").value_or(std::nan("")));
+      },
+      std::chrono::milliseconds{1000})) << "No first reading from the arm";
+
+  // The arm goes away: every write on the port now fails, so power_on can never leave.
+  // Activate at once, while the link still counts as alive (its timeout is 200 ms): the
+  // component must refuse at power_on, not at the link check.
+  arm.reset();
+  ::close(controller);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  const auto elapsed{std::chrono::steady_clock::now() - start};
+
+  // Proof it failed at power_on: the link check fails at once, power_on() waits REQUEST_TIMEOUT
+  // for its frame to leave. Upper bound as in the deactivate test above.
+  EXPECT_GE(elapsed, positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  EXPECT_LT(elapsed, 2 * positronic_hardware::ArmBackend::REQUEST_TIMEOUT);
+  // Never ACTIVE with targets held back: on_error takes it to UNCONFIGURED.
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 
   resource_manager_.reset();

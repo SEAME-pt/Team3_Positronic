@@ -44,6 +44,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "control_msgs/action/follow_joint_trajectory.hpp"
@@ -112,6 +113,22 @@ public:
     return goal_ != nullptr;
   }
 
+  /// The controller manager crashed: its two services are gone. Returns once this node no
+  /// longer sees them, so the supervisor (same process, same graph) does not either.
+  bool controller_manager_gone(milliseconds timeout)
+  {
+    hardware_service_.reset();
+    switch_service_.reset();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (hardware_probe_->service_is_ready() || switch_probe_->service_is_ready()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(milliseconds{10});
+    }
+    return true;
+  }
+
   /// What the supervisor asked for, in the order it arrived: "hardware:active",
   /// "hardware:inactive", "cancel", "controllers:on", "controllers:off".
   Calls calls;
@@ -131,6 +148,11 @@ public:
   /// Where a failed deactivation leaves the hardware component. UNCONFIGURED is what the
   /// driver does on a link fault.
   std::uint8_t state_after_failed_deactivation{State::PRIMARY_STATE_UNCONFIGURED};
+  /// True: for STALE_WINDOW after answering an activation, every other message has fault
+  /// code 1 and a stamp from before the activation, like messages still on their way from
+  /// before the driver cleared its fault.
+  bool stale_fault_after_activation{false};
+  static constexpr milliseconds STALE_WINDOW{500};
 
 private:
   void create_topics()
@@ -184,6 +206,9 @@ private:
       create_service<SwitchController>("controller_manager/switch_controller", on_switch);
 
     stop_client_ = create_client<Trigger>("safety_supervisor/stop");
+    hardware_probe_ =
+      create_client<SetHardwareComponentState>("controller_manager/set_hardware_component_state");
+    switch_probe_ = create_client<SwitchController>("controller_manager/switch_controller");
   }
 
   void create_action()
@@ -221,6 +246,10 @@ private:
         activation_succeeds ? State::PRIMARY_STATE_ACTIVE : State::PRIMARY_STATE_UNCONFIGURED;
       if (activation_succeeds) {
         fault_code = 0.0;  // the driver clears its latched fault when it activates
+        if (stale_fault_after_activation) {
+          stale_stamp_ = now() - rclcpp::Duration{milliseconds{50}};
+          stale_until_ = now() + rclcpp::Duration{STALE_WINDOW};
+        }
       }
     } else {
       response.ok = deactivation_succeeds;
@@ -247,6 +276,13 @@ private:
       message.header.stamp = now();
       message.joint_names = {"driver"};
       message.interface_values = {driver};
+      // In the stale window every other tick sends the stale message instead: the supervisor
+      // keeps only the newest message, so two in one tick would hide one of them. A fresh one
+      // still comes every 20 ms, well inside the fault timeout.
+      if (now() < stale_until_ && (++stale_tick_ % 2) == 0) {
+        message.header.stamp = stale_stamp_;
+        message.interface_values.front().values = {1.0};
+      }
       joint_states_publisher_->publish(message);
     }
   }
@@ -257,6 +293,11 @@ private:
   rclcpp::Service<SetHardwareComponentState>::SharedPtr hardware_service_;
   rclcpp::Service<SwitchController>::SharedPtr switch_service_;
   rclcpp::Client<Trigger>::SharedPtr stop_client_;
+  rclcpp::Client<SetHardwareComponentState>::SharedPtr hardware_probe_;
+  rclcpp::Client<SwitchController>::SharedPtr switch_probe_;
+  rclcpp::Time stale_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time stale_until_{0, 0, RCL_ROS_TIME};
+  std::uint64_t stale_tick_{0};
   rclcpp_action::Server<FollowJointTrajectory>::SharedPtr trajectory_server_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr trajectory_client_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
@@ -537,6 +578,74 @@ TEST_F(SafetySupervisorTest, DeactivatingTheSupervisorHalts)
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_TRUE(fake_->statuses.back().hardware_stopped);
+}
+
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review S1-S3. S1: a shutdown requested while MONITORING must send "hardware
+//   inactive". S2: after a resume from a driver fault, messages
+//   stamped before the activation and still carrying the old code must not halt again, while a
+//   new fault still does. S3: with the controller manager gone, a halt must end STOPPED at once
+//   and report the hardware as not stopped.
+
+TEST_F(SafetySupervisorTest, ShutdownWhileMonitoringSendsHardwareInactive)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // A shutdown request from ACTIVE. In the installed rclcpp_lifecycle this runs on_deactivate
+  // before on_shutdown (found by deleting on_shutdown's halt: this test still passed, with
+  // "HALT (DEACTIVATED)" from on_deactivate). on_shutdown's own halt is a second guard for a
+  // version that would not. The test checks the outcome, whichever callback gives it.
+  EXPECT_EQ(supervisor_->shutdown().id(), State::PRIMARY_STATE_FINALIZED);
+
+  // Step 1 is the one that stops the arm: it must leave even though the node is finalizing.
+  ASSERT_TRUE(
+    spin_until(
+      [this]() {
+        return !fake_->calls.empty() && fake_->calls.front() == "hardware:inactive";
+      }));
+}
+
+TEST_F(SafetySupervisorTest, StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+  fake_->fault_code = 1.0;
+  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+
+  // Resume. For 500 ms after it activates the hardware, every other message from the fake has
+  // code 1 and a stamp from before the activation. Without the filter, the first one seen in
+  // MONITORING halts.
+  fake_->stale_fault_after_activation = true;
+  ASSERT_TRUE(spin_until([this]() {return try_activate();}));
+  ASSERT_TRUE(spin_until([this]() {return mode_is(SafetyStatus::MODE_MONITORING);}));
+  spin_for(FakeArmSide::STALE_WINDOW + milliseconds{100});  // the whole stale window, and more
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_MONITORING)) << "A stale fault code halted the arm";
+  EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_ACTIVE);
+
+  // The filter is not too wide: a fault stamped after the activation still halts.
+  fake_->calls.clear();
+  fake_->fault_code = 1.0;
+  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);}));
+  EXPECT_EQ(fake_->calls, HALT);
+}
+
+TEST_F(SafetySupervisorTest, HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNotStopped)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // The controller manager crashed (and the driver with it: no stop was sent).
+  ASSERT_TRUE(fake_->controller_manager_gone(milliseconds{5000}));
+
+  const auto start = std::chrono::steady_clock::now();
+  fake_->call_stop();
+  ASSERT_TRUE(spin_until([this]() {return stopped_because(SafetyStatus::REASON_STOP_SERVICE);}));
+
+  // Every step failed at once ("not available"): no waiting for the 200 ms step timeouts.
+  EXPECT_LT(std::chrono::steady_clock::now() - start, milliseconds{200});
+  EXPECT_TRUE(fake_->calls.empty());  // nothing reached the (gone) controller manager
+  // The honest report: the supervisor could not stop the arm.
+  EXPECT_FALSE(fake_->statuses.back().hardware_stopped);
+  EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
 }
 
 int main(int argc, char ** argv)

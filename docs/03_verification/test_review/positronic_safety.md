@@ -71,6 +71,13 @@ The supervisor's design already puts it first.
 **Decision:**
 - Node test: `supervisor_->shutdown()` while MONITORING sends "hardware inactive" to the fake.
   **Fix now** (~30 min).
+
+**Found while writing the test (2026-11-19):** with `on_shutdown`'s halt deleted, the test still
+passed, with "HALT (DEACTIVATED)": the installed rclcpp_lifecycle runs `on_deactivate` before
+`on_shutdown` on a shutdown from ACTIVE, and `on_deactivate` starts the halt. So `on_shutdown`'s
+halt (and its comment "a shutdown can come straight from ACTIVE, with no on_deactivate before
+it") is a second guard this ROS version never reaches. Harmless; the comment could say so. It
+does not change the main point: Ctrl+C requests no transition at all.
 - `main()` runs the halt on Ctrl+C (pre-shutdown hook): **new issue**, or added to #136.
 
 ### S2. The "stale fault code" test never runs the filter
