@@ -149,6 +149,13 @@ exactly that list in the Jetson image.
 so `ros2 run` works straight away. If you rebuild inside the shell, run `source install/setup.bash`
 afterwards.
 
+**One `ROS_DOMAIN_ID` per person while the real arm runs.** The Makefile gives everyone 17, so every
+laptop on the lab network with the default sees the Jetson's controller manager: on 19 Nov 2026 a
+spawner on another laptop tried to configure our `arm_controller` while the arm was active, and a goal
+sent from there could move the arm. Before you start the driver, pick a domain of your own
+(`export ROS_DOMAIN_ID=<your number>`, the same on the laptop that drives it) and check that
+`ros2 node list` shows only your nodes.
+
 **`make nano-image`**: builds the slim Jetson image (`runtime` target, `positronic-runtime:nano`) on the
 Jetson. Only needed when the Dockerfile changes, and only by one person: tell the group when you run it.
 Then run `make nano-service`, because the unit names the image: restarting the old unit would start the old
