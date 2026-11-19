@@ -172,6 +172,20 @@ make nano-service
 It copies the unit to `/etc/systemd/system/`, enables it at boot and (re)starts it.
 The file in the repo is the source of truth: never edit the copy on the Jetson.
 
+**Wi-Fi power saving.** Before the container starts, the unit turns Wi-Fi power saving off
+(#147): with it on, `wlan0` has 0.2-0.4 s gaps that the safety supervisor reads as a lost link.
+It sets `802-11-wireless.powersave 2` (off) on the connection active on `wlan0`, so it stays off
+across reconnects and reboots, and runs `iw dev wlan0 set power_save off` for the link that is up.
+Ubuntu's NetworkManager config turns power saving on for every profile, so a Wi-Fi network
+joined later without restarting the unit keeps that default (on): run
+`sudo systemctl restart positronic-driver` after joining it. If `wlan0` has no active connection
+the step is skipped and the container starts anyway; `journalctl -u positronic-driver` says why.
+
+```bash
+ssh nano iw dev wlan0 get power_save                                 # Power save: off
+ssh nano nmcli -g 802-11-wireless.powersave connection show SEAME    # disable (= 2)
+```
+
 **Check it:**
 
 ```bash
