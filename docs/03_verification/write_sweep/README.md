@@ -37,10 +37,9 @@ bash docs/03_verification/write_sweep/tools/sweep.sh
 ```
 
 For every point it starts the driver with that period, switches the joints from
-`arm_controller` to `forward_position_controller`, streams a command at the control rate (30 Hz,
-`UPDATE_RATE` to change both) for 120 s (joint 1 swinging 10 deg, 4 s per cycle) while
-`joint_states_rate.py` records the interval between new poses on `/joint_states`, then stops
-the driver and cools down for 2 min. Results: `log/sweep_<date>/<period>/summary.txt`. A point
+`arm_controller` to `forward_position_controller`, streams a command at 30 Hz for 120 s (joint 1
+swinging 10 deg, 4 s per cycle) while `joint_states_rate.py` records the interval between new
+poses on `/joint_states`, then stops the driver and cools down for 2 min. Results: `log/sweep_<date>/<period>/summary.txt`. A point
 `P:S` also sets `send_settle_ms`, as the sweeps of #32 did.
 
 `/joint_states` shows the rate the rest of ROS sees, not stalls: the arm stands still at the
@@ -56,9 +55,9 @@ PORT=$(cat /tmp/proxy_port) POINTS="33" bash docs/03_verification/write_sweep/to
 directions with its time to the csv given. Stop it with Ctrl+C after the run and start it again
 with a new name for the next. From a script, start it in the background, wait until
 `/tmp/proxy_port` exists before starting the driver, and stop it with `kill -TERM`: a background
-job of a script ignores SIGINT, and every row is already flushed. On the PC, `python3 tools/tap_stalls.py tap_33.csv` prints
-requests, replies, stalls, repeated poses and the round trip, and `python3 tools/tap_turns.py
-tap_33.csv` the turn after each `send_angles`: when the next `get_angles` left, when the Atom's
+job of a script ignores SIGINT, and every row is already flushed. On the PC,
+`python3 tools/tap_stalls.py tap_33.csv` prints requests, replies, stalls, repeated poses and
+the round trip, and `python3 tools/tap_turns.py tap_33.csv` the turn after each `send_angles`: when the next `get_angles` left, when the Atom's
 sync-write ended, and every sync-write later than 30 ms.
 
 ## Results (joint 1 swinging 10 deg at speed 30)
@@ -119,13 +118,14 @@ of `echo_timeout`. Sends per second over the stream; times in ms after the `send
 | 33, gripper and camera | 60 | 29.2 | 5542 | 5542 | 0 | 24.5 / 41.2 | 18.4 / 26.8 / 31.8 |
 
 - Both stalls at 35 ms came from a late sync-write: one ended 32.7 ms after its send, the other
-  about 54 ms, and the `get_angles` sent at the 30 ms bound was lost both times. Hence the 60 ms
-  of `echo_timeout`, which only counts when the Atom is late.
+  about 54 ms (an outlier: the only sync-write above 50 ms in normal operation on 19 Nov), and
+  the `get_angles` sent at the 30 ms bound was lost both times. Hence the 60 ms of
+  `echo_timeout`, which only counts when the Atom is late: sync-writes as late as 46.1 ms were
+  waited for without a loss.
 - In the 10 minutes six sync-writes ended past 30 ms (30.1 to 35.3 ms). All were waited for,
   the `get_angles` following 0.2 to 2.5 ms later, and the driver never warned of a send without
   a sync-write. No reply was lost. An earlier 10-minute run of the same turn, before the review
-  fixes, gave the same picture (19874 replies, 0 stalls, sync-write 19.3 / 28.0 ms); its one
-  sync-write at 92.4 ms was the tap proxy stalling about 90 ms, not the arm.
+  fixes, gave the same picture (19874 replies, 0 stalls, sync-write 19.3 / 28.0 ms).
 - No `get_angles` left before the end of a sync-write that came within the bound, in any run.
 - With the gripper and the camera mounted and the gripper on the servo bus (the Atom pings
   it, id 7, after every send), the sync-write stays the six-servo frame: all 3386 sends of that

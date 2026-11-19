@@ -66,7 +66,8 @@ struct SerialTiming
   /// 2026, 19.2 and 28.0 ms in the 10 minutes of 19 Nov. It may be longer than moving_period,
   /// as it only counts when the Atom is late: on 19 Nov two sync-writes came 32.7 and 54 ms
   /// after their send, past the old 30 ms, and the get_angles sent at 30 ms was lost both
-  /// times. With 60, 10 minutes lost no reply.
+  /// times. The 54 ms is an outlier, the only sync-write above 50 ms in normal operation that
+  /// day, but the bound must cover it. With 60, 10 minutes lost no reply.
   std::chrono::milliseconds echo_timeout{60};
 };
 
