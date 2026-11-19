@@ -124,7 +124,8 @@ bool MoveitBackend::ready()
   }
   // These parameters will only exist if the launch file has them
   // Which in our case is true. So it checks if the file was actually loaded
-  if (!node_->has_parameter("robot_description") ||
+  if (
+    !node_->has_parameter("robot_description") ||
     !node_->has_parameter("robot_description_semantic"))
   {
     RCLCPP_WARN(node_->get_logger(), "Moveit parameters missing");
@@ -132,7 +133,7 @@ bool MoveitBackend::ready()
   }
   try {
     // Make sure the move_group responds before returning true.
-    rclcpp_action::Client<moveit_msgs::action::MoveGroup>::SharedPtr check_client =
+    const rclcpp_action::Client<moveit_msgs::action::MoveGroup>::SharedPtr check_client =
       rclcpp_action::create_client<moveit_msgs::action::MoveGroup>(node_, "move_action");
     if (!check_client->wait_for_action_server(std::chrono::seconds(2))) {
       RCLCPP_WARN(node_->get_logger(), "move_group not answering on move_action");
