@@ -37,7 +37,7 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
   `send_angles`, and the thread reads the line until the Atom's sync-write to the servos is
   whole (#150). After a send the Atom acknowledges it, polls its six servos and passes the
   targets on with that sync-write, the last frame it puts on the line, and drops a frame that
-  comes before its end: 19.3 ms after the send median, 28.0 at p99 (10 minutes on the arm, 19 Nov
+  comes before its end: 19.2 ms after the send median, 28.0 at p99 (10 minutes on the arm, 19 Nov
   2026). `echo_timeout` (60 ms, in `SerialTiming`, not a parameter: it only counts when the Atom
   is late) bounds the wait when the sync-write never comes. Such a send is counted, and while
   active `read()` warns at most every 5 s with how many there were: the Atom sends no sync-write

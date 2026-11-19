@@ -115,25 +115,26 @@ of `echo_timeout`. Sends per second over the stream; times in ms after the `send
 | 40 | 30 | 24.5 | 4725 | 4725 | 0 | 31.2 / 38.9 | 18.6 / 27.2 / 30.5 |
 | 35 | 30 | 27.6 | 5131 | 5130 | 2 | 26.3 / 32.0 | 19.3 / 27.5 / 32.7 |
 | 33 | 30 | 28.8 | 5517 | 5517 | 0 | 24.4 / 32.5 | 19.3 / 27.8 / 29.2 |
-| **33, 10 min** | **60** | **28.9** | **19874** | **19874** | **0** | **24.4 / 92.4** | **19.3 / 28.0 / 92.4** |
+| **33, 10 min, this branch** | **60** | **28.9** | **19804** | **19804** | **0** | **24.4 / 35.5** | **19.2 / 28.0 / 35.3** |
 | 33, gripper and camera | 60 | 29.2 | 5542 | 5542 | 0 | 24.5 / 41.2 | 18.4 / 26.8 / 31.8 |
 
 - Both stalls at 35 ms came from a late sync-write: one ended 32.7 ms after its send, the other
   about 54 ms, and the `get_angles` sent at the 30 ms bound was lost both times. Hence the 60 ms
   of `echo_timeout`, which only counts when the Atom is late.
-- In the 10 minutes three sync-writes ended past 30 ms. Two (30.2 and 31.8 ms) were waited for
-  and the `get_angles` followed 0.5 and 0.8 ms later. The 92.4 ms one is the tap, not the arm:
-  nothing crossed the proxy in either direction for about 90 ms, then 202 bytes came at once
-  with the `get_angles` stamped at the same time. No reply was lost.
+- In the 10 minutes six sync-writes ended past 30 ms (30.1 to 35.3 ms). All were waited for,
+  the `get_angles` following 0.2 to 2.5 ms later, and the driver never warned of a send without
+  a sync-write. No reply was lost. An earlier 10-minute run of the same turn, before the review
+  fixes, gave the same picture (19874 replies, 0 stalls, sync-write 19.3 / 28.0 ms); its one
+  sync-write at 92.4 ms was the tap proxy stalling about 90 ms, not the arm.
 - No `get_angles` left before the end of a sync-write that came within the bound, in any run.
 - With the gripper and the camera mounted and the gripper on the servo bus (the Atom pings
   it, id 7, after every send), the sync-write stays the six-servo frame: all 3386 sends of that
   run had it. Two ended past 30 ms (31.8 and 30.7 ms) and were waited for.
 - 33 ms is the default since #150: one control period at 30 Hz, so every update can reach the
-  arm. The round trip of a `get_angles` (7.7 ms p50, 9.6 p99) plus the wait for the sync-write
+  arm. The round trip of a `get_angles` (7.8 ms p50, 9.4 p99) plus the wait for the sync-write
   is about 27 ms; a shorter period gains nothing while the controller runs at 30 Hz.
-- `/joint_states`, 10 minutes at 33: new poses every 33.3 ms median, 34.2 at p90 (66.5 median at 50 ms
-  before #150). The longest gap, 2.8 s at the start, is the arm at rest before the stream.
+- `/joint_states`, 10 minutes at 33: new poses every 33.3 ms median, 34.0 at p90 (66.5 median at
+  50 ms before #150). The longest gap, 1.8 s at the start, is the arm at rest before the stream.
 - The servo bus was clean in every run: no bad status frame from any servo. With the gripper
   and the camera mounted and the arm held at 0 deg, servo 4 heats past about 45 degC and the
   frames of servos 4 and 5 go bad; that is a separate problem, not a timing one, still under

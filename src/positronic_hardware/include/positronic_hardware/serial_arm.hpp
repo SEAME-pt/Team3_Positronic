@@ -48,9 +48,9 @@ namespace positronic_hardware
 struct SerialTiming
 {
   /// One turn while the arm moves: a get_angles, a send_angles and the wait for the Atom's
-  /// sync-write (#150). In the 10 minutes at 33 ms of 19 Nov 2026 the reply came 7.7 ms after
-  /// the request (p99 9.6) and the sync-write ended 19.3 ms after the send (p99 28.0), so a
-  /// turn takes about 27 ms and 33 ms is one control period at 30 Hz: 17202 sends, 0 stalls.
+  /// sync-write (#150). In the 10 minutes at 33 ms of 19 Nov 2026 the reply came 7.8 ms after
+  /// the request (p99 9.4) and the sync-write ended 19.2 ms after the send (p99 28.0), so a
+  /// turn takes about 27 ms and 33 ms is one control period at 30 Hz: 17216 sends, 0 stalls.
   /// A slow turn overruns and the next one starts at once. A shorter period gains nothing at
   /// 30 Hz: the controller has no new target for every turn.
   std::chrono::milliseconds moving_period{33};
@@ -63,7 +63,7 @@ struct SerialTiming
 
   /// The longest the thread waits after a send_angles for the Atom's sync-write to the servos,
   /// which ends the wait (#150): 20 ms after the send at p50, 27 ms at p99 in the tap of 13 Nov
-  /// 2026, 19.3 and 28.0 ms in the 10 minutes of 19 Nov. It may be longer than moving_period,
+  /// 2026, 19.2 and 28.0 ms in the 10 minutes of 19 Nov. It may be longer than moving_period,
   /// as it only counts when the Atom is late: on 19 Nov two sync-writes came 32.7 and 54 ms
   /// after their send, past the old 30 ms, and the get_angles sent at 30 ms was lost both
   /// times. With 60, 10 minutes lost no reply.
