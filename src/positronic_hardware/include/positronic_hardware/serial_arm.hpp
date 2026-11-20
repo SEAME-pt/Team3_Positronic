@@ -110,8 +110,9 @@ public:
   /// without flooding the bus (#20: 10 minutes of reads at this rate, no stall).
   static constexpr std::chrono::milliseconds POLL_PERIOD{10};
 
-  /// Speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on hardware).
-  static constexpr std::uint8_t SEND_SPEED{30};
+  /// Default speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on
+  /// hardware). The URDF sets another with send_speed (#133).
+  static constexpr std::uint8_t DEFAULT_SEND_SPEED{30};
 
   /// How long a turn waits for the get_angles reply. A reply takes ~8 ms and arrives in a dozen
   /// small chunks behind servo-bus chatter, so the turn reads until the frame completes, not a
@@ -137,11 +138,13 @@ public:
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
   SerialArm(
-    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {});
+    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
-    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {});
+    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   ~SerialArm() override;
 
@@ -198,6 +201,9 @@ public:
   /// The sends whose sync-write did not come within SerialTiming::echo_timeout (#150).
   [[nodiscard]] std::uint64_t echo_timeouts() const override;
 
+  /// #133: the set_fresh_mode frames sent before a power_on, and how many the arm acknowledged.
+  [[nodiscard]] FreshModeCount fresh_mode_count() const override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   /// What halt() and power_on() leave for the thread to send at the start of its next turn.
@@ -240,8 +246,10 @@ private:
 
   void poll_loop();
 
-  /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
-  static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
+  /// The send_angles frame for `target` at send_speed_, or nullopt when an angle is NaN or out
+  /// of range.
+  [[nodiscard]] std::optional<positronic_protocol::Frame> encode_command(
+    const JointPositions & target) const;
 
   bool request_and_wait(Pending request);
 
@@ -269,6 +277,8 @@ private:
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
   const TemperatureGuard guard_;
+  // The speed byte of every send_angles (#133), fixed for the life of the backend.
+  const std::uint8_t send_speed_;
   // Time since the last valid reply (#35). The poll thread feeds it; the plugin asks it.
   LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
@@ -308,6 +318,9 @@ private:
   std::atomic<int> overheat_celsius_{0};
   // Sends whose sync-write did not come within echo_timeout (#150). Written by the poll thread.
   std::atomic<std::uint64_t> echo_timeouts_{0};
+  // #133: set_fresh_mode frames sent and acknowledged. Written by the poll thread.
+  std::atomic<std::uint64_t> fresh_mode_sent_{0};
+  std::atomic<std::uint64_t> fresh_mode_acked_{0};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   Clock::time_point last_temperature_ask_;

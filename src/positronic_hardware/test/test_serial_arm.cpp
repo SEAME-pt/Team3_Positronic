@@ -71,6 +71,10 @@
 //   A turn that asks the temperatures (the reading overdue) no longer sends in the same turn:
 //   the target goes out next turn. Check that the frame after a temperature request in a
 //   stream is a get_angles, never a send_angles.
+// Follow-up prompt (#133):
+//   The speed byte is the constructor's send_speed: check it on the wire at 50 and 70. The
+//   thread sends set_fresh_mode 1 right before every power_on and counts it; an arm that does
+//   not ack the 0x16 still gets its power_on, and the count says so.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -110,6 +114,8 @@ using positronic_hardware::SerialArm;
 using positronic_hardware::SerialTransport;
 
 constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::CommandId::STOP)};
+constexpr std::uint8_t FRESH_MODE_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::SET_FRESH_MODE)};
 constexpr std::uint8_t POWER_ON_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
 constexpr std::uint8_t POWER_OFF_ID{
@@ -162,6 +168,11 @@ public:
           queued_.push_back({now + ack_delay_.load(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA}, true});
         }
       }
+    } else if (count == 6 && *std::next(data, 3) == FRESH_MODE_ID) {
+      // #133: set_fresh_mode. Whether the Atom acks it is open; ack_fresh_mode_ picks.
+      if (ack_fresh_mode_.load()) {
+        queued_.push_back({now, {0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA}, true});
+      }
     } else if (count == 18 && *std::next(data, 3) == 0x22) {
       // A send_angles: the ack at once, the sync-write to the servos ~20 ms later, with the
       // poses still flowing in between. The serial thread waits for the sync-write (#150);
@@ -204,6 +215,12 @@ public:
   }
 
   /// An arm that never acknowledges a stop or power on (default: it does).
+  /// #133: an arm that never acks set_fresh_mode (default: it does).
+  void set_ack_fresh_mode(bool ack)
+  {
+    ack_fresh_mode_.store(ack);
+  }
+
   void set_ack_requests(bool ack)
   {
     ack_requests_.store(ack);
@@ -276,6 +293,7 @@ private:
   std::atomic<bool> silent_{false};
   std::atomic<bool> reject_requests_{false};
   std::atomic<bool> ack_requests_{true};
+  std::atomic<bool> ack_fresh_mode_{true};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
   /// A frame the arm will put on the line at `due`. `silences`: nothing else until then.
   struct Queued
@@ -523,7 +541,7 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
     0x00,
     0x00,
     0x00,
-    SerialArm::SEND_SPEED,
+    SerialArm::DEFAULT_SEND_SPEED,
     0xFA};
   EXPECT_EQ(sends.front(), expected);
 
@@ -534,6 +552,67 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   // A new command goes out once more.
   arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
   EXPECT_EQ(wait_for_sends(port, 2).size(), 2u);
+}
+
+// #133: the speed byte, second to last, is the one the backend was built with.
+TEST(SerialArm, TheSendSpeedIsTheByteOnTheWire)
+{
+  for (const std::uint8_t speed : {std::uint8_t{50}, std::uint8_t{70}}) {
+    auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+    ReplayTransport & port{*transport};
+    SerialArm arm{
+      std::move(transport), SerialArm::Timing{}, positronic_hardware::TemperatureGuard{}, speed};
+    arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+    const auto sends{wait_for_sends(port, 1)};
+    ASSERT_EQ(sends.size(), 1u) << "speed " << int{speed};
+    ASSERT_EQ(sends.front().size(), 18u);
+    EXPECT_EQ(sends.front().at(16), speed);
+  }
+}
+
+// #133 step zero: fresh mode 1 goes out right before every power_on, nothing between them.
+TEST(SerialArm, FreshModeOneGoesOutRightBeforeEveryPowerOn)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+
+  ASSERT_TRUE(arm.power_on());
+  ASSERT_TRUE(arm.halt());
+  ASSERT_TRUE(arm.power_on());
+
+  const std::vector<std::uint8_t> fresh_one{0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA};
+  const auto frames{port.written()};
+  std::size_t power_ons{0};
+  for (std::size_t i{0}; i < frames.size(); ++i) {
+    if (frames.at(i).size() == 5 && frames.at(i).at(3) == POWER_ON_ID) {
+      ++power_ons;
+      ASSERT_GT(i, 0u);
+      EXPECT_EQ(frames.at(i - 1), fresh_one) << "power_on " << power_ons;
+    }
+  }
+  EXPECT_EQ(power_ons, 2u);
+  EXPECT_EQ(std::count(frames.begin(), frames.end(), fresh_one), 2);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 2u);
+  EXPECT_EQ(arm.fresh_mode_count().acked, 2u);
+}
+
+// #133: an Atom that does not ack 0x16 costs the power_on one ACK_TIMEOUT, not the activation.
+TEST(SerialArm, PowerOnStillGoesOutWhenFreshModeIsNotAcknowledged)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_fresh_mode(false);
+  SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_TRUE(arm.power_on());
+  EXPECT_GE(std::chrono::steady_clock::now() - start, positronic_hardware::ACK_TIMEOUT);
+  EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 1u);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+  EXPECT_EQ(arm.fresh_mode_count().acked, 0u);
 }
 
 TEST(SerialArm, SkipsACommandItCannotEncode)
@@ -1008,6 +1087,8 @@ public:
       pending_.push_back(0xFA);
     } else if (id == STOP_ID || id == POWER_ON_ID) {
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA});
+    } else if (count == 6 && *std::next(data, 3) == FRESH_MODE_ID) {
+      pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA});
     }
     return true;
   }

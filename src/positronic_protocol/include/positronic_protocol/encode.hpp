@@ -41,6 +41,11 @@ namespace positronic_protocol
 /// Request frame for stop: `FE FE 02 29 FA`.
 [[nodiscard]] Frame encode_stop() noexcept;
 
+/// Request frame for set_fresh_mode: `FE FE 03 16 <mode> FA`. Mode 1 (refresh): every target
+/// replaces the one before, which streaming needs (#20); mode 0 (interpolation): targets queue.
+/// nullopt for any other mode.
+[[nodiscard]] std::optional<Frame> encode_set_fresh_mode(std::uint8_t mode) noexcept;
+
 /// Request frame for get_angles: `FE FE 02 20 FA`.
 [[nodiscard]] Frame encode_get_angles() noexcept;
 

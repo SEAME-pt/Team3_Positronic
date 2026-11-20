@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "positronic_hardware/link_watchdog.hpp"
+#include "positronic_protocol/types.hpp"
 
 namespace positronic_hardware
 {
@@ -103,6 +104,13 @@ constexpr std::array NUMERIC_PARAMETERS{
     "tracking_error_ms", MIN_TRACKING_ERROR_MS, MAX_TRACKING_ERROR_MS, true,
     [](HardwareConfig & config, double value) {
       config.tracking_error_ms = static_cast<int>(value);
+    }},
+  // #133: the speed byte of every send_angles, the protocol's whole range. Fixed while the
+  // driver runs: another speed is another launch.
+  NumericParameter{
+    "send_speed", positronic_protocol::MIN_SPEED, positronic_protocol::MAX_SPEED, true,
+    [](HardwareConfig & config, double value) {
+      config.send_speed = static_cast<int>(value);
     }},
 };
 
@@ -276,7 +284,8 @@ std::string describe(const HardwareConfig & config)
        << ", moving period " << config.timing.moving_period.count() << " ms, echo timeout "
        << config.timing.echo_timeout.count() << " ms, servo temperature limit "
        << config.servo_temp_limit_c << " degC, tracking error " << std::setprecision(1)
-       << config.tracking_error_deg << " deg for " << config.tracking_error_ms << " ms.";
+       << config.tracking_error_deg << " deg for " << config.tracking_error_ms << " ms, send speed "
+       << config.send_speed << ".";
   return line.str();
 }
 

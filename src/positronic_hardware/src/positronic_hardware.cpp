@@ -266,7 +266,9 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
-      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing, guard);
+      arm_ = std::make_unique<SerialArm>(
+        config_.port, config_.baud, config_.timing, guard,
+        static_cast<std::uint8_t>(config_.send_speed));
     } else {
       arm_ = std::make_unique<FakeArm>();
     }
@@ -377,6 +379,13 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
+  // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. Whether the
+  // arm acknowledges it is still open, so it is reported, not checked.
+  const FreshModeCount fresh{arm_->fresh_mode_count()};
+  RCLCPP_INFO(
+    get_logger(), "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged.",
+    fresh.sent, fresh.acked);
+  log_temperatures("activate");
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
@@ -397,6 +406,7 @@ CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*prev
   // the next activate. halt() waits for the arm to acknowledge the stop, so SUCCESS means the
   // arm confirmed it, not only that the frame left or the component changed state (#103).
   if (arm_->halt()) {
+    log_temperatures("deactivate");
     return CallbackReturn::SUCCESS;
   }
   // The arm never confirmed the stop: nobody knows what it is doing. FAILURE would keep the
@@ -465,6 +475,20 @@ void RobotSystem::report_echo_timeouts()
     " send_angles got no sync-write from the arm since the last report: each of their "
     "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
     fresh.value());
+}
+
+void RobotSystem::log_temperatures(const char * when) const
+{
+  // #133 spike: the six servo temperatures the serial thread read last, so the speed sweep
+  // reads them at a deactivate without handing the port to pymycobot.
+  const std::optional<ServoTemperatures> t{arm_->read_temperatures()};
+  if (!t.has_value()) {
+    RCLCPP_INFO(get_logger(), "Servo temperatures at %s: no reading yet.", when);
+    return;
+  }
+  RCLCPP_INFO(
+    get_logger(), "Servo temperatures at %s: J1 %d, J2 %d, J3 %d, J4 %d, J5 %d, J6 %d degC.", when,
+    int{t->at(0)}, int{t->at(1)}, int{t->at(2)}, int{t->at(3)}, int{t->at(4)}, int{t->at(5)});
 }
 
 bool RobotSystem::temperatures_allow_activation()

@@ -161,16 +161,20 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard}
+SerialArm::SerialArm(
+  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard,
+  std::uint8_t send_speed)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard, send_speed}
 {
 }
 
 SerialArm::SerialArm(
-  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard)
+  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard,
+  std::uint8_t send_speed)
 : transport_{std::move(transport)},
   timing_{timing},
   guard_{guard},
+  send_speed_{send_speed},
   temperature_watchdog_{guard.stale_timeout},
   detector_{guard.limit_c}
 {
@@ -277,6 +281,11 @@ std::optional<JointPositions> SerialArm::last_target() const
   return *last_target_.readFromRT();
 }
 
+FreshModeCount SerialArm::fresh_mode_count() const
+{
+  return {fresh_mode_sent_.load(), fresh_mode_acked_.load()};
+}
+
 std::uint64_t SerialArm::echo_timeouts() const
 {
   return echo_timeouts_.load();
@@ -321,6 +330,14 @@ void SerialArm::send_pending_request()
     Pending expected{pending};
     request_.compare_exchange_strong(expected, Pending::NONE);
     return;
+  }
+  if (pending == Pending::POWER_ON) {
+    // #133 step zero: fresh mode 1 before the servos get torque, every time, so the arm streams
+    // whatever mode it woke up in. A missing ack is counted, not fatal (see requests.hpp).
+    fresh_mode_sent_.fetch_add(1);
+    if (perform(set_fresh_mode_request())) {
+      fresh_mode_acked_.fetch_add(1);
+    }
   }
   const Request request{pending == Pending::HALT ? stop_request() : power_on_request()};
   if (!perform(request)) {
@@ -413,14 +430,15 @@ bool SerialArm::perform(const Request & request, const Scanner & reply)
   return found && ok;
 }
 
-std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
+std::optional<positronic_protocol::Frame> SerialArm::encode_command(
+  const JointPositions & target) const
 {
   const std::optional<positronic_protocol::JointAngles> angles{
     positronic_protocol::to_centidegrees(target)};
   if (!angles.has_value()) {
     return std::nullopt;
   }
-  return positronic_protocol::encode_send_angles(angles.value(), SEND_SPEED);
+  return positronic_protocol::encode_send_angles(angles.value(), send_speed_);
 }
 
 std::optional<ServoTemperatures> SerialArm::ask_temperatures()

@@ -32,6 +32,9 @@
 //   send_settle_ms is gone: the settle is a constant of the cut. echo_timeout_ms, the longest
 //   wait for the sync-write, is the parameter instead, 20 to 80 ms, and it may be longer than
 //   the period. The INFO line prints it in place of the settle.
+// Follow-up prompt (#133):
+//   send_speed, the speed byte of every send_angles, 1 to 100, default 30: its field, both ends,
+//   0 and 101 refused, a fraction, NaN and infinity refused, and the INFO line prints it.
 
 #include <gtest/gtest.h>
 
@@ -83,6 +86,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.servo_temp_limit_c, defaults.servo_temp_limit_c);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, defaults.tracking_error_deg);
   EXPECT_EQ(config.tracking_error_ms, defaults.tracking_error_ms);
+  EXPECT_EQ(config.send_speed, 30);
 }
 
 TEST(Parameters, EveryParameterReachesItsField)
@@ -96,7 +100,8 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"echo_timeout_ms", "45"},
       {"servo_temp_limit_c", "45"},
       {"tracking_error_deg", "6.5"},
-      {"tracking_error_ms", "200"}})};
+      {"tracking_error_ms", "200"},
+      {"send_speed", "50"}})};
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   EXPECT_EQ(config.backend, Backend::FAKE);
@@ -108,6 +113,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_EQ(config.servo_temp_limit_c, 45);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, 6.5);
   EXPECT_EQ(config.tracking_error_ms, 200);
+  EXPECT_EQ(config.send_speed, 50);
 }
 
 // The list in the message comes from the tables: a parameter added there shows up here.
@@ -117,7 +123,7 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, port, baud, "
     "velocity_filter_alpha, moving_period_ms, echo_timeout_ms, servo_temp_limit_c, "
-    "tracking_error_deg, tracking_error_ms.");
+    "tracking_error_deg, tracking_error_ms, send_speed.");
 }
 
 // Every unknown name in one message, in alphabetical order: one run shows every typo.
@@ -181,6 +187,25 @@ TEST(Parameters, OneStepOutsideARangeIsRefusedWithTheRange)
     "Parameter 'tracking_error_ms' is '5001'; use a whole number in [50, 5000].");
 }
 
+// #133: the speed byte takes the protocol's whole range, and nothing outside it.
+TEST(Parameters, TheSendSpeedIsTheProtocolRange)
+{
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "1"}}));
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "70"}}));
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "100"}}));
+  EXPECT_EQ(
+    refusal("send_speed", "0"), "Parameter 'send_speed' is '0'; use a whole number in [1, 100].");
+  EXPECT_EQ(
+    refusal("send_speed", "101"),
+    "Parameter 'send_speed' is '101'; use a whole number in [1, 100].");
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "-30"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "30.5"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "nan"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "inf"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", ""}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "256"}}));
+}
+
 TEST(Parameters, AFractionWhereAWholeNumberIsExpectedIsRefused)
 {
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_ms", "300.5"}}));
@@ -229,5 +254,5 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
     "period 33 ms, echo timeout 60 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
-    "for 300 ms.");
+    "for 300 ms, send speed 30.");
 }

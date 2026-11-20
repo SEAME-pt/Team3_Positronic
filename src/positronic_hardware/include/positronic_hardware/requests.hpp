@@ -84,6 +84,18 @@ inline Request power_on_request()
 }
 
 /// Powers the servos off. The arm answers nothing: the overheat cut repeats it once a period.
+/// #133 step zero: fresh mode 1, so each send_angles replaces the target before it (#20: in mode
+/// 0 the targets queue and streaming collapses). Sent before every power_on. The spec lists no
+/// reply for 0x16, but the Atom acks power_on, which the spec also lists without one: whether it
+/// acks 0x16 is for the arm to say, so the thread waits for the ack and goes on without it.
+inline Request set_fresh_mode_request()
+{
+  return {
+    positronic_protocol::CommandId::SET_FRESH_MODE,
+    positronic_protocol::encode_set_fresh_mode(1).value_or(positronic_protocol::Frame{}),
+    Expect::ACK, ACK_TIMEOUT};
+}
+
 inline Request power_off_request()
 {
   return {

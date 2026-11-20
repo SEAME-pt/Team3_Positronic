@@ -128,6 +128,9 @@ private:
   /// on_activate's temperature check, before the servos get torque: waits for the first reading
   /// and refuses an arm that was cut or is within ACTIVATE_COOLDOWN_C of the limit. False, with
   /// the reason logged, when activation must not go on.
+  /// #133 spike: logs the newest servo temperatures, at `when` (activate, deactivate).
+  void log_temperatures(const char * when) const;
+
   bool temperatures_allow_activation();
 
   /// read()'s temperature check. ERROR, with one log line, when the serial thread has cut the

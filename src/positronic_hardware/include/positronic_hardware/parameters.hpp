@@ -53,6 +53,8 @@ struct HardwareConfig
   int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
   double tracking_error_deg{TRACKING_ERROR_DEG};
   int tracking_error_ms{TRACKING_ERROR_MS};
+  /// Speed byte of every send_angles, percent of the firmware maximum (#133).
+  int send_speed{SerialArm::DEFAULT_SEND_SPEED};
 };
 
 /// The config read from the URDF, or the reason it was refused: exactly one of the two is set.

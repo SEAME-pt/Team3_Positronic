@@ -48,6 +48,13 @@ struct Overheat
   int celsius{0};
 };
 
+/// #133: set_fresh_mode frames sent and acknowledged, see ArmBackend::fresh_mode_count().
+struct FreshModeCount
+{
+  std::uint64_t sent{0};
+  std::uint64_t acked{0};
+};
+
 /// Where the driver reads the joint angles from and sends the targets to.
 ///
 /// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
@@ -142,6 +149,13 @@ public:
   /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
   /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
   [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
+
+  /// #133: the set_fresh_mode frames sent before a power_on since the backend started, and how
+  /// many the arm acknowledged. Zero for a backend without fresh mode.
+  [[nodiscard]] virtual FreshModeCount fresh_mode_count() const
+  {
+    return {};
+  }
 };
 
 }  // namespace positronic_hardware
