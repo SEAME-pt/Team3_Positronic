@@ -1,0 +1,300 @@
+#!/bin/bash
+# AI-generated (Claude, Anthropic).
+# Prompt:
+#   #133 spike, approach "adaptive": the arm run, one person at the keyboard, one hand on the
+#   switch. Per mode (fixed or adaptive byte at 30, 50, 70, never above 70): the tap of every
+#   byte on the serial link, the driver with that mode, a bag, the 5 deg first move, the #33
+#   base and wrist trajectories 3 times each, 5 stops at 15 deg/s, three 5 deg steps. Every step
+#   that moves the arm says so and counts down first. Reuse the #32 tap, the #33 trajectories and
+#   waypoint_error.py, the #39 steps run.
+#
+# Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, two
+# terminals in the same container (the second with docker exec). Nothing here touches Wi-Fi.
+#
+#   bash $T/arm_run_adaptive.sh up MODE      tap + driver + bag for MODE (no motion; the
+#                                            servos are powered on and hold their pose)
+#   bash $T/arm_run_adaptive.sh start        MOVES: T0_to_start, one slow point to the start
+#   bash $T/arm_run_adaptive.sh first        MOVES: T1, J1 5 deg out and back at 1.7 deg/s
+#   bash $T/arm_run_adaptive.sh base         MOVES: T3, T6, T4 (J1+J2, 10/15/20 deg/s), 3 each
+#   bash $T/arm_run_adaptive.sh wrist        MOVES: T11, T12, T13 (J3-J6, 10/15/17.5), 3 each
+#   bash $T/arm_run_adaptive.sh stops        MOVES: 5 x J1 at 15 deg/s, stopped mid-way
+#   bash $T/arm_run_adaptive.sh steps        MOVES: 3 x J1 5 deg step and back (#39 steps run)
+#   bash $T/arm_run_adaptive.sh down         bag, driver, tap stopped; summary printed
+#   bash $T/arm_run_adaptive.sh state        component, controllers, last summary (no motion)
+#
+#   T=docs/03_verification/speed_sweep/tools
+#   DRY=1 runs the same flow on the fake backend, without pymycobot and the tap: the desk check
+#   of the script (no arm, no serial port).
+#   MODE: fixed30 adaptive30 fixed50 adaptive50 fixed70 adaptive70, in that order. Each mode
+#   starts with `first`, and `stops` is done before the next speed is tried.
+
+set -m
+source /opt/ros/jazzy/setup.bash
+source /ws/install/setup.bash
+
+ROOT=/ws/log/133a
+TOOLS=/ws/docs/03_verification/speed_sweep/tools
+TRAJ=/ws/docs/03_verification/jtc_on_the_arm/trajectories
+WAYPOINT=/ws/docs/03_verification/jtc_on_the_arm/tools/waypoint_error.py
+TAP=/ws/docs/03_verification/write_sweep/tools/proxy_tap.py
+RT=/ws/docs/03_verification/rt_profile/tools/run_rt_profile.sh
+# After the goal is accepted: the leg starts at 2 s, so 3.0 puts the stop 1 s (15 deg) into the
+# 2.67 s leg at 15 deg/s. The trigger is a node already connected to the service, a few ms; the
+# ros2 CLI took 0.8 to 2.3 s on the desk, too loose to aim with. The tap has the true moment.
+STOP_AFTER_S=${STOP_AFTER_S:-3.0}
+WAIT_BETWEEN_S=${WAIT_BETWEEN_S:-4} # the arm stands still before the next goal
+mkdir -p "$ROOT"
+
+countdown() {
+  echo ">>> $1"
+  for s in 3 2 1; do echo "    $s ... hand on the switch"; sleep 1; done
+}
+
+current_mode() { cat "$ROOT/current_mode" 2> /dev/null; }
+mode_dir() { echo "$ROOT/$(current_mode)"; }
+
+need_mode() {
+  if [ -z "$(current_mode)" ]; then
+    echo "no mode up: bash $0 up MODE" >&2
+    exit 1
+  fi
+}
+
+# The launch arguments of a mode. Never a byte above 70 (#133: 30, 50, 70, never 100).
+mode_args() {
+  local kind=${1%%[0-9]*} byte=${1##*[a-z]}
+  case "$kind:$byte" in
+    fixed:30 | fixed:50 | fixed:70) echo "send_speed:=$byte" ;;
+    adaptive:30 | adaptive:50 | adaptive:70)
+      # deg/s per unit measured in fixed30 by `down`, if it found one; else the driver's 0.88.
+      local per_unit=""
+      [ -f "$ROOT/per_unit.txt" ] && per_unit=" send_speed_deg_s_per_unit:=$(cat "$ROOT/per_unit.txt")"
+      echo "send_speed:=$byte send_speed_adaptive:=true send_speed_floor:=10 send_speed_gain:=1.5$per_unit"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# T6, T4 (from T3) and T12, T13 (from T11): the same goals with other times (#33 README).
+make_trajectories() {
+  local out="$ROOT/traj"
+  mkdir -p "$out"
+  python3 - "$TRAJ" "$out" << 'PY'
+import sys, re, math
+src, out = sys.argv[1], sys.argv[2]
+def retime(name, base, seg):
+    text = open(f'{src}/{base}.yaml').read()
+    times = iter([2.0, 2.0 + seg, 2.0 + 2 * seg])
+    def sub(_):
+        t = next(times)
+        return f'time_from_start: {{sec: {int(t)}, nanosec: {int(round((t - int(t)) * 1e9))}}}'
+    text = re.sub(r'time_from_start: \{[^}]*\}', sub, text)
+    open(f'{out}/{name}.yaml', 'w').write(text)
+for name, base, seg in (('T3', 'T3', 2.0), ('T6', 'T3', 20 / 15), ('T4', 'T3', 1.0),
+                        ('T11', 'T11', 2.0), ('T12', 'T11', 20 / 15), ('T13', 'T11', 20 / 17.5)):
+    retime(name, base, seg)
+# TS: J1 40 deg out at 15 deg/s (2.67 s) and back, for the stops. Start pose of the #33 files.
+start = [0.2822, 0.0061, -0.0106, -0.2330, 0.0075, -0.0106]
+out_pose = list(start); out_pose[0] += math.radians(40)
+names = ('[joint2_to_joint1, joint3_to_joint2, joint4_to_joint3, joint5_to_joint4, '
+         'joint6_to_joint5, joint6output_to_joint6]')
+def pt(p, t):
+    return (f'  - positions: [{", ".join(f"{v:.4f}" for v in p)}]\n'
+            f'    time_from_start: {{sec: {int(t)}, nanosec: {int(round((t - int(t)) * 1e9))}}}\n')
+open(f'{out}/TS.yaml', 'w').write(
+    f'trajectory:\n  joint_names: {names}\n  points:\n' + pt(start, 2.0)
+    + pt(out_pose, 2.0 + 40 / 15) + pt(start, 2.0 + 80 / 15))
+PY
+}
+
+goal() {  # goal <name> <run>: one #33 goal, recorded for waypoint_error.py
+  local name=$1 run=$2 file="$ROOT/traj/$1.yaml"
+  [ -f "$file" ] || file="$TRAJ/$1.yaml"
+  ros2 action send_goal --feedback /arm_controller/follow_joint_trajectory \
+    control_msgs/action/FollowJointTrajectory "$(cat "$file")" > "$(mode_dir)/goal_${name}_r${run}.txt" 2>&1
+  tail -1 "$(mode_dir)/goal_${name}_r${run}.txt"
+  sleep "$WAIT_BETWEEN_S"
+}
+
+case "$1" in
+  up)
+    MODE=$2
+    ARGS=$(mode_args "$MODE") || { echo "MODE: fixed30 adaptive30 fixed50 adaptive50 fixed70 adaptive70" >&2; exit 2; }
+    [ -n "$(current_mode)" ] && { echo "mode $(current_mode) is still up: bash $0 down" >&2; exit 1; }
+    DIR="$ROOT/$MODE"
+    [ -e "$DIR" ] && DIR="$DIR-$(date +%H%M%S)"
+    mkdir -p "$DIR"
+    echo "$(basename "$DIR")" > "$ROOT/current_mode"
+    make_trajectories
+    if [ "${DRY:-0}" = 1 ]; then
+      echo "driver: DRY, fake backend $ARGS" | tee "$DIR/args.txt"
+      # shellcheck disable=SC2086
+      ros2 launch positronic_bringup driver.launch.py backend:=fake $ARGS > "$DIR/launch.log" 2>&1 &
+      echo $! > "$ROOT/launch.pid"
+      sleep 15
+      grep -m1 "send speed" "$DIR/launch.log"
+      ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
+        /arm_controller/controller_state > "$DIR/bag.log" 2>&1 &
+      echo $! > "$ROOT/bag.pid"
+      timeout 5 ros2 control list_controllers
+      exit 0
+    fi
+    # Fresh mode 1 before the driver takes the port (#20, sweep.sh); power on holds the pose.
+    python3 - << 'PY' 2>&1 | tee "$DIR/fresh_mode.txt"
+from pymycobot import MyCobot280
+arm = MyCobot280('/dev/ttyTHS1', 1000000)
+arm.power_on()
+arm.set_fresh_mode(1)
+print('fresh mode read-back:', arm.get_fresh_mode(), ' angles:', arm.get_angles())
+PY
+    rm -f /tmp/proxy_port
+    python3 "$TAP" "$DIR/tap.csv" > "$DIR/tap.log" 2>&1 &
+    echo $! > "$ROOT/tap.pid"
+    for _ in $(seq 50); do [ -s /tmp/proxy_port ] && break; sleep 0.1; done
+    [ -s /tmp/proxy_port ] || { echo "proxy_tap did not start, see $DIR/tap.log" >&2; exit 1; }
+    echo "driver: port $(cat /tmp/proxy_port) $ARGS" | tee "$DIR/args.txt"
+    # shellcheck disable=SC2086
+    ros2 launch positronic_bringup driver.launch.py port:="$(cat /tmp/proxy_port)" $ARGS \
+      > "$DIR/launch.log" 2>&1 &
+    echo $! > "$ROOT/launch.pid"
+    sleep 15
+    grep -m1 "send speed" "$DIR/launch.log" || { echo "driver did not log its send speed: $DIR/launch.log" >&2; }
+    ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
+      /arm_controller/controller_state > "$DIR/bag.log" 2>&1 &
+    echo $! > "$ROOT/bag.pid"
+    timeout 5 ros2 control list_controllers
+    ;;
+  start)
+    need_mode
+    countdown "MOVES: T0_to_start, one slow point to the start pose"
+    goal T0_to_start 1
+    ;;
+  first)
+    need_mode
+    countdown "MOVES: T1, J1 5 deg out and back, 1.7 deg/s (the first move of this mode)"
+    goal T1 1
+    ;;
+  base)
+    need_mode
+    for name in T3 T6 T4; do
+      for run in 1 2 3; do
+        countdown "MOVES: $name run $run, J1 and J2 20 deg out and back"
+        goal "$name" "$run"
+      done
+    done
+    ;;
+  wrist)
+    need_mode
+    for name in T11 T12 T13; do
+      for run in 1 2 3; do
+        countdown "MOVES: $name run $run, J3 to J6 20 deg out and back (raises J3: nothing above)"
+        goal "$name" "$run"
+      done
+    done
+    ;;
+  stops)
+    need_mode
+    for run in 1 2 3 4 5; do
+      countdown "MOVES: stop $run of 5, J1 40 deg at 15 deg/s, stopped about 1 s in"
+      rm -f "$ROOT/trigger_ready" "$ROOT/trigger_go"
+      python3 - "$ROOT" "$(mode_dir)/stop_r${run}_trigger.txt" << 'PY' &
+import os, sys, time
+import rclpy
+from controller_manager_msgs.srv import SetHardwareComponentState
+from lifecycle_msgs.msg import State
+root, out = sys.argv[1], sys.argv[2]
+rclpy.init()
+node = rclpy.create_node('stop_trigger_133')
+client = node.create_client(SetHardwareComponentState,
+                            '/controller_manager/set_hardware_component_state')
+client.wait_for_service()
+open(f'{root}/trigger_ready', 'w').close()
+while not os.path.exists(f'{root}/trigger_go'):
+    time.sleep(0.002)
+sent = time.time()
+future = client.call_async(SetHardwareComponentState.Request(
+    name='positronic_arm', target_state=State(id=State.PRIMARY_STATE_INACTIVE, label='inactive')))
+rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+ok = future.result().ok if future.result() else None
+open(out, 'w').write(f'{sent:.6f} {time.time():.6f} ok={ok}\n')
+print(f'stop requested, answered after {(time.time() - sent) * 1000:.0f} ms, ok={ok}')
+PY
+      TRIGGER=$!
+      for _ in $(seq 200); do [ -f "$ROOT/trigger_ready" ] && break; sleep 0.05; done
+      ros2 action send_goal /arm_controller/follow_joint_trajectory \
+        control_msgs/action/FollowJointTrajectory "$(cat "$ROOT/traj/TS.yaml")" \
+        > "$(mode_dir)/stop_r${run}_goal.txt" 2>&1 &
+      GOAL=$!
+      for _ in $(seq 100); do
+        grep -q "Goal accepted" "$(mode_dir)/stop_r${run}_goal.txt" 2> /dev/null && break
+        sleep 0.05
+      done
+      sleep "$STOP_AFTER_S"
+      # The supervisor's halt order (#45): hardware inactive (the driver sends the stop),
+      # then the goal, then the controller.
+      touch "$ROOT/trigger_go"
+      wait "$TRIGGER"
+      kill -INT "$GOAL" 2> /dev/null
+      ros2 control set_controller_state arm_controller inactive
+      sleep 2
+      echo ">>> resume: hardware active (holds), controller active (holds)"
+      ros2 control set_hardware_component_state positronic_arm active
+      ros2 control set_controller_state arm_controller active
+      sleep 1
+      countdown "MOVES: back to the start pose"
+      goal T0_to_start "stop$run"
+    done
+    ;;
+  steps)
+    need_mode
+    countdown "MOVES: controllers switched to forward_position_controller (no motion yet)"
+    ros2 control set_controller_state arm_controller inactive
+    ros2 run controller_manager spawner forward_position_controller --param-file \
+      /ws/install/positronic_bringup/share/positronic_bringup/config/jetson_controllers.yaml
+    countdown "MOVES: J1 5 deg step and back, 3 times, 3 s apart"
+    STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps
+    ros2 control set_controller_state forward_position_controller inactive
+    ros2 control set_controller_state arm_controller active
+    ;;
+  down)
+    need_mode
+    DIR=$(mode_dir)
+    for p in bag launch tap; do
+      [ -f "$ROOT/$p.pid" ] && kill -INT "$(cat "$ROOT/$p.pid")" 2> /dev/null
+      sleep 3
+      rm -f "$ROOT/$p.pid"
+    done
+    pkill -INT -f ros2_control_node 2> /dev/null
+    rm -f "$ROOT/current_mode"
+    {
+      [ -f "$DIR/tap.csv" ] && python3 "$TOOLS/tap_speed.py" "$DIR/tap.csv" --csv "$DIR/tap_rows.csv"
+      ls "$DIR"/goal_T*_r[123].txt > /dev/null 2>&1 && python3 "$WAYPOINT" "$DIR"/goal_T*_r[123].txt
+    } 2>&1 | tee "$DIR/summary.txt"
+    # From fixed30: the lowest servo goal speed per byte as deg/s per unit, for the adaptive
+    # modes. Only when the tap shows mode 1 and a value in a sane range; else the 0.88 default.
+    case "$(basename "$DIR")" in
+      fixed30*)
+        python3 - "$DIR/summary.txt" "$ROOT/per_unit.txt" << 'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r'byte  30:.*\n.*\n\s+lowest goal speed \d+ = [\d.]+ x byte = ([\d.]+) deg/s', text)
+if 'mode 1' in text and m and 0.3 <= float(m.group(1)) / 30 <= 3.0:
+    open(sys.argv[2], 'w').write(f'{float(m.group(1)) / 30:.3f}')
+    print('deg/s per unit for the adaptive modes:', f'{float(m.group(1)) / 30:.3f}')
+else:
+    print('no deg/s per unit from this tap: the adaptive modes keep the default 0.88')
+PY
+        ;;
+    esac
+    echo "kept: $DIR (tap.csv, bag/, goal_*.txt, stop_*, rt/, launch.log, summary.txt)"
+    ;;
+  state)
+    echo "mode up: $(current_mode)"
+    timeout 5 ros2 control list_hardware_components 2> /dev/null | grep -iE "positronic_arm|state" | head -4
+    timeout 5 ros2 control list_controllers 2> /dev/null
+    ;;
+  *)
+    sed -n 12,26p "$0"
+    exit 2
+    ;;
+esac
