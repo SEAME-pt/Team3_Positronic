@@ -7,10 +7,19 @@
 #   base and wrist trajectories 3 times each, 5 stops at 15 deg/s, three 5 deg steps. Every step
 #   that moves the arm says so and counts down first. Reuse the #32 tap, the #33 trajectories and
 #   waypoint_error.py, the #39 steps run.
+# Follow-up prompt:
+#   One person alone: he types and keeps a hand on the switch. One terminal (the driver runs in
+#   the background), one command per mode (`run`) that waits for Enter between stages, a longer
+#   countdown, and the checks a second person would have done (fresh mode, the send speed the
+#   driver logged, the by-name rt_record) made by the script, which stops on a wrong one.
 #
-# Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, two
-# terminals in the same container (the second with docker exec). Nothing here touches Wi-Fi.
+# Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
+# terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
+# touches Wi-Fi.
 #
+#   bash $T/arm_run_adaptive.sh run MODE [STAGES]   one mode in one go: up, then each stage
+#                                            after Enter (s skips it, q ends the mode), then
+#                                            down. STAGES default: start first base stops steps
 #   bash $T/arm_run_adaptive.sh up MODE      tap + driver + bag for MODE (no motion; the
 #                                            servos are powered on and hold their pose)
 #   bash $T/arm_run_adaptive.sh start        MOVES: T0_to_start, one slow point to the start
@@ -43,11 +52,12 @@ RT=/ws/docs/03_verification/rt_profile/tools/run_rt_profile.sh
 # ros2 CLI took 0.8 to 2.3 s on the desk, too loose to aim with. The tap has the true moment.
 STOP_AFTER_S=${STOP_AFTER_S:-3.0}
 WAIT_BETWEEN_S=${WAIT_BETWEEN_S:-4} # the arm stands still before the next goal
+COUNTDOWN_S=${COUNTDOWN_S:-5}       # one person: time to move the hand from the keys to the switch
 mkdir -p "$ROOT"
 
 countdown() {
   echo ">>> $1"
-  for s in 3 2 1; do echo "    $s ... hand on the switch"; sleep 1; done
+  for s in $(seq "$COUNTDOWN_S" -1 1); do echo "    $s ... hand on the switch"; sleep 1; done
 }
 
 current_mode() { cat "$ROOT/current_mode" 2> /dev/null; }
@@ -73,6 +83,12 @@ mode_args() {
       ;;
     *) return 1 ;;
   esac
+}
+
+# What the driver's INFO line must say for a mode.
+expected_speed_line() {
+  local kind=${1%%[0-9]*} byte=${1##*[a-z]}
+  if [ "$kind" = fixed ]; then echo "send speed $byte\."; else echo "send speed adaptive, floor 10, ceiling $byte,"; fi
 }
 
 # T6, T4 (from T3) and T12, T13 (from T11): the same goals with other times (#33 README).
@@ -132,7 +148,8 @@ case "$1" in
       ros2 launch positronic_bringup driver.launch.py backend:=fake $ARGS > "$DIR/launch.log" 2>&1 &
       echo $! > "$ROOT/launch.pid"
       sleep 15
-      grep -m1 "send speed" "$DIR/launch.log"
+      grep -m1 "send speed" "$DIR/launch.log" | grep -q "$(expected_speed_line "$MODE")" \
+        || { echo "!!! wrong send speed in $DIR/launch.log" >&2; bash "$0" down > /dev/null 2>&1; exit 1; }
       ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
         /arm_controller/controller_state /forward_position_controller/commands > "$DIR/bag.log" 2>&1 &
       echo $! > "$ROOT/bag.pid"
@@ -158,7 +175,18 @@ PY
       > "$DIR/launch.log" 2>&1 &
     echo $! > "$ROOT/launch.pid"
     sleep 15
-    grep -m1 "send speed" "$DIR/launch.log" || { echo "driver did not log its send speed: $DIR/launch.log" >&2; }
+    # The checks a second person would make, made here: the driver runs the mode asked for.
+    if ! grep -q "fresh mode read-back: 1 " "$DIR/fresh_mode.txt"; then
+      echo "!!! fresh mode is not 1 (see $DIR/fresh_mode.txt): stopping this mode" >&2
+      bash "$0" down > /dev/null 2>&1
+      exit 1
+    fi
+    if ! grep -m1 "send speed" "$DIR/launch.log" | grep -q "$(expected_speed_line "$MODE")"; then
+      echo "!!! the driver did not log '$(expected_speed_line "$MODE")' (see $DIR/launch.log): stopping" >&2
+      bash "$0" down > /dev/null 2>&1
+      exit 1
+    fi
+    grep -m1 -o "send speed[^.]*\.[0-9]*[^.]*" "$DIR/launch.log"
     ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
       /arm_controller/controller_state /forward_position_controller/commands > "$DIR/bag.log" 2>&1 &
     echo $! > "$ROOT/bag.pid"
@@ -247,6 +275,11 @@ PY
     ;;
   steps)
     need_mode
+    # #171: the deployed rt_record.py must read the joints by name, or step 1 moves five joints.
+    if ! grep -q "ARM_JOINTS" /ws/docs/03_verification/rt_profile/tools/rt_record.py; then
+      echo "!!! rt_record.py reads /joint_states by index (#171): steps refused" >&2
+      exit 1
+    fi
     countdown "MOVES: controllers switched to forward_position_controller (no motion yet)"
     ros2 control set_controller_state arm_controller inactive
     ros2 run controller_manager spawner forward_position_controller --param-file \
@@ -288,13 +321,41 @@ PY
     esac
     echo "kept: $DIR (tap.csv, bag/, goal_*.txt, stop_*, rt/, launch.log, summary.txt)"
     ;;
+  run)
+    MODE=$2
+    shift 2
+    STAGES=${*:-start first base stops steps}
+    bash "$0" up "$MODE" || exit 1
+    for stage in $STAGES; do
+      case "$stage" in
+        start) what="T0_to_start, slow, ~10 s" ;;
+        first) what="T1, J1 5 deg, ~15 s" ;;
+        base) what="T3 T6 T4 x3, J1+J2 20 deg, ~2.5 min" ;;
+        wrist) what="T11 T12 T13 x3, J3-J6 20 deg, J3 goes UP, ~2.5 min" ;;
+        stops) what="5 stops at 15 deg/s on J1 40 deg, each back to start, ~3 min" ;;
+        steps) what="3 x J1 5 deg step and back, ~1 min" ;;
+        *) echo "unknown stage $stage" >&2; continue ;;
+      esac
+      answer=""
+      if [ "${AUTO:-0}" != 1 ]; then
+        read -r -p "Next: $stage ($what). Enter = go, s = skip, q = end this mode: " answer
+      fi
+      case "$answer" in
+        q) break ;;
+        s) continue ;;
+      esac
+      bash "$0" "$stage" || { echo "!!! $stage failed: ending this mode" >&2; break; }
+    done
+    bash "$0" down
+    echo ">>> mode $MODE done. Cool down 2 min before the next one."
+    ;;
   state)
     echo "mode up: $(current_mode)"
     timeout 5 ros2 control list_hardware_components 2> /dev/null | grep -iE "positronic_arm|state" | head -4
     timeout 5 ros2 control list_controllers 2> /dev/null
     ;;
   *)
-    sed -n 12,26p "$0"
+    sed -n "/^#   bash \$T\/arm_run_adaptive.sh run/,/^#   starts with/p" "$0"
     exit 2
     ;;
 esac
