@@ -62,6 +62,10 @@ from std_msgs.msg import Float64MultiArray
 COMMAND_TOPIC = '/forward_position_controller/commands'
 STATE_TOPIC = '/joint_states'
 NUM_JOINTS = 6
+# The arm joints in protocol and command order, J1 first. /joint_states has the gripper mock too
+# (first, since #151) and its own order, so positions are picked by name (#133 spike).
+ARM_JOINTS = ('joint2_to_joint1', 'joint3_to_joint2', 'joint4_to_joint3', 'joint5_to_joint4',
+              'joint6_to_joint5', 'joint6output_to_joint6')
 NS_PER_S = 10 ** 9
 # How long to wait for the driver and for the controller before giving up.
 STARTUP_TIMEOUT_S = 15.0
@@ -116,11 +120,14 @@ class CycleRecorder(Node):
         self.create_subscription(JointState, STATE_TOPIC, self.on_message, 10)
 
     def on_message(self, message):
-        """Store the cycle this message was published in."""
+        """Store the cycle this message was published in, the six arm joints by name."""
+        index = {name: i for i, name in enumerate(message.name)}
+        if not all(name in index for name in ARM_JOINTS):
+            return
         self.rows.append((
             self.get_clock().now().nanoseconds,
             stamp_ns(message.header.stamp),
-            tuple(message.position[:NUM_JOINTS])))
+            tuple(message.position[index[name]] for name in ARM_JOINTS)))
 
     def latest_positions(self):
         """Return the positions of the last message, or None when none arrived yet."""
