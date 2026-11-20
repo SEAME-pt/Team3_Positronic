@@ -25,11 +25,15 @@
 #   trigger, a slow sample followed by a fast one not counting, the speed just before the
 #   trigger, the travel of the joint that moved most, and the CSV line with and without a
 #   rest and a heartbeat.
+#   #171: a /joint_states message with the gripper mock first and its velocity NaN gives the
+#   six arm joints J1 first and still comes to rest; a missing arm joint raises; an empty
+#   velocity stays empty.
 """Tests for halt_latency.py, no ROS needed (python3 -m pytest on this folder)."""
 
 import math
 
 import halt_latency as hl
+import pytest
 
 MS = 1_000_000
 
@@ -121,3 +125,53 @@ def test_header_has_one_name_per_column():
     """Check that the header and a line have the same number of columns."""
     line = hl.csv_line(1, 2, True, 100 * MS, 150 * MS, SAMPLES, 206 * MS, 0.02, 3)
     assert len(hl.HEADER.split(',')) == len(line.split(','))
+
+
+def gripper_first(positions, velocities):
+    """Return the names and fields of /joint_states since #151: the gripper mock first."""
+    return (['gripper_controller', *hl.ARM_JOINTS], [0.15, *positions],
+            [math.nan, *velocities])
+
+
+def test_gripper_first_message_gives_the_arm_joints_in_order():
+    """Check that the gripper is dropped and J1..J6 come out in order."""
+    names, positions, velocities = gripper_first((1, 2, 3, 4, 5, 6), (0.1, 0, 0, 0, 0, 0))
+    assert hl.arm_values(names, positions) == (1, 2, 3, 4, 5, 6)
+    assert hl.arm_values(names, velocities) == (0.1, 0, 0, 0, 0, 0)
+    assert hl.arm_values(names[::-1], positions[::-1]) == (1, 2, 3, 4, 5, 6)
+
+
+def test_gripper_nan_velocity_does_not_break_the_rest_check():
+    """Check the #171 failure: with the gripper's NaN dropped the arm comes to rest."""
+    samples = []
+    for t_ms, j1_speed in [(100, 0.3), (133, 0.01), (167, 0.0), (200, 0.0)]:
+        names, positions, velocities = gripper_first(
+            (t_ms / 1000, 0, 0, 0, 0, 0), (j1_speed, 0, 0, 0, 0, 0))
+        samples.append((t_ms * MS, hl.arm_values(names, positions),
+                        hl.arm_values(names, velocities)))
+    assert hl.rest_time_ns(samples, 100 * MS, 0.02, 3) == 133 * MS
+    assert hl.speed_before(samples, 100 * MS) == 0.3
+    line = hl.csv_line(1, 1, True, 100 * MS, 150 * MS, samples, None, 0.02, 3)
+    assert line == '1,STOP_SERVICE,1,50.0,33.0,17.19,1.89,'
+
+
+def test_missing_arm_joint_raises():
+    """Check that a message without one of the six joints is refused, not guessed."""
+    names, positions, _ = gripper_first((1, 2, 3, 4, 5, 6), (0,) * 6)
+    with pytest.raises(ValueError, match='joint2_to_joint1'):
+        hl.arm_values(names[:1] + names[2:], positions[:1] + positions[2:])
+
+
+def test_field_that_does_not_match_the_names_raises():
+    """Check that a field shorter than the names is refused."""
+    names, positions, _ = gripper_first((1, 2, 3, 4, 5, 6), (0,) * 6)
+    with pytest.raises(ValueError, match='7 names and 6 values'):
+        hl.arm_values(names, positions[1:])
+
+
+def test_empty_velocity_stays_empty():
+    """Check that a message without velocities gives no speed instead of an error."""
+    names, _, _ = gripper_first((1, 2, 3, 4, 5, 6), (0,) * 6)
+    assert hl.arm_values(names, []) == ()
+    with pytest.raises(ValueError):
+        hl.arm_values(names[:1], [])  # empty, but the arm joints are still required
