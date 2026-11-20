@@ -33,6 +33,9 @@ REPLY_HEADER = bytes.fromhex('fefe0e20')
 REPLY_SIZE = 17
 SYNC_WRITE = bytes.fromhex('fffffe34832907')
 SYNC_WRITE_SIZE = 56
+STOP_FRAME = bytes.fromhex('fefe0229fa')
+REST_POLLS = 5        # poses in a row that do not change: the arm is still
+REST_DEG = 0.05       # what "does not change" means, deg (the reply has 0.01 deg steps)
 STEP_DEG = 360.0 / 4096
 
 
@@ -141,6 +144,41 @@ def joint_speeds(seen, window_s=0.1):
     return best
 
 
+def stops(path):
+    """
+    Return one dict per stop frame: speed before, travel per joint, time to rest.
+
+    The travel counts from the last pose read before the stop, the newest one the driver had,
+    up to one poll (33 ms while moving) old: at 15 deg/s up to 0.5 deg of it came before the
+    stop. The same for every mode, so modes compare; subtract speed x age for the absolute.
+    """
+    drv, drv_t, atom, atom_t = read_tap(path)
+    seen = poses(atom, atom_t)
+    times = [t for t, _ in seen]
+    found = []
+    for i in find_all(drv, STOP_FRAME, len(STOP_FRAME)):
+        t = drv_t[i]
+        k = bisect.bisect_left(times, t) - 1
+        if k < 2:
+            continue
+        before, at = seen[max(0, bisect.bisect_left(times, t - 0.1))], seen[k]
+        dt = at[0] - before[0]
+        speed = max(abs(a - b) for a, b in zip(at[1], before[1])) / dt if dt > 0 else 0.0
+        rest = None
+        for j in range(k + 1, len(seen) - REST_POLLS):
+            window = seen[j:j + REST_POLLS]
+            if all(max(abs(a - b) for a, b in zip(w[1], window[0][1])) < REST_DEG
+                   for w in window):
+                rest = window[0]
+                break
+        if rest is None:
+            continue
+        found.append({'time': t, 'speed': speed,
+                      'travel': [abs(r - a) for r, a in zip(rest[1], at[1])],
+                      'rest_ms': (rest[0] - t) * 1000})
+    return found
+
+
 def report(path, out_rows):
     """Print the summary of one tap and append its rows for --csv."""
     rows, seen = per_send(path)
@@ -178,6 +216,11 @@ def report(path, out_rows):
     peak = joint_speeds(seen)
     print('peak joint speed in the poses, deg/s:',
           ' '.join(f'J{n + 1} {v:.1f}' for n, v in enumerate(peak)))
+    for stop in stops(path):
+        print(f'stop at {stop["time"]:.3f} s: fastest joint {stop["speed"]:.1f} deg/s before,'
+              f' travel after {max(stop["travel"]):.2f} deg (J'
+              f'{stop["travel"].index(max(stop["travel"])) + 1}), still after'
+              f' {stop["rest_ms"]:.0f} ms')
     for r in rows:
         first = r['writes'][0][1] if r['writes'] else [None] * 6
         for s in range(6):

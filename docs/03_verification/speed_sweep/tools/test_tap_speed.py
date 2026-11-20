@@ -5,6 +5,10 @@
 #   targets), the sync-write is attributed to it with the goal speed of each servo, the pose
 #   before it is found, a corrupted checksum is skipped, a cut last row is ignored, and --csv
 #   writes one row per servo.
+# Follow-up prompt:
+#   A stop at 15 deg/s on J1 followed by poses that move 0.5 deg more and then hold: the speed
+#   before, the travel and the time to rest are reported; a stop with no rest in the tap is
+#   left out.
 """Tests of tap_speed.py."""
 
 import csv
@@ -67,3 +71,45 @@ def test_csv_has_a_row_per_servo(tmp_path, capsys):
     assert len(rows) == 7
     assert rows[1][2] == '30' and rows[1][-1] == '497'
     assert 'mode 1' in capsys.readouterr().out
+
+
+def pose_reply(j1_centideg):
+    """Return a get_angles reply with J1 at `j1_centideg` and the others at 0."""
+    return 'fefe0e20' + f'{j1_centideg & 0xFFFF:04x}' + '0000' * 5 + 'fa'
+
+
+def test_a_stop_reports_speed_travel_and_rest(tmp_path):
+    tap = tmp_path / 'tap.csv'
+    rows = []
+    t = 0.0
+    j1 = 0
+    for _ in range(10):  # 15 deg/s: 0.5 deg every 33 ms
+        rows.append((t, 'ATOM', pose_reply(j1)))
+        t += 1 / 30
+        j1 += 50
+    rows.append((t, 'DRV', 'fefe0229fa'))
+    for step in (25, 15, 10):  # 0.5 deg more, then still
+        t += 0.01
+        j1 += step
+        rows.append((t, 'ATOM', pose_reply(j1)))
+    for _ in range(8):
+        t += 0.01
+        rows.append((t, 'ATOM', pose_reply(j1)))
+    write_tap(tap, rows)
+    found = tap_speed.stops(str(tap))
+    assert len(found) == 1
+    assert abs(found[0]['speed'] - 15.0) < 0.5
+    # From the last pose before the stop (4.50 deg, 33 ms before it) to the rest (5.50): the
+    # travel counts from the newest pose the driver had, so it includes up to one poll of
+    # motion before the stop. 0.5 deg of that here.
+    assert abs(found[0]['travel'][0] - 1.0) < 1e-6
+    assert 25 <= found[0]['rest_ms'] <= 35
+
+
+def test_a_stop_without_rest_is_left_out(tmp_path):
+    tap = tmp_path / 'tap.csv'
+    rows = [(i / 30, 'ATOM', pose_reply(50 * i)) for i in range(10)]
+    rows.append((0.34, 'DRV', 'fefe0229fa'))
+    rows.append((0.35, 'ATOM', pose_reply(600)))
+    write_tap(tap, rows)
+    assert tap_speed.stops(str(tap)) == []
