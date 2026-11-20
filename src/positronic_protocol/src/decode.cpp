@@ -21,6 +21,7 @@
 #include "positronic_protocol/decode.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -201,6 +202,92 @@ Match find_sync_write(ByteView rx) noexcept
   return match;
 }
 
+/// A servo status frame: FF FF id LEN(0x11) err + 15 data bytes + checksum, 21 bytes (#170).
+constexpr std::uint8_t SERVO_STATUS_LEN{0x11};
+constexpr std::size_t SERVO_STATUS_SIZE{21};
+constexpr std::size_t SERVO_STATUS_ID_OFFSET{2};
+constexpr std::size_t SERVO_STATUS_LEN_OFFSET{3};
+constexpr std::size_t SERVO_STATUS_ERROR_OFFSET{4};
+constexpr std::size_t SERVO_STATUS_DATA_OFFSET{5};
+
+/// The checksum of a servo-bus frame at `start` of `size` bytes: the inverted low byte of the
+/// sum from the id to the last data byte, compared with the last byte.
+bool servo_checksum_ok(ByteView rx, std::size_t start, std::size_t size) noexcept
+{
+  const std::size_t checksum_index{start + size - 1};
+  unsigned int sum{0};
+  for (std::size_t index{start + SERVO_STATUS_ID_OFFSET}; index < checksum_index; ++index) {
+    sum += detail::read_byte(rx, index);
+  }
+  return static_cast<std::uint8_t>(~sum) == detail::read_byte(rx, checksum_index);
+}
+
+/// find_frame() for a servo status frame: FF FF, an id 1 to 7, LEN 0x11, then the checksum 17
+/// bytes later. A mismatch after FF FF, or a bad checksum, counts as a rejected candidate; a
+/// buffer that ends while everything still matches is NEED_MORE_DATA.
+Match find_servo_status(ByteView rx) noexcept
+{
+  Match match{};
+  for (std::size_t start{0}; start < rx.size; ++start) {
+    if (detail::read_byte(rx, start) != 0xFF) {
+      continue;
+    }
+    if (start + 1 >= rx.size) {
+      match.status = DecodeStatus::NEED_MORE_DATA;
+      match.consumed = start;
+      return match;
+    }
+    if (detail::read_byte(rx, start + 1) != 0xFF) {
+      continue;
+    }
+    if (start + SERVO_STATUS_LEN_OFFSET >= rx.size) {
+      match.status = DecodeStatus::NEED_MORE_DATA;
+      match.consumed = start;
+      return match;
+    }
+    const std::uint8_t id{detail::read_byte(rx, start + SERVO_STATUS_ID_OFFSET)};
+    const bool id_ok{id >= 1 && id <= GRIPPER_SERVO_ID};
+    const bool len_ok{detail::read_byte(rx, start + SERVO_STATUS_LEN_OFFSET) == SERVO_STATUS_LEN};
+    if (!id_ok || !len_ok) {
+      ++match.rejected;
+      continue;
+    }
+    if (start + SERVO_STATUS_SIZE > rx.size) {
+      match.status = DecodeStatus::NEED_MORE_DATA;
+      match.consumed = start;
+      return match;
+    }
+    if (!servo_checksum_ok(rx, start, SERVO_STATUS_SIZE)) {
+      ++match.rejected;
+      continue;
+    }
+    match.status = DecodeStatus::FOUND;
+    match.start = start;
+    match.consumed = start + SERVO_STATUS_SIZE;
+    return match;
+  }
+  match.consumed = rx.size;
+  return match;
+}
+
+/// Reads an unsigned int16 stored little-endian at `index`.
+std::uint16_t read_uint16_le(ByteView rx, std::size_t index) noexcept
+{
+  const auto low{static_cast<std::uint16_t>(detail::read_byte(rx, index))};
+  const auto high{static_cast<std::uint16_t>(detail::read_byte(rx, index + 1))};
+  return static_cast<std::uint16_t>(low | (high << 8U));
+}
+
+/// A sign-magnitude value: bit `sign_bit` is the sign, the bits below it the magnitude.
+std::int16_t sign_magnitude(std::uint16_t raw, unsigned int sign_bit) noexcept
+{
+  const auto magnitude{static_cast<std::int16_t>(raw & ((1U << sign_bit) - 1U))};
+  if ((raw & (1U << sign_bit)) != 0U) {
+    return static_cast<std::int16_t>(-magnitude);
+  }
+  return magnitude;
+}
+
 /// Copies the bookkeeping of `match` into a Decoded result.
 template<typename T>
 Decoded<T> from_match(const Match & match) noexcept
@@ -260,6 +347,47 @@ Decoded<std::uint8_t> decode_sync_write_echo(ByteView rx) noexcept
     result.value = static_cast<std::uint8_t>(NUM_JOINTS);
   }
   return result;
+}
+
+Decoded<ServoStatus> decode_servo_status(ByteView rx) noexcept
+{
+  // Register map of the 15 data bytes read at register 56 (STS servos): position 56-57,
+  // speed 58-59, load 60-61, voltage 62, temperature 63, 64 async flag, 65 status, 66 moving.
+  constexpr std::size_t POSITION{0};
+  constexpr std::size_t SPEED{2};
+  constexpr std::size_t LOAD{4};
+  constexpr std::size_t VOLTAGE{6};
+  constexpr std::size_t TEMPERATURE{7};
+  constexpr std::size_t MOVING{10};
+  constexpr unsigned int SPEED_SIGN_BIT{15};
+  constexpr unsigned int LOAD_SIGN_BIT{10};
+  const Match match{find_servo_status(rx)};
+  auto result{from_match<ServoStatus>(match)};
+  if (match.status == DecodeStatus::FOUND) {
+    const std::size_t data{match.start + SERVO_STATUS_DATA_OFFSET};
+    result.value.id = detail::read_byte(rx, match.start + SERVO_STATUS_ID_OFFSET);
+    result.value.error = detail::read_byte(rx, match.start + SERVO_STATUS_ERROR_OFFSET);
+    result.value.position = read_uint16_le(rx, data + POSITION);
+    result.value.speed = sign_magnitude(read_uint16_le(rx, data + SPEED), SPEED_SIGN_BIT);
+    result.value.load = sign_magnitude(read_uint16_le(rx, data + LOAD), LOAD_SIGN_BIT);
+    result.value.voltage = detail::read_byte(rx, data + VOLTAGE);
+    result.value.temperature = detail::read_byte(rx, data + TEMPERATURE);
+    result.value.moving = detail::read_byte(rx, data + MOVING) != 0;
+  }
+  return result;
+}
+
+CentiDegrees angle_from_steps(std::uint16_t position, std::size_t joint) noexcept
+{
+  constexpr double STEPS_PER_TURN{4096.0};
+  constexpr double CENTER_STEPS{2048.0};
+  constexpr double CDEG_PER_TURN{36000.0};
+  constexpr std::size_t INVERTED_JOINT{2};  // J3
+  double cdeg{(CENTER_STEPS - position) * CDEG_PER_TURN / STEPS_PER_TURN};
+  if (joint == INVERTED_JOINT) {
+    cdeg = -cdeg;
+  }
+  return static_cast<CentiDegrees>(std::lround(cdeg));
 }
 
 }  // namespace positronic_protocol

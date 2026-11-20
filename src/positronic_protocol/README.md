@@ -58,6 +58,8 @@ pp::Decoded<pp::JointAngles> reply{pp::decode_get_angles_reply(rx)};
 pp::Decoded<std::uint8_t> ack{pp::decode_ack(rx, pp::CommandId::STOP)};
 pp::Decoded<pp::ServoTemperatures> temps{pp::decode_servo_temps_reply(rx)};  // degC, J1 first
 pp::Decoded<std::uint8_t> echo{pp::decode_sync_write_echo(rx)};  // the Atom's sync-write (#150)
+pp::Decoded<pp::ServoStatus> servo{pp::decode_servo_status(rx)};  // one servo's status frame (#170)
+pp::CentiDegrees angle{pp::angle_from_steps(servo.value.position, servo.value.id - 1)};
 
 std::optional<pp::JointAngles> wire{pp::to_centidegrees(radians)};  // ROS side -> wire
 pp::JointRadians state{pp::to_radians(reply.value)};                // wire -> ROS side
@@ -90,6 +92,16 @@ footer, the echo of a request). It is for logs and debugging, not for control fl
 before it reads the port again. `FOUND` means that frame is whole with a good checksum (`value` is
 the number of servos, 6); `rejected` counts the `FF FF` starts that were not it (the other servo
 frames, a bad checksum). The serial thread waits for it after every `send_angles` (#150).
+
+`decode_servo_status` is the other servo-bus decoder (#170): before that sync-write the Atom reads
+the six servos (a SYNC READ of 15 bytes at register 56), and each answers `FF FF id 11 err` + 15
+bytes + checksum, 21 bytes: position in steps (2048 is 0 deg, 360/4096 deg per step), speed,
+load (0.1 %, sign-magnitude), voltage (0.1 V), temperature (degC), the moving flag, and the
+servo's own error byte. The gripper, id 7, answers too when plugged. `FOUND` is one frame with a
+good checksum, `value` its fields; a bad checksum is `rejected`, and a hot servo produces many
+(69 % at 53 degC on 19 Nov 2026). `angle_from_steps` is the Atom's conversion to the wire angle,
+J3 the other way round, checked against `get_angles` on the taps of 16 and 19 Nov. The serial
+thread builds the pose from the six frames and asks no `get_angles` while they are whole (#170).
 
 ### How #22 uses `consumed`
 
