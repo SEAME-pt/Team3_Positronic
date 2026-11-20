@@ -705,8 +705,9 @@ void RobotSystem::raise_fault(FaultCode code)
 void RobotSystem::refuse(const CommandCheck & check)
 {
   // Going silent does not stop the arm: it keeps going to its last target. request_halt() is
-  // the non-blocking stop of #36 (two atomic stores, safe here on the control loop); on_error
-  // asks for it again, which changes nothing. The refused command never reached the backend.
+  // the non-blocking stop of #36 (two atomic stores and a short lock, safe here on the control
+  // loop); on_error asks for it again, which changes nothing. The refused command never reached
+  // the backend.
   arm_->request_halt();
   // One log line per refusal: write() is not called again once the component leaves ACTIVE.
   log_fault(get_logger(), "Command refused, arm halted", check, limits_, info_);

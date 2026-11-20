@@ -28,6 +28,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <iterator>
@@ -187,7 +188,12 @@ SerialArm::SerialArm(
 
 SerialArm::~SerialArm()
 {
-  stop_.store(true);
+  {
+    // Under the lock: the thread cannot miss it between its look at the flags and its wait.
+    const std::lock_guard<std::mutex> lock{wake_mutex_};
+    stop_.store(true);
+  }
+  wake_cv_.notify_all();
   if (thread_.joinable()) {
     thread_.join();
   }
@@ -205,6 +211,44 @@ void SerialArm::write_angles(const JointPositions & angles)
   // Only stores the command. The poll thread picks it up on its next turn and sends it over the
   // port, so the control loop never waits for the serial link here.
   command_.writeFromNonRT(angles);
+  if (timing_.pose_from_poll) {
+    // Wake the thread, so the send follows this write instead of the thread's own period
+    // (#170). The lock is held for two stores; the thread holds it for as long.
+    {
+      const std::lock_guard<std::mutex> lock{wake_mutex_};
+      command_ready_ = true;
+    }
+    wake_cv_.notify_one();
+  }
+}
+
+bool SerialArm::wait_for_turn_end(Clock::time_point deadline)
+{
+  if (!timing_.pose_from_poll) {
+    std::this_thread::sleep_until(deadline);
+    return false;
+  }
+  // The flag was cleared before this turn read its command, so a write that landed during the
+  // turn, while the sync-write was being read, is still set and ends the wait at once: the
+  // send follows the sync-write instead of waiting for the next write. Cleared here instead,
+  // 1 % of the sends came 55 to 66 ms apart in 10 min (20 Nov 2026): a write lost during a
+  // slow sync-write, the thread asleep until its deadline.
+  // A new stop or power on ends the wait too: the controller stops writing on a halt, and the
+  // stop must not wait for the two-period deadline.
+  std::unique_lock<std::mutex> lock{wake_mutex_};
+  std::ignore = wake_cv_.wait_until(lock, deadline, [this]() {
+        return command_ready_ || request_ready_ || stop_.load();
+  });
+  return command_ready_;
+}
+
+void SerialArm::wake_thread()
+{
+  {
+    const std::lock_guard<std::mutex> lock{wake_mutex_};
+    request_ready_ = true;
+  }
+  wake_cv_.notify_one();
 }
 
 bool SerialArm::has_sample() const
@@ -228,6 +272,7 @@ void SerialArm::request_halt()
 {
   halted_.store(true);
   request_.store(Pending::HALT);
+  wake_thread();
 }
 
 bool SerialArm::power_on()
@@ -304,6 +349,7 @@ std::optional<JointPositions> SerialArm::last_sent() const
 bool SerialArm::request_and_wait(Pending request)
 {
   request_.store(request);
+  wake_thread();
   // The poll thread writes the frame at the start of its next turn, waits for the arm's ack and
   // then puts request_ back to NONE. 1 ms steps: on the arm the ack is in within a few ms, and
   // this runs in a lifecycle transition, which may wait.
@@ -376,6 +422,14 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
     }
     buffer.insert(
       buffer.end(), chunk.begin(), std::next(chunk.begin(), static_cast<std::ptrdiff_t>(got)));
+    // A scanner that keeps what it reads (the poll frames before the sync-write, #170) must not
+    // grow the buffer without end: an Atom cycle is ~250 bytes, 60 ms of line about 1 KB.
+    constexpr std::size_t MAX_KEPT{2048};
+    if (buffer.size() > MAX_KEPT) {
+      buffer.erase(
+        buffer.begin(),
+        std::next(buffer.begin(), static_cast<std::ptrdiff_t>(buffer.size() - MAX_KEPT)));
+    }
     const ScanResult result{scan(positronic_protocol::ByteView{buffer.data(), buffer.size()})};
     if (result.found) {
       return true;
@@ -388,17 +442,149 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
 
 void SerialArm::wait_for_sync_write()
 {
-  const auto sync_write_seen{[](positronic_protocol::ByteView rx) {
+  // With the pose from the poll, every byte before the sync-write is kept (consumed 0): the
+  // servo status frames in there are the pose. Without it, the bytes the decoder rules out are
+  // dropped as they come.
+  const bool keep{timing_.pose_from_poll};
+  const auto sync_write_seen{[keep](positronic_protocol::ByteView rx) {
       const positronic_protocol::Decoded<std::uint8_t> echo{
         positronic_protocol::decode_sync_write_echo(rx)};
       const bool found{echo.status == positronic_protocol::DecodeStatus::FOUND};
-      return ScanResult{found, echo.consumed};
+      std::size_t consumed{echo.consumed};
+      if (keep) {
+        consumed = 0;
+      }
+      return ScanResult{found, consumed};
     }};
   const bool seen{read_until(Clock::now() + timing_.echo_timeout, sync_write_seen)};
+  last_send_answered_ = seen;
   // A wait cut short by the destructor is not the arm's doing.
   if (!seen && !stop_.load()) {
     echo_timeouts_.fetch_add(1);
   }
+  if (!seen || !keep) {
+    return;
+  }
+  // Published now, the moment the sync-write closes, not at the start of the next turn: the
+  // pose is ~13 ms fresher for the read() that comes next (#170).
+  if (const std::optional<JointPositions> pose{pose_from_poll_frames()}) {
+    latest_.writeFromNonRT(pose.value());
+    last_pose_ = pose;
+    has_sample_.store(true);
+    watchdog_.on_reply(Clock::now());
+    input_free_ = true;
+  }
+}
+
+bool SerialArm::frame_plausible(const positronic_protocol::ServoStatus & status)
+{
+  return status.voltage >= MIN_SERVO_VOLTAGE && status.voltage <= MAX_SERVO_VOLTAGE &&
+         plausible_celsius(status.temperature);
+}
+
+bool SerialArm::jumped(std::uint16_t position, std::size_t joint) const
+{
+  if (!last_pose_.has_value()) {
+    return false;
+  }
+  const double angle{
+    positronic_protocol::to_radians(positronic_protocol::angle_from_steps(position, joint))};
+  return std::abs(angle - last_pose_->at(joint)) > MAX_POLL_JUMP_RAD;
+}
+
+std::optional<JointPositions> SerialArm::pose_from_poll_frames()
+{
+  namespace pp = positronic_protocol;
+  const auto now{Clock::now()};
+  std::array<std::optional<std::uint16_t>, pp::NUM_JOINTS> steps{};
+  pp::ByteView rest{read_buffer_.data(), read_buffer_.size()};
+  while (rest.size > 0) {
+    const pp::Decoded<pp::ServoStatus> status{pp::decode_servo_status(rest)};
+    if (status.status != pp::DecodeStatus::FOUND) {
+      break;
+    }
+    // The gripper (id 7) answers the poll too when plugged (19 Nov 2026): not a joint. A frame
+    // that passed the checksum but cannot be true is left out like a corrupt one.
+    const std::size_t joint{static_cast<std::size_t>(status.value.id) - 1};
+    const bool usable{
+      joint < pp::NUM_JOINTS && frame_plausible(status.value) &&
+      !jumped(status.value.position, joint)};
+    if (usable) {
+      steps.at(joint) = status.value.position;
+    }
+    rest = pp::ByteView{
+      std::next(rest.data, static_cast<std::ptrdiff_t>(status.consumed)),
+      rest.size - status.consumed};
+  }
+  pp::JointAngles angles{};
+  for (std::size_t joint{0}; joint < pp::NUM_JOINTS; ++joint) {
+    const std::optional<std::uint16_t> & step{steps.at(joint)};
+    const bool bridgeable{
+      last_steps_.at(joint).has_value() && now - last_steps_at_.at(joint) <= POLL_BRIDGE_AGE};
+    std::uint16_t position{0};
+    if (step.has_value()) {
+      position = step.value_or(0);
+      last_steps_.at(joint) = step;
+      last_steps_at_.at(joint) = now;
+    } else if (bridgeable) {
+      position = last_steps_.at(joint).value_or(0);  // the servo's last good position
+    } else {
+      return std::nullopt;  // nothing recent for this joint: the next turn asks get_angles
+    }
+    angles.at(joint) = pp::angle_from_steps(position, joint);
+  }
+  return pp::to_radians(angles);
+}
+
+bool SerialArm::ask_angles(ReplyAssembler & assembler)
+{
+  // A failed write is transient (busy port): no reply this turn, the pose stays, the next turn
+  // asks again.
+  const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
+  if (!transport_->write(request.bytes.data(), request.size)) {
+    return false;
+  }
+  // Read until the reply completes or REPLY_TIMEOUT passes. The reply comes in many small
+  // chunks behind servo-bus chatter, so a fixed number of reads is not enough, and the
+  // request and its reply must be over before anything else is written: the arm drops a
+  // send_angles that arrives while it is still answering a get_angles. The window counts
+  // from this write, not from the turn's start, or a turn spent in a request eats its own (#103).
+  std::array<std::uint8_t, 256> chunk{};
+  const auto reply_deadline{Clock::now() + REPLY_TIMEOUT};
+  while (!stop_.load() && Clock::now() < reply_deadline) {
+    const std::size_t got{transport_->read(chunk.data(), chunk.size())};
+    if (got == 0) {
+      // The real port (VTIME = 0) and the test transports both return at once: back off
+      // instead of spinning on the Jetson's CPU.
+      std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
+      continue;
+    }
+    if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
+      latest_.writeFromNonRT(pose.value());
+      last_pose_ = pose;
+      // Set after the write, so whoever sees true also finds the real pose in the buffer.
+      has_sample_.store(true);
+      watchdog_.on_reply(Clock::now());
+      return true;
+    }
+  }
+  return false;
+}
+
+std::chrono::milliseconds SerialArm::turn_period(bool sent) const
+{
+  if (!sent) {
+    return POLL_PERIOD;
+  }
+  if (timing_.pose_from_poll && input_free_) {
+    // The pose is published and the controller's next write ends the wait; the deadline only
+    // catches a controller that stopped writing. At one period it raced the controller's own
+    // period (33 vs 33.3 ms) and won a third of the time, each time costing a get_angles turn
+    // (19 Nov 2026). Without a pose from the poll the next turn starts at the period, as
+    // before, and asks get_angles.
+    return 2 * timing_.moving_period;
+  }
+  return timing_.moving_period;
 }
 
 bool SerialArm::perform(const Request & request, const Scanner & reply)
@@ -494,6 +680,12 @@ bool SerialArm::watch_temperatures(bool new_target)
   if (!temperatures.has_value()) {
     return true;
   }
+  // The reply frees the arm's input: when this turn had a target to send, the next turn sends
+  // it at once (#170). Idle or halted there is nothing to send, and the get_angles of the next
+  // turn is the pose; the #150 turn keeps it in every case.
+  if (timing_.pose_from_poll && new_target) {
+    input_free_ = true;
+  }
   if (plausible(temperatures.value())) {
     temperatures_.writeFromNonRT(temperatures);
     temperature_watchdog_.on_reply(Clock::now());
@@ -519,10 +711,27 @@ bool SerialArm::serve_after_reply(bool new_target)
   return asked_temperatures;
 }
 
-void SerialArm::gripper_turn()
+std::optional<std::uint8_t> SerialArm::gripper_value_to_send()
 {
   const std::optional<std::uint8_t> target{*gripper_command_.readFromRT()};
-  if (!halted_.load() && target.has_value() && target != gripper_last_sent_) {
+  if (halted_.load() || !target.has_value() || target == gripper_last_sent_) {
+    return std::nullopt;
+  }
+  return target;
+}
+
+bool SerialArm::gripper_due()
+{
+  if (!has_gripper_ || request_.load() != Pending::NONE) {
+    return false;
+  }
+  return gripper_value_to_send().has_value() ||
+         Clock::now() - last_gripper_read_ >= GRIPPER_READ_PERIOD;
+}
+
+void SerialArm::gripper_turn()
+{
+  if (const std::optional<std::uint8_t> target{gripper_value_to_send()}) {
     const std::optional<positronic_protocol::Frame> frame{
       positronic_protocol::encode_set_gripper_value(target.value(), GRIPPER_SPEED)};
     if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
@@ -577,58 +786,54 @@ void SerialArm::repeat_power_off(Clock::time_point turn_start)
 void SerialArm::poll_loop()
 {
   ReplyAssembler assembler{};
-  std::array<std::uint8_t, 256> chunk{};
-
-  const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
   // Count the silence from now, so an arm that never answers also times out (#35).
   watchdog_.reset(Clock::now());
 
+  // Whether a write was waiting when the last wait ended: that turn may send an unchanged
+  // command again (#170), see `repeat` below.
+  bool woke_by_write{false};
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
     const auto turn_start{std::chrono::steady_clock::now()};
 
+    // A request from here on is one this turn has not seen: it ends the wait at the turn's end.
+    {
+      const std::lock_guard<std::mutex> lock{wake_mutex_};
+      request_ready_ = false;
+    }
     send_pending_request();
 
     repeat_power_off(turn_start);
 
     bool sent{false};
 
-    // Ask for the angles. A failed write is transient (busy port): skip this round, keep the
-    // last known pose, try again next turn.
-    bool replied{false};
-    if (transport_->write(request.bytes.data(), request.size)) {
-      // Read until the reply completes or REPLY_TIMEOUT passes. The reply comes in many small
-      // chunks behind servo-bus chatter, so a fixed number of reads is not enough, and the
-      // request and its reply must be over before anything else is written: the arm drops a
-      // send_angles that arrives while it is still answering a get_angles. The window counts
-      // from this write, not from turn_start, or a turn spent in a request eats its own (#103).
-      const auto reply_deadline{std::chrono::steady_clock::now() + REPLY_TIMEOUT};
-      while (!replied && !stop_.load() && std::chrono::steady_clock::now() < reply_deadline) {
-        const std::size_t got{transport_->read(chunk.data(), chunk.size())};
-        if (got == 0) {
-          // The real port (VTIME = 0) and the test transports both return at once: back off
-          // instead of spinning on the Jetson's CPU.
-          std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
-          continue;
-        }
-        if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
-          latest_.writeFromNonRT(pose.value());
-          // Set after the write, so whoever sees true also finds the real pose in the buffer.
-          has_sample_.store(true);
-          watchdog_.on_reply(Clock::now());
-          replied = true;
-        }
-      }
+    // The pose of this turn: the Atom's poll after the last send, already published by
+    // wait_for_sync_write() (#170), or a get_angles.
+    bool replied{input_free_};
+    input_free_ = false;
+    if (!replied) {
+      replied = ask_angles(assembler);
     }
 
+    // A write from here on is one this turn has not seen: the flag stays set for the wait at
+    // the end of the turn (#170), whenever it lands.
+    {
+      const std::lock_guard<std::mutex> lock{wake_mutex_};
+      command_ready_ = false;
+    }
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
     const std::optional<JointPositions> target{*command_.readFromRT()};
     // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
     // and while it stands still the port is better spent on fresh poses. last_sent() is the
-    // thread's view of last_target_, the one memory of what went out.
-    const bool new_target{
-      replied && !halted_.load() && target.has_value() && target != last_sent()};
+    // thread's view of last_target_, the one memory of what went out. A turn that a write woke
+    // sends even the same command (#170): the stream follows the controller's cadence and the
+    // pose keeps coming from the poll. The repeat needs the last send to have got its
+    // sync-write, so a target the Atom refuses is not sent on every write, and it gives way to
+    // a gripper that is due, which is served only in a turn that sends nothing (#174).
+    const bool changed{target.has_value() && target != last_sent()};
+    const bool repeat{woke_by_write && last_send_answered_ && !gripper_due()};
+    const bool new_target{replied && !halted_.load() && target.has_value() && (changed || repeat)};
 
     // The guard only runs after a reply: the arm's input is free then.
     const bool asked_temperatures{replied && serve_after_reply(new_target)};
@@ -637,9 +842,9 @@ void SerialArm::poll_loop()
     // A turn without a reply sends nothing, the command waits in command_ for the next. So
     // does a turn that asked the temperatures: the request took the time of the send.
     // halted_ again: a cut in this turn holds the target that was about to go.
-    if (new_target && !asked_temperatures && !halted_.load()) {
+    if (new_target && target.has_value() && !asked_temperatures && !halted_.load()) {
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
-      const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
+      const std::optional<positronic_protocol::Frame> frame{encode_command(*target)};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
         last_target_.writeFromNonRT(target);
         sent = true;
@@ -649,11 +854,7 @@ void SerialArm::poll_loop()
       }
     }
 
-    std::chrono::milliseconds period{POLL_PERIOD};
-    if (sent) {
-      period = timing_.moving_period;
-    }
-    std::this_thread::sleep_until(turn_start + period);
+    woke_by_write = wait_for_turn_end(turn_start + turn_period(sent));
   }
 }
 

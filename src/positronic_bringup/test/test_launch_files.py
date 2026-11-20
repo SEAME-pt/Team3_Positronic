@@ -78,8 +78,8 @@ def test_driver_starts_active_unless_asked():
 
 
 DRIVER_ARGUMENTS = [
-    'backend', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms', 'servo_temp_limit_c',
-    'tracking_error_deg', 'tracking_error_ms',
+    'backend', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms', 'pose_from_poll',
+    'servo_temp_limit_c', 'tracking_error_deg', 'tracking_error_ms',
 ]
 
 
