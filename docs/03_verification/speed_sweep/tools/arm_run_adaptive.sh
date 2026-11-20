@@ -134,7 +134,7 @@ case "$1" in
       sleep 15
       grep -m1 "send speed" "$DIR/launch.log"
       ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
-        /arm_controller/controller_state > "$DIR/bag.log" 2>&1 &
+        /arm_controller/controller_state /forward_position_controller/commands > "$DIR/bag.log" 2>&1 &
       echo $! > "$ROOT/bag.pid"
       timeout 5 ros2 control list_controllers
       exit 0
@@ -160,7 +160,7 @@ PY
     sleep 15
     grep -m1 "send speed" "$DIR/launch.log" || { echo "driver did not log its send speed: $DIR/launch.log" >&2; }
     ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
-      /arm_controller/controller_state > "$DIR/bag.log" 2>&1 &
+      /arm_controller/controller_state /forward_position_controller/commands > "$DIR/bag.log" 2>&1 &
     echo $! > "$ROOT/bag.pid"
     timeout 5 ros2 control list_controllers
     ;;
