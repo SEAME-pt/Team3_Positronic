@@ -53,6 +53,17 @@ namespace positronic_protocol
 /// (1 in every capture so far). Same search and `consumed` rules as decode_get_angles_reply().
 [[nodiscard]] Decoded<std::uint8_t> decode_ack(ByteView rx, CommandId command) noexcept;
 
+/// Finds the Atom's sync-write to the six servos in `rx`: `FF FF FE 34 83 29 07`, then the id
+/// and 7 data bytes of each servo, then a checksum, 56 bytes in all.
+///
+/// Not a reply to us: it is the Atom passing a send_angles on to the servo bus, the last frame
+/// it puts on the line after one (#150). Servo-bus framing, not ours: header FF FF, broadcast id
+/// FE, instruction 0x83, and a checksum, the inverted low byte of the sum from the id to the
+/// last data byte, which is checked. Recorded on 2026-11-13: 9886 frames, all with servos 1 to
+/// 6 and a valid checksum. `value` is the number of servos the frame writes (6). Same search
+/// and `consumed` rules as decode_get_angles_reply().
+[[nodiscard]] Decoded<std::uint8_t> decode_sync_write_echo(ByteView rx) noexcept;
+
 }  // namespace positronic_protocol
 
 #endif  // POSITRONIC_PROTOCOL__DECODE_HPP_

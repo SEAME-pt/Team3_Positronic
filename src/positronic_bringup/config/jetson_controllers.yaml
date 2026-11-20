@@ -8,11 +8,11 @@ controller_manager:
     # per update.
     #
     # The serial thread of SerialArm asks for a pose every 10 ms while no new command comes,
-    # and runs turns of moving_period_ms (50 by default, #32) while it sends them. At 30 Hz an
+    # and runs turns of moving_period_ms (33 by default, #150) while it sends them. At 30 Hz an
     # update finds a fresh pose when the arm stands still, and when it moves the newest command
-    # reaches the arm at most 1000 / moving_period_ms times a second, 20 with the default: the
-    # ones in between are replaced, not queued. A higher rate would only repeat poses and
-    # replace more commands.
+    # reaches the arm at most 1000 / moving_period_ms times a second, 30 with the default: one
+    # per update. A higher rate needs a shorter turn too, or the commands in between are
+    # replaced, not queued; the turn cannot go much below 27 ms with a get_angles in it.
     update_rate: 30
     # No parameters, on purpose (#45). With `joints` and `interfaces` unset it claims every
     # state interface and publishes them all on /dynamic_joint_states, the `driver` gpio

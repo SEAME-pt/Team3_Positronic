@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cinttypes>
 #include <cstddef>
 #include <exception>
 #include <iterator>
@@ -257,6 +258,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
+  echo_report_.reset();
   tracking_ = TrackingCheck{TrackingLimits{
       config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
@@ -440,6 +442,7 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // pose, and the silence is the cause to report, not the lag that follows it.
   if (active) {
     check_tracking();
+    report_echo_timeouts();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -447,6 +450,21 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // as well, because the arm is already cut and must not be driven again before a configure.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
   return temperatures;
+}
+
+void RobotSystem::report_echo_timeouts()
+{
+  const std::optional<std::uint64_t> fresh{
+    echo_report_.due(arm_->echo_timeouts(), EchoTimeoutReport::Clock::now())};
+  if (!fresh.has_value()) {
+    return;
+  }
+  RCLCPP_WARN(
+    get_logger(),
+    "%" PRIu64
+    " send_angles got no sync-write from the arm since the last report: each of their "
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    fresh.value());
 }
 
 bool RobotSystem::temperatures_allow_activation()

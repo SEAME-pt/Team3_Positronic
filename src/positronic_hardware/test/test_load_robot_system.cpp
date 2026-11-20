@@ -93,6 +93,11 @@
 //   wire for longer than tracking_error_ms latches fault 2 while active. On the pseudo-terminal
 //   arm, which answers the same pose whatever it is told: 2 deg away is never a fault, 9 deg for
 //   300 ms is, 9 deg for 100 ms and then back is not. A bad parameter value is rejected.
+// Follow-up prompt (#150):
+//   The settle is only the wait of the overheat cut now: a settle longer than the period loads.
+// Follow-up prompt (#150):
+//   echo_timeout_ms replaces send_settle_ms as the parameter: the old name is refused, a value
+//   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -765,7 +770,7 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
   load(urdf_with(
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
-                         param("moving_period_ms", "40") + param("send_settle_ms", "25") +
+                         param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
                          param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
@@ -788,8 +793,9 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"moving_period_ms", "10"},         // below the arm's own busy time
     {"moving_period_ms", "150"},        // too close to the 200 ms link timeout (#35)
     {"moving_period_ms", "66.5"},       // whole ms only
-    {"send_settle_ms", "250"},          // longer than the #35 timeout
-    {"send_settle_ms", "slow"},         // not a number
+    {"echo_timeout_ms", "100"},         // two lost replies after it would pass the #35 timeout
+    {"echo_timeout_ms", "slow"},        // not a number
+    {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
     {"servo_temp_limit_c", "61"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
@@ -807,15 +813,16 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
   }
 }
 
-TEST_F(LoadRobotSystem, InitRejectsASettleThatFillsTheTurn)
+TEST_F(LoadRobotSystem, InitAcceptsAnEchoTimeoutLongerThanThePeriod)
 {
-  // Both in range on their own, but the settle leaves no room for the reply in the turn.
+  // #150: the wait for the sync-write only counts when the Atom is late, so it does not have to
+  // fit in the turn.
   load(urdf_with(
     all_good_joints(),
-    std::string{FAKE_BACKEND} + param("moving_period_ms", "30") + param("send_settle_ms", "30")));
+    std::string{FAKE_BACKEND} + param("moving_period_ms", "25") + param("echo_timeout_ms", "60")));
 
-  EXPECT_FALSE(loaded_);
-  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  EXPECT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
 TEST_F(LoadRobotSystem, PositionsAreUnknownBeforeTheFirstRead)

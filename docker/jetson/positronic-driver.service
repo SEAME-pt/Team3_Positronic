@@ -26,6 +26,25 @@ StartLimitBurst=5
 Type=simple
 # Remove a container left behind by a power cut ("-" = don't fail if there is none).
 ExecStartPre=-/bin/sh -c '/usr/bin/docker rm -f positronic-driver 2>/dev/null || true'
+# Wi-Fi power saving off (#147). With it on, wlan0 has 0.2-0.4 s gaps that the safety
+# supervisor (#45) reads as a lost link. Ubuntu's /etc/NetworkManager/conf.d/
+# default-wifi-powersave-on.conf turns it on for every profile, and `iw` alone is undone at the
+# next reconnect. So: powersave 2 (off) on the profile active on wlan0, which NetworkManager
+# keeps across reconnects and reboots, then `iw` for the link that is up now.
+# "-": no Wi-Fi (cable only, wlan0 down) must not keep the driver from starting. The step then
+# shows as failed in `systemctl status`, with the reason in `journalctl -u positronic-driver`.
+# A network joined later without restarting this unit keeps Ubuntu's default (on).
+ExecStartPre=-/bin/sh -c '\
+  c=$$(/usr/bin/nmcli -g GENERAL.CONNECTION device show wlan0 2>/dev/null); \
+  if [ -z "$$c" ] || [ "$$c" = "--" ]; then \
+    echo "wlan0 has no active connection, Wi-Fi power saving not changed"; exit 1; fi; \
+  failed=0; \
+  if ! /usr/bin/nmcli connection modify "$$c" 802-11-wireless.powersave 2; then \
+    echo "profile $$c not changed: power saving comes back at the next reconnect"; failed=1; fi; \
+  if ! /sbin/iw dev wlan0 set power_save off; then \
+    echo "iw failed: power saving still on for the link that is up"; failed=1; fi; \
+  if [ "$$failed" = "0" ]; then echo "Wi-Fi power saving off on wlan0 (profile $$c)"; fi; \
+  exit $$failed'
 # Runs in the foreground (no -d) so systemd supervises the real process.
 # --rm and no --restart: systemd is the only supervisor.
 # --init: forwards SIGTERM to the process, so `docker stop` ends it at once.
