@@ -1272,6 +1272,36 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
   ::close(controller_);
 }
 
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review H1: on a clean exit the controller manager takes the component from ACTIVE
+//   straight to FINALIZED; check that a stop reaches the arm on the way.
+
+TEST_F(LoadRobotSystem, ShutdownFromActiveSendsAStop)
+{
+  // A clean exit (Ctrl+C, launch stopped): the controller manager's pre-shutdown callback takes
+  // every component to FINALIZED. From ACTIVE, ros2_control runs on_deactivate (which sends the
+  // stop and waits for its ack) and then on_shutdown (which closes the port). Our safety on exit
+  // depends on that order in code we do not own: this test locks it in.
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  const std::size_t stops_before{arm->received_requests(0x29)};
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED,
+      hardware_interface::lifecycle_state_names::FINALIZED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED);
+  // halt() returns only once the arm acknowledged the stop, so it has already arrived.
+  EXPECT_GT(arm->received_requests(0x29), stops_before) << "No stop reached the arm on shutdown";
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
 TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
 {
   // #35: without its fault interface the supervisor would read nothing, so the driver refuses

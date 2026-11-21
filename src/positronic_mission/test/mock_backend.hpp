@@ -25,6 +25,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <thread>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "positronic_mission/motion_backend.hpp"
@@ -39,13 +40,25 @@ public:
   // Knobs a test can change between goals
   std::atomic<int> duration_ms{1000};
   std::atomic<MotionOutcome> outcome{MotionOutcome::OK};
+  std::atomic<bool> ready_result{true};
 
   // Counters a test can check
   std::atomic<int> calls{0};
   std::atomic<int> stops{0};
 
-  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & /* pose */) override
+  // The pose of the last plan_and_execute call
+  geometry_msgs::msg::PoseStamped last_pose()
   {
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    return last_pose_;
+  }
+
+  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) override
+  {
+    {
+      std::lock_guard<std::mutex> lock(pose_mutex_);
+      last_pose_ = pose;
+    }
     ++calls;
     if (stop_requested_) {
       return MotionOutcome::PREEMPTED;
@@ -74,10 +87,12 @@ public:
 
   bool ready() override
   {
-    return true;
+    return ready_result.load();
   }
 
 private:
+  std::mutex pose_mutex_;
+  geometry_msgs::msg::PoseStamped last_pose_;
   std::atomic<bool> stop_requested_{false};
 };
 
