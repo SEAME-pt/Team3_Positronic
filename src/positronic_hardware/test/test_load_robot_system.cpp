@@ -1603,11 +1603,9 @@ TEST_F(LoadRobotSystem, InitAcceptsTheGripperAsASeventhJoint)
 
 TEST_F(LoadRobotSystem, InitRejectsAGripperWithSwappedLimits)
 {
-  load(
-    urdf_with_gripper(
-      replaced(
-        read_gripper_description(), GRIPPER_LIMIT,
-        R"(<limit effort="10.0" lower="0.15" upper="-0.74" velocity="1.0"/>)")));
+  load(urdf_with_gripper(replaced(
+    read_gripper_description(), GRIPPER_LIMIT,
+    R"(<limit effort="10.0" lower="0.15" upper="-0.74" velocity="1.0"/>)")));
   EXPECT_FALSE(loaded_);
 }
 
@@ -1627,8 +1625,8 @@ TEST_F(LoadRobotSystem, GripperTargetsReachTheFakeArm)
 {
   load(urdf_with_gripper());
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
-  for (const double target :
-    {GRIPPER_CLOSED, (GRIPPER_CLOSED + GRIPPER_OPEN) / 2.0, GRIPPER_OPEN})
+  for (const double target : {GRIPPER_CLOSED, (GRIPPER_CLOSED + GRIPPER_OPEN) / 2.0,
+      GRIPPER_OPEN})
   {
     ASSERT_TRUE(command(GRIPPER, target));
     ASSERT_EQ(write_once(), hardware_interface::return_type::OK) << target;
@@ -1681,10 +1679,9 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
   ASSERT_GE(controller, 0);
   auto arm{std::make_unique<ReplyingArm>(controller)};
 
-  load(
-    urdf_with(
-      all_good_joints() + good_joint(GRIPPER),
-      param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
   ASSERT_TRUE(loaded_);
   EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);

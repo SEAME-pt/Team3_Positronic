@@ -125,9 +125,10 @@ TEST(RecordedGripper, CaptureLoads)
     GTEST_SKIP() << "no frames_gripper_*.txt in " << TEST_DATA_DIR;
   }
   for (const auto & target : TARGETS) {
-    const bool found{std::any_of(
-        capture().begin(), capture().end(),
-        [&target](const Section & section) {return section.name == target.section;})};
+    const bool found{
+      std::any_of(capture().begin(), capture().end(), [&target](const Section & section) {
+          return section.name == target.section;
+      })};
     EXPECT_TRUE(found) << target.section;
   }
   EXPECT_TRUE(std::any_of(capture().begin(), capture().end(), is_gripper_read));

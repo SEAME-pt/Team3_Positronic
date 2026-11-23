@@ -267,6 +267,7 @@ private:
   /// it asked: the turn sends nothing, the target goes out next turn.
   bool watch_temperatures(bool new_target);
 
+  bool serve_after_reply(bool new_target);
   void gripper_turn();
   std::optional<std::uint8_t> ask_gripper();
 

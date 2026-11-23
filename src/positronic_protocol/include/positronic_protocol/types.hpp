@@ -63,7 +63,7 @@ enum class CommandId : std::uint8_t
   STOP = 0x29,                ///< Stop the current motion.
   GET_GRIPPER_VALUE = 0x65,
   SET_GRIPPER_VALUE = 0x67,
-  GET_SERVO_TEMPS = 0xE5,     ///< Read the six servo temperatures, degC.
+  GET_SERVO_TEMPS = 0xE5,  ///< Read the six servo temperatures, degC.
 };
 
 /// Joint angle in the wire unit: 0.01 deg, range +-327.67 deg.

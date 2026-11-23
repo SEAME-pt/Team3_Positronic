@@ -1419,9 +1419,11 @@ TEST(SerialArmGripper, TheLinkNeverTimesOutWhileTheGripperIsServed)
   EXPECT_GT(std::count_if(frames.begin(), frames.end(), is_gripper_set), 0);
   EXPECT_GT(
     std::count_if(
-      frames.begin(), frames.end(), [](const auto & frame) {
+      frames.begin(), frames.end(),
+      [](const auto & frame) {
         return request_id(frame) == GET_GRIPPER_ID;
-      }), 0);
+      }),
+    0);
   EXPECT_FALSE(arm.read_gripper().has_value());
 }
 

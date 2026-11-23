@@ -510,6 +510,15 @@ bool SerialArm::watch_temperatures(bool new_target)
   return true;
 }
 
+bool SerialArm::serve_after_reply(bool new_target)
+{
+  const bool asked_temperatures{watch_temperatures(new_target)};
+  if (has_gripper_ && !new_target && !asked_temperatures && request_.load() == Pending::NONE) {
+    gripper_turn();
+  }
+  return asked_temperatures;
+}
+
 void SerialArm::gripper_turn()
 {
   const std::optional<std::uint8_t> target{*gripper_command_.readFromRT()};
@@ -622,14 +631,7 @@ void SerialArm::poll_loop()
       replied && !halted_.load() && target.has_value() && target != last_sent()};
 
     // The guard only runs after a reply: the arm's input is free then.
-    const bool asked_temperatures{replied && watch_temperatures(new_target)};
-
-    if (
-      has_gripper_ && replied && !new_target && !asked_temperatures &&
-      request_.load() == Pending::NONE)
-    {
-      gripper_turn();
-    }
+    const bool asked_temperatures{replied && serve_after_reply(new_target)};
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
     // A turn without a reply sends nothing, the command waits in command_ for the next. So

@@ -131,8 +131,7 @@ void log_fault(
 std::uint8_t to_gripper_value(double radians, double closed, double open)
 {
   const double fraction{std::clamp((radians - closed) / (open - closed), 0.0, 1.0)};
-  const double value{
-    GRIPPER_CLOSED_VALUE + fraction * (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  const double value{GRIPPER_CLOSED_VALUE + fraction * (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
   return static_cast<std::uint8_t>(std::lround(value));
 }
 
@@ -636,8 +635,7 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
   {
     arm_->request_halt();
     RCLCPP_ERROR(
-      get_logger(),
-      "Command refused, arm halted: joint '%s' = %.4f rad, outside [%.4f, %.4f] rad.",
+      get_logger(), "Command refused, arm halted: joint '%s' = %.4f rad, outside [%.4f, %.4f] rad.",
       info_.joints.at(NUM_JOINTS).name.c_str(), gripper_target, gripper_closed_, gripper_open_);
     return return_type::ERROR;
   }
@@ -728,8 +726,7 @@ void RobotSystem::update_states(double dt)
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);
     std::ignore = set_state(handles_.at(i).velocity, velocities.at(i), false);
   }
-  const std::optional<std::uint8_t> gripper{
-    has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  const std::optional<std::uint8_t> gripper{has_gripper_ ? arm_->read_gripper() : std::nullopt};
   if (gripper.has_value()) {
     const double position{to_gripper_radians(gripper.value(), gripper_closed_, gripper_open_)};
     const double velocity{
