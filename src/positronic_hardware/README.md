@@ -52,6 +52,10 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
 - `read()` copies the newest pose out of the buffer and runs the velocity filter. `write()`
   checks the six commands against the joint limits and copies them into the buffer. Neither
   does serial I/O, allocates or throws; the only log is the one line of a refused command.
+  Two short locks sit on the path of `write()`: the command buffer's (`RealtimeBuffer`, as before
+  #170) and, with `pose_from_poll`, `wake_mutex_`, which `write()` and a halt take for one store
+  before they wake the serial thread. The serial thread holds it as briefly, never while it reads
+  the line.
 - Without the pose from the poll, a target equal to the last one sent is not sent again. With
   it, a write that wakes the thread sends even an unchanged target, so the pose keeps coming
   from the poll, unless the last send got no sync-write or the gripper is due. A target with a
