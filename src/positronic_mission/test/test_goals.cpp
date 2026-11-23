@@ -46,7 +46,7 @@ TEST_F(MissionNodeTest, GoalSucceedsWhenIdle)
   }))
     << "No feedback received";
   EXPECT_TRUE(wait_for_state(State::IDLE));
-  EXPECT_EQ(mock_->calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 1);
 }
 
 TEST_F(MissionNodeTest, TwoGoalsInARowBothSucceed)
@@ -59,7 +59,7 @@ TEST_F(MissionNodeTest, TwoGoalsInARowBothSucceed)
     EXPECT_EQ(result->result->code, GoToPose::Result::OK);
     ASSERT_TRUE(wait_for_state(State::IDLE));
   }
-  EXPECT_EQ(mock_->calls, 2);
+  EXPECT_EQ(mock_->pose_calls, 2);
 }
 
 // ======================= Rejection =======================
@@ -70,7 +70,7 @@ TEST_F(MissionNodeTest, RejectsInvalidFrame)
   pose.header.frame_id = "world";
 
   EXPECT_EQ(send_goal(pose), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
   EXPECT_TRUE(wait_for_state(State::IDLE));
 }
 
@@ -88,7 +88,7 @@ TEST_F(MissionNodeTest, RejectsGoalWhileMoving)
   auto result = wait_result(first);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->result->code, GoToPose::Result::OK);
-  EXPECT_EQ(mock_->calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 1);
 }
 
 TEST_F(MissionNodeTest, RejectsGoalWhenInactive)
@@ -96,7 +96,7 @@ TEST_F(MissionNodeTest, RejectsGoalWhenInactive)
   ASSERT_EQ(node_->deactivate().id(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
 
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
 }
 
 // ======================= Cancellation =======================
@@ -174,7 +174,7 @@ TEST_F(MissionNodeTest, EStopWhileIdleBlocksGoalsUntilReset)
   ASSERT_TRUE(wait_for_state(State::STOPPED));
 
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
 
   auto reset = call_reset();
   ASSERT_NE(reset, nullptr);

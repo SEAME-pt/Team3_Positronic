@@ -19,17 +19,13 @@
 // THE SOFTWARE.
 
 #include "positronic_mission/moveit_backend.hpp"
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/dev
 #include <chrono>
 #include <memory>
 #include <thread>
 
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/utils/moveit_error_code.hpp>
-#include <ratio>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/node.hpp>
 #include <rclcpp/node_options.hpp>
@@ -54,14 +50,9 @@ MoveitBackend::MoveitBackend(std::string group_name)
   spin_thread_ = std::thread([this]() {
         executor_->spin();
   });
-<<<<<<< HEAD
-  while (!executor_->is_spinning()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-=======
   // Wait until spinning, so a cancel from the destructor can’t be lost
   while (!executor_->is_spinning() && rclcpp::ok()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
->>>>>>> origin/dev
   }
 }
 
@@ -115,7 +106,7 @@ MotionOutcome MoveitBackend::plan_and_execute(const geometry_msgs::msg::PoseStam
 }
 
 MotionOutcome MoveitBackend::plan_and_execute_cartesian(
-    const std::vector<geometry_msgs::msg::Pose> & waypoints)
+  const std::vector<geometry_msgs::msg::Pose> & waypoints)
 {
   if (stop_requested_) {
     return MotionOutcome::PREEMPTED;
@@ -125,22 +116,17 @@ MotionOutcome MoveitBackend::plan_and_execute_cartesian(
     return MotionOutcome::PLANNING_FAILED;
   }
 
-  /*
-    double computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double eef_step,
-        moveit_msgs::msg::RobotTrajectory& trajectory, bool avoid_collisions = true,
-        moveit_msgs::msg::MoveItErrorCodes* error_code = nullptr);
-  */
-
   moveit_msgs::msg::MoveItErrorCodes error_code;
   moveit_msgs::msg::RobotTrajectory trajectory;
-  double eef_step = 0.01;
-  bool avoid_collisions = true;
+  const bool avoid_collisions = true;
 
-  if (move_group_->computeCartesianPath(waypoints, eef_step, trajectory, avoid_collisions, &error_code) < 0.999f) {
+  if (move_group_->computeCartesianPath(
+      waypoints, EEF_STEP, trajectory, avoid_collisions, &error_code) < 0.999)
+  {
     return MotionOutcome::PLANNING_FAILED;
   }
   if (error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
-    return (MotionOutcome::PLANNING_FAILED);
+    return MotionOutcome::PLANNING_FAILED;
   }
 
   if (stop_requested_) {

@@ -98,7 +98,6 @@ public:
 private:
   void reset_ptrs();
   void heart_beat();
-  // bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal);
   rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & goal_handle);

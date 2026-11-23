@@ -181,7 +181,7 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
 
   // Get the current State
   // Check if it's not ERROR. Then check if it didn't change from the last check
-  // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
+  // If it changed, retry with new value. If it didn't, set state_ = INACTIVE and exits loop
   // Using _weak because it can be faster on loops.
   // Don't use it for single checks since it can spuriously fail!
   State state_now = state_.load();
@@ -219,20 +219,20 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
 }
 
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_error(
-    const rclcpp_lifecycle::State & /* state */)
+  const rclcpp_lifecycle::State & /* state */)
 {
-    RCLCPP_INFO(get_logger(), "IN on_error");
+  RCLCPP_INFO(get_logger(), "IN on_error");
 
-    state_ = State::INACTIVE;
-    if (backend_) {
-      backend_->stop();
-    }
-    if (exec_thread_.joinable()) {
-      exec_thread_.join();
-    }
-    reset_ptrs();
+  state_ = State::INACTIVE;
+  if (backend_) {
+    backend_->stop();
+  }
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
+  reset_ptrs();
 
-    return CallbackReturn::SUCCESS;
+  return CallbackReturn::SUCCESS;
 }
 
 void positronic_mission::MissionNode::heart_beat()
@@ -250,34 +250,23 @@ void positronic_mission::MissionNode::heart_beat()
 rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
   const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
 {
+    if (goal == nullptr) {
+        RCLCPP_WARN(get_logger(), "Rejected, No goal");
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+
   if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // Here is where I check the flag
-  if (goal->mode != GoToPose::Goal::MODE_CARTESIAN && goal->mode != GoToPose::Goal::MODE_POSE) {
-      RCLCPP_WARN(get_logger(), "Rejected, invalid goal flag");
-      return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  // If func() == GoalResponse::REJECT
-  // Inside func, check mode
-  // Send to validade_pose or to validade_waypoints
-  // Return REJECT or OK
-
-  const std::string reason = validate_input(goal, goal->mode);
+  // Decide if a pose or path is sent
+  // Parse them and return an error string if there is any
+  const std::string reason = validate_input(goal);
   if (!reason.empty()) {
     RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
-
-  // // This is for flag == 0. No need to change
-  // const std::string reason = validate_pose(goal->target_pose);
-  // if (!reason.empty()) {
-  //   RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
-  //   return rclcpp_action::GoalResponse::REJECT;
-  // }
 
   // If state_ == expected, set state_ to State::MOVING
   // Else, set expected to state_
@@ -330,7 +319,17 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
   goal_handle->publish_feedback(feedback);
 
   // Blocking call made to Moveit
-  const MotionOutcome outcome = backend_->plan_and_execute(goal->target_pose);
+  MotionOutcome outcome{MotionOutcome::PLANNING_FAILED};
+  switch(goal->mode) {
+    case (GoToPose::Goal::MODE_POSE):
+      outcome = backend_->plan_and_execute(goal->target_pose);
+      break;
+    case (GoToPose::Goal::MODE_CARTESIAN):
+      outcome = backend_->plan_and_execute_cartesian(goal->cartesian_path);
+      break;
+    default:
+      RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
+  }
 
   if (!rclcpp::ok()) {
     // Protection for the lower checks. If mission_node is shutdown

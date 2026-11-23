@@ -26,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "positronic_mission/motion_backend.hpp"
 
@@ -41,42 +42,21 @@ public:
   std::atomic<MotionOutcome> outcome{MotionOutcome::OK};
 
   // Counters a test can check
-  std::atomic<int> calls{0};
+  std::atomic<int> pose_calls{0};
+  std::atomic<int> cartesian_calls{0};
   std::atomic<int> stops{0};
 
   MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & /* pose */) override
   {
-    ++calls;
-    if (stop_requested_) {
-      return MotionOutcome::PREEMPTED;
-    }
-    const auto end =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms.load());
-    while (std::chrono::steady_clock::now() < end) {
-      if (stop_requested_) {
-        return MotionOutcome::PREEMPTED;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return outcome.load();
+    ++pose_calls;
+    return mock_execute();
   }
 
   MotionOutcome plan_and_execute_cartesian(
-      const std::vector<geometry_msgs::msg::Pose> & /* waypoints */) override
+    const std::vector<geometry_msgs::msg::Pose> & /* waypoints */) override
   {
-      ++calls;
-      if (stop_requested_) {
-        return MotionOutcome::PREEMPTED;
-      }
-      const auto end =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms.load());
-      while (std::chrono::steady_clock::now() < end) {
-        if (stop_requested_) {
-          return MotionOutcome::PREEMPTED;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      return outcome.load();
+    ++cartesian_calls;
+    return mock_execute();
   }
 
   void stop() override
@@ -97,8 +77,23 @@ public:
 
 private:
   std::atomic<bool> stop_requested_{false};
-};
 
+  MotionOutcome mock_execute()
+  {
+    if (stop_requested_) {
+      return MotionOutcome::PREEMPTED;
+    }
+    const auto end =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms.load());
+    while (std::chrono::steady_clock::now() < end) {
+      if (stop_requested_) {
+        return MotionOutcome::PREEMPTED;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return outcome.load();
+  }
+};
 }  // namespace positronic_mission
 
 #endif  // MOCK_BACKEND_HPP_

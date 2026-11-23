@@ -21,9 +21,8 @@
 #ifndef POSITRONIC_MISSION__MOTION_BACKEND_HPP_
 #define POSITRONIC_MISSION__MOTION_BACKEND_HPP_
 
-#include <atomic>
-#include <chrono>
-#include <thread>
+#include <cstdint>
+#include <vector>
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
@@ -38,8 +37,10 @@ enum class MotionOutcome : std::uint8_t
   PREEMPTED
 };
 
-// What the mission node needs from "something that moves the arm".
-// The MoveIt version will implement the same three functions later.
+constexpr double EEF_STEP = 0.01;
+
+// Interface to talk with moveit
+// Same Interface is used by moveit backend and mock backend
 class MotionBackend
 {
 public:
@@ -54,7 +55,7 @@ public:
   virtual MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) = 0;
 
   virtual MotionOutcome plan_and_execute_cartesian(
-      const std::vector<geometry_msgs::msg::Pose> & waypoints) = 0;
+    const std::vector<geometry_msgs::msg::Pose> & waypoints) = 0;
 
   // Must be safe to call from any thread. Makes a running
   // plan_and_execute return PREEMPTED.

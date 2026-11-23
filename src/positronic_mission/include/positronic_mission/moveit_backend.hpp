@@ -25,6 +25,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "moveit_msgs/action/move_group.hpp"
 #include "positronic_mission/motion_backend.hpp"
@@ -55,7 +56,7 @@ public:
 
   // Blocking. Called from the execute thread. Execute a Cartesian Path.
   MotionOutcome plan_and_execute_cartesian(
-      const std::vector<geometry_msgs::msg::Pose> & waypoints) override;
+    const std::vector<geometry_msgs::msg::Pose> & waypoints) override;
 
   // Must be safe to call from any thread. Makes a running
   // plan_and_execute return PREEMPTED.
