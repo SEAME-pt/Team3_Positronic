@@ -121,8 +121,9 @@
 //   this change: nothing
 //   here reads it. The at-rest request test goes too: ReadsTheTemperaturesWhileIdle covers it.
 //   A write that lands during a turn's get_angles counts for that turn: at rest, after a
-//   gripper read, the repeat resumes at the next write (get_angles answered in 7 ms and the
-//   gripper answered, as on the arm), no gap between sends over 120 ms.
+//   gripper read, the repeat goes on. Make the check need no clock: a get_angles of 40 ms,
+//   longer than the write period, so every write after a gripper read lands during one, and
+//   count the sends after the first gripper read (none without the fix).
 //   The last-target test waits for last_target() instead of reading it the moment the frame is
 //   on the wire: the thread stores it after write() returns. The test whose only readings are
 //   the requests gets a stale timeout over max_age, as on the arm, and the defaults are pinned.
@@ -1951,18 +1952,20 @@ TEST(SerialArmPollPose, AtRestTheGripperTakesTheTurnOfTheRepeatedSend)
   EXPECT_GE(send_angles_frames(during).size(), 5U);
 }
 
-TEST(SerialArmPollPose, AfterAGripperReadTheRepeatResumesAtTheNextWrite)
+TEST(SerialArmPollPose, AWriteDuringAGetAnglesCountsForItsTurn)
 {
   // At rest the controller writes the same pose every 33 ms and a due gripper takes the turn of
-  // a repeat; the turns after it ask get_angles, 7 ms on the arm. A write that lands during one
-  // counts, so the repeat resumes at the next write. Counted only when it ended the wait, it
-  // had to land in the ~3 ms between get_angles: on the arm the sends paused 48 to 208 ms after
-  // a gripper read (23 Nov 2026).
+  // a repeat; the turn after it starts with a get_angles. Here a get_angles takes 40 ms, longer
+  // than the write period, so after a gripper read every write lands during one. Counted only
+  // when it ended the thread's wait, none did, and the sends stopped at the first gripper read;
+  // counted for its turn whenever it lands, the repeat goes on. No clock in the check: 0 sends
+  // against about 20. (On the arm a get_angles takes 7 ms, and the sends paused 48 to 208 ms
+  // after each gripper read, 23 Nov 2026.)
   auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
   ReplayTransport & port{*transport};
   port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
   port.set_quiet_after_send(true);
-  port.set_angles_delay(std::chrono::milliseconds{7});
+  port.set_angles_delay(std::chrono::milliseconds{40});
   port.set_answer_gripper(true);
   SerialArm arm{std::move(transport), POLL_TIMING, TemperatureGuard{}, true};
   static_cast<void>(wait_for_reply(arm));
@@ -1973,22 +1976,20 @@ TEST(SerialArmPollPose, AfterAGripperReadTheRepeatResumesAtTheNextWrite)
     std::this_thread::sleep_for(std::chrono::milliseconds{33});
   }
 
+  // The sends after the first gripper read that comes after a send.
   const auto frames{port.written()};
-  const auto times{port.written_at()};
-  std::vector<std::chrono::steady_clock::time_point> sends{};
-  for (std::size_t i{0}; i < frames.size() && i < times.size(); ++i) {
-    if (frames.at(i).size() == 18) {
-      sends.push_back(times.at(i));
-    }
-  }
-  ASSERT_GE(sends.size(), 20U);
-  EXPECT_GE(frames_with_id(between_sends(frames), GET_GRIPPER_ID).size(), 3U);
-  // The longest gap is one write given to the gripper, a get_angles and the next write: about
-  // 85 ms. 120 ms leaves 35 ms for a loaded machine. Without the fix about half the gaps after a
-  // gripper read pass it, and 1.5 s holds about 15 of them.
-  for (std::size_t i{1}; i < sends.size(); ++i) {
-    EXPECT_LT(sends.at(i) - sends.at(i - 1), std::chrono::milliseconds{120}) << i;
-  }
+  const auto first_send{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
+        return frame.size() == 18;
+  })};
+  ASSERT_NE(first_send, frames.end());
+  const auto first_read{std::find_if(first_send, frames.end(), [](const auto & frame) {
+        return request_id(frame) == GET_GRIPPER_ID;
+  })};
+  ASSERT_NE(first_read, frames.end());
+  const auto sends_after{std::count_if(first_read, frames.end(), [](const auto & frame) {
+        return frame.size() == 18;
+  })};
+  EXPECT_GE(sends_after, 10);
 }
 
 TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
