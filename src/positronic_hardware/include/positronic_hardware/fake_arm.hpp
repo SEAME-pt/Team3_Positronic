@@ -21,6 +21,8 @@
 #ifndef POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 #define POSITRONIC_HARDWARE__FAKE_ARM_HPP_
 
+#include <optional>
+
 #include "positronic_hardware/arm_backend.hpp"
 
 namespace positronic_hardware
@@ -49,6 +51,7 @@ public:
   void write_angles(const JointPositions & angles) override
   {
     angles_ = angles;
+    target_ = angles;
   }
 
   void write_gripper(std::uint8_t value) override
@@ -64,11 +67,15 @@ public:
   /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
   [[nodiscard]] bool halt() override
   {
+    target_.reset();
     return true;
   }
 
   /// Nothing to interrupt here either.
-  void request_halt() override {}
+  void request_halt() override
+  {
+    target_.reset();
+  }
 
   /// The fake arm has no servos to power.
   [[nodiscard]] bool power_on() override
@@ -106,8 +113,21 @@ public:
     return false;
   }
 
+  /// No serial line, so no send waits for a sync-write.
+  [[nodiscard]] std::uint64_t echo_timeouts() const override
+  {
+    return 0;
+  }
+
+  /// The last write_angles(), gone with a halt, as the serial backend's last target.
+  [[nodiscard]] std::optional<JointPositions> last_target() const override
+  {
+    return target_;
+  }
+
 private:
   JointPositions angles_{START_POSE};
+  std::optional<JointPositions> target_;
   std::uint8_t gripper_{GRIPPER_OPEN_VALUE};
 };
 

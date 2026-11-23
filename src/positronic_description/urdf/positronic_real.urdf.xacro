@@ -1,17 +1,23 @@
 <?xml version="1.0"?>
 <!--
-  Arm model for the real myCobot 280 on the Jetson (#23). Includes the plain URDF of this
-  package and adds the <ros2_control> tag that loads our hardware plugin.
+  Arm model for the real myCobot 280 on the Jetson (#23).
+    Includes the gripper and camera model (#97) URDF of this package
+    and adds a <ros2_control> for the arm joints and the gripper.
 
   Differs from positronic_gazebo.urdf.xacro on purpose:
   - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
-  - each joint has position AND velocity state interfaces, which the plugin requires;
-  - each joint has exactly one command interface, position, which the plugin requires (#32);
+  - each arm joint has position AND velocity state interfaces, which the plugin requires;
+  - each arm joint has exactly one command interface, position, which the plugin requires (#32);
   - ros2_control's joint limiter is off on every joint (#34), see the macro below.
 
   The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
-  moving_period_ms, send_settle_ms, servo_temp_limit_c.
+  moving_period_ms, echo_timeout_ms, servo_temp_limit_c, tracking_error_deg, tracking_error_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
+
+  The defaults are the driver's, in one place: HardwareConfig and SerialTiming in
+  positronic_hardware, with the reason for each value (table in its README). An argument left
+  unset writes no <param>, so the driver keeps its own default; the INFO line of on_init prints
+  the values in use. A default here as well would win over the driver's and hide a change there.
 
   The joints are listed in protocol order, J1 (base) first, J6 (flange) last: the plugin maps
   the six angles of get_angles to the joints in this order.
@@ -19,25 +25,34 @@
 <robot name="positronic" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- "serial" talks to the arm; "fake" stands still, to try the launch without the arm. -->
-  <xacro:arg name="backend" default="serial"/>
-  <!-- The arm's UART on the Jetson, at the rate of the firmware. The plugin accepts only
-       115200 or 1000000 baud. -->
-  <xacro:arg name="port" default="/dev/ttyTHS1"/>
-  <xacro:arg name="baud" default="1000000"/>
-  <!-- Timings of the serial thread when it sends commands (#32), in ms: the length of a turn
-       that sends, and the pause after a send before the next get_angles. Measured on the arm:
-       it stalls when asked within 25 ms of a send_angles, 30 ms gave 0 stalls. -->
-  <xacro:arg name="moving_period_ms" default="50"/>
-  <xacro:arg name="send_settle_ms" default="30"/>
+  <xacro:arg name="backend" default=""/>
+  <!-- The arm's UART and its rate (115200 or 1000000 baud). -->
+  <xacro:arg name="port" default=""/>
+  <xacro:arg name="baud" default=""/>
+  <!-- Timings of the serial thread, in ms (#32, #150): the length of a turn that sends, and
+       the longest wait for the Atom's sync-write after a send. -->
+  <xacro:arg name="moving_period_ms" default=""/>
+  <xacro:arg name="echo_timeout_ms" default=""/>
   <!-- A servo at or above this temperature (degC) stops the arm and powers its servos off.
-       The plugin accepts 30 to 60: lower only, to test the cut without heating anything. -->
-  <xacro:arg name="servo_temp_limit_c" default="60"/>
+       Lower only, to test the cut without heating anything. -->
+  <xacro:arg name="servo_temp_limit_c" default=""/>
+  <!-- A joint further than tracking_error_deg from its target for longer than tracking_error_ms
+       is a fault (#103): the arm did not follow the command. Wider than the controller's 5 deg
+       trajectory tolerance on purpose, so the controller aborts first. -->
+  <xacro:arg name="tracking_error_deg" default=""/>
+  <xacro:arg name="tracking_error_ms" default=""/>
+
+  <!-- One driver <param>, written only when its argument is set. -->
+  <xacro:macro name="driver_param" params="name">
+    <xacro:if value="${xacro.arg(name) != ''}">
+      <param name="${name}">${xacro.arg(name)}</param>
+    </xacro:if>
+  </xacro:macro>
 
   <!-- Links, joints and meshes of the arm. -->
   <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
-
   <xacro:macro name="real_arm_joint" params="name">
     <joint name="${name}">
       <limits enable="false"/>
@@ -50,12 +65,14 @@
   <ros2_control name="positronic_arm" type="system">
     <hardware>
       <plugin>positronic_hardware/RobotSystem</plugin>
-      <param name="backend">$(arg backend)</param>
-      <param name="port">$(arg port)</param>
-      <param name="baud">$(arg baud)</param>
-      <param name="moving_period_ms">$(arg moving_period_ms)</param>
-      <param name="send_settle_ms">$(arg send_settle_ms)</param>
-      <param name="servo_temp_limit_c">$(arg servo_temp_limit_c)</param>
+      <xacro:driver_param name="backend"/>
+      <xacro:driver_param name="port"/>
+      <xacro:driver_param name="baud"/>
+      <xacro:driver_param name="moving_period_ms"/>
+      <xacro:driver_param name="echo_timeout_ms"/>
+      <xacro:driver_param name="servo_temp_limit_c"/>
+      <xacro:driver_param name="tracking_error_deg"/>
+      <xacro:driver_param name="tracking_error_ms"/>
     </hardware>
     <xacro:real_arm_joint name="joint2_to_joint1"/>
     <xacro:real_arm_joint name="joint3_to_joint2"/>
@@ -70,5 +87,4 @@
       <state_interface name="fault_code"/>
     </gpio>
   </ros2_control>
-
 </robot>

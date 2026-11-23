@@ -61,6 +61,16 @@
 //   power off, the joint and value reported, power_on() refused with no frame, no target after
 //   it, the power off repeated); the cut while halted; implausible readings are ignored; and
 //   temperature_stale() when the arm never answers 0xE5 while the pose still updates.
+// Follow-up prompt (#150):
+//   After a send_angles the thread now waits for the Atom's sync-write to the servos instead of
+//   a fixed settle, with echo_timeout as the longest wait. With an echo_timeout far above the
+//   replayed arm's 20 ms, check: the next get_angles never goes out before the sync-write is
+//   whole on the line, and goes out long before the echo_timeout; an arm that never sync-writes
+//   makes the wait last the whole echo_timeout.
+// Follow-up prompt (#150):
+//   A turn that asks the temperatures (the reading overdue) no longer sends in the same turn:
+//   the target goes out next turn. Check that the frame after a temperature request in a
+//   stream is a get_angles, never a send_angles.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -158,13 +168,36 @@ public:
       }
     } else if (count == 18 && *std::next(data, 3) == 0x22) {
       // A send_angles: the ack at once, the sync-write to the servos ~20 ms later, with the
-      // poses still flowing in between. What the serial thread will wait for one day instead of
-      // a fixed settle.
+      // poses still flowing in between. The serial thread waits for the sync-write (#150);
+      // with sync_write_ off the arm never sends it, and the wait must last the echo_timeout.
       queued_.push_back({now, {0xFE, 0xFE, 0x03, 0x22, 0x01, 0xFA}, false});
-      queued_.push_back({now + SYNC_WRITE_DELAY, parse_hex(RECORDED_SYNC_WRITE), false});
+      if (sync_write_.load()) {
+        queued_.push_back({now + SYNC_WRITE_DELAY, parse_hex(RECORDED_SYNC_WRITE), false});
+      }
     }
     written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
+    written_at_.push_back(now);
     return true;
+  }
+
+  /// When each frame of written() was written, same order.
+  std::vector<std::chrono::steady_clock::time_point> written_at()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return written_at_;
+  }
+
+  /// When each sync-write was handed to the thread, whole, by read().
+  std::vector<std::chrono::steady_clock::time_point> sync_write_times()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return sync_write_times_;
+  }
+
+  /// An arm that acknowledges a send_angles but never sync-writes it (default: it does).
+  void set_sync_write(bool sync_write)
+  {
+    sync_write_.store(sync_write);
   }
 
   /// How many sync-write frames the arm has put on the line so far.
@@ -212,11 +245,13 @@ public:
       // The arm's own frames go out whole when due. A request ack silences the line until it
       // is due; the frames after a send_angles do not, the poses keep coming meanwhile.
       const Queued & next{queued_.front()};
-      if (std::chrono::steady_clock::now() >= next.due) {
+      const auto now{std::chrono::steady_clock::now()};
+      if (now >= next.due) {
         const std::size_t n{std::min(max, next.bytes.size())};
         std::copy_n(next.bytes.begin(), n, dst);
         if (next.bytes.size() > 6) {
           ++sync_writes_sent_;
+          sync_write_times_.push_back(now);
         }
         queued_.erase(queued_.begin());
         return n;
@@ -238,6 +273,9 @@ public:
 private:
   std::vector<std::vector<std::uint8_t>> bursts_;
   std::vector<std::vector<std::uint8_t>> written_;
+  std::vector<std::chrono::steady_clock::time_point> written_at_;
+  std::vector<std::chrono::steady_clock::time_point> sync_write_times_;
+  std::atomic<bool> sync_write_{true};
   std::size_t index_{0};
   std::atomic<bool> silent_{false};
   std::atomic<bool> reject_requests_{false};
@@ -330,6 +368,42 @@ std::vector<std::vector<std::uint8_t>> wait_for_requests(
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
   }
   return frames_with_id(transport.written(), id);
+}
+
+/// The first send_angles the thread wrote and the first get_angles after it, with the time of
+/// each. `found` stays false until both are on the wire.
+struct SendThenPoll
+{
+  bool found{false};
+  std::chrono::steady_clock::time_point send{};
+  std::chrono::steady_clock::time_point poll{};
+};
+
+SendThenPoll first_send_then_poll(ReplayTransport & transport)
+{
+  const auto frames{transport.written()};
+  // Read after the frames, so it has a time for each of them.
+  const auto times{transport.written_at()};
+  const auto is_send{[](const std::vector<std::uint8_t> & frame) {
+      return frame.size() == 18 && frame.at(3) == 0x22;
+    }};
+  const auto is_poll{[](const std::vector<std::uint8_t> & frame) {
+      return frame.size() == 5 && frame.at(3) == GET_ANGLES_ID;
+    }};
+  SendThenPoll result{};
+  std::size_t send{0};
+  while (send < frames.size() && !is_send(frames.at(send))) {
+    ++send;
+  }
+  for (std::size_t poll{send + 1}; poll < frames.size(); ++poll) {
+    if (is_poll(frames.at(poll))) {
+      result.found = true;
+      result.send = times.at(send);
+      result.poll = times.at(poll);
+      return result;
+    }
+  }
+  return result;
 }
 
 /// Parses a space-separated hex string ("ff fe 0a") into bytes. Test-only.
@@ -647,9 +721,8 @@ TEST(SerialArm, HaltReachesASilentArmInTime)
 
 TEST(SerialArm, TheFixtureArmSyncWritesAfterEverySendAngles)
 {
-  // Not a driver property, a fixture property the next change relies on: after each
-  // send_angles the replayed arm puts the recorded sync-write on the line ~20 ms later, like
-  // the real one. The thread ignores it today (it sleeps the settle), but it must be there.
+  // Not a driver property, a fixture property the #150 tests rely on: after each send_angles
+  // the replayed arm puts the recorded sync-write on the line ~20 ms later, like the real one.
   auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
   ReplayTransport & port{*transport};
   SerialArm arm{std::move(transport)};
@@ -658,6 +731,60 @@ TEST(SerialArm, TheFixtureArmSyncWritesAfterEverySendAngles)
   ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
   std::this_thread::sleep_for(3 * SerialArm::Timing{}.moving_period);
   EXPECT_EQ(port.sync_writes_sent(), 1u);
+}
+
+// #150. After a send_angles the thread waits for the Atom's sync-write to the servos, and for
+// echo_timeout at most. The echo_timeout here is far above the replayed arm's 20 ms and the
+// period is short, so a wait ended by the sync-write and one that lasts the echo_timeout cannot
+// be confused, even on a loaded runner.
+SerialArm::Timing echo_timing()
+{
+  SerialArm::Timing timing{};
+  timing.moving_period = std::chrono::milliseconds{30};
+  timing.echo_timeout = std::chrono::milliseconds{90};
+  return timing;
+}
+const SerialArm::Timing ECHO_TIMING{echo_timing()};
+
+TEST(SerialArm, TheSyncWriteEndsTheWaitAfterASend)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport), ECHO_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+  std::this_thread::sleep_for(2 * ECHO_TIMING.echo_timeout);
+
+  const SendThenPoll turn{first_send_then_poll(port)};
+  ASSERT_TRUE(turn.found);
+  const auto sync_writes{port.sync_write_times()};
+  ASSERT_FALSE(sync_writes.empty());
+  // The next get_angles never goes out before the sync-write is whole on the line...
+  EXPECT_GE(turn.poll, sync_writes.front());
+  // ...and goes out long before the echo_timeout would have ended.
+  EXPECT_LT(turn.poll - turn.send, ECHO_TIMING.echo_timeout - std::chrono::milliseconds{30});
+  EXPECT_EQ(arm.echo_timeouts(), 0u);
+}
+
+TEST(SerialArm, WithoutTheSyncWriteTheWaitLastsTheEchoTimeout)
+{
+  // An arm that never sync-writes: the thread waits the whole echo_timeout.
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_sync_write(false);
+  SerialArm arm{std::move(transport), ECHO_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+  std::this_thread::sleep_for(2 * ECHO_TIMING.echo_timeout);
+
+  const SendThenPoll turn{first_send_then_poll(port)};
+  ASSERT_TRUE(turn.found);
+  EXPECT_EQ(port.sync_writes_sent(), 0u);
+  EXPECT_GE(turn.poll - turn.send, ECHO_TIMING.echo_timeout);
+  // Counted, so the plugin can say why the turns got slow.
+  EXPECT_EQ(arm.echo_timeouts(), 1u);
 }
 
 // #103. halt() and power_on() report SUCCESS only once the arm acknowledged the request frame.
@@ -1041,7 +1168,7 @@ TEST(SerialArmTemperature, NoTemperatureRequestInTurnsThatSendUntilItIsOverdue)
   EXPECT_EQ(frames_with_id(during, TEMPS_ID).size(), 0U);
 }
 
-TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
+TEST(SerialArmTemperature, AnOverdueReadingTakesTheTurnAndTheSendWaitsForTheNext)
 {
   auto transport{std::make_unique<ScriptedArm>()};
   ScriptedArm & port{*transport};
@@ -1053,11 +1180,13 @@ TEST(SerialArmTemperature, AnOverdueReadingGoesBetweenTheReplyAndTheSend)
   stream_targets(arm, std::chrono::milliseconds{1200});
   const auto during{between_sends(port.written())};
   // max_age 300 ms over a 1.2 s stream: a few readings, each right after a get_angles, so
-  // never inside the settle of a send.
+  // never between a send and its sync-write. The turn that asked sends nothing: the frame after
+  // the request is the next turn's get_angles, and the target goes out after that one.
   EXPECT_GE(frames_with_id(during, TEMPS_ID).size(), 2U);
-  for (std::size_t i{1}; i < during.size(); ++i) {
+  for (std::size_t i{1}; i + 1 < during.size(); ++i) {
     if (request_id(during[i]) == TEMPS_ID) {
       EXPECT_EQ(request_id(during[i - 1]), GET_ANGLES_ID) << i;
+      EXPECT_EQ(request_id(during[i + 1]), GET_ANGLES_ID) << i;
     }
   }
   EXPECT_FALSE(arm.temperature_stale());
@@ -1294,4 +1423,22 @@ TEST(SerialArmGripper, TheLinkNeverTimesOutWhileTheGripperIsServed)
         return request_id(frame) == GET_GRIPPER_ID;
       }), 0);
   EXPECT_FALSE(arm.read_gripper().has_value());
+}
+
+// #103 part 2: what the plugin's unfollowed-command check reads.
+TEST(SerialArm, TheLastTargetFollowsTheWireAndAnAcknowledgedStopClearsIt)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  EXPECT_FALSE(arm.last_target().has_value());  // nothing sent yet
+
+  const JointPositions target{0.2, 0.0, 0.0, 0.0, 0.0, 0.0};
+  arm.write_angles(target);
+  ASSERT_GE(wait_for_sends(port, 1).size(), 1U);
+  EXPECT_EQ(arm.last_target(), std::optional<JointPositions>{target});
+
+  // The stop is acknowledged: the arm is heading nowhere, there is no target to follow.
+  ASSERT_TRUE(arm.halt());
+  EXPECT_FALSE(arm.last_target().has_value());
 }

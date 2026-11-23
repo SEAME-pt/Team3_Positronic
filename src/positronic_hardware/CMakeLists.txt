@@ -23,6 +23,7 @@ endforeach()
 
 # The plugin: a shared library that pluginlib loads at runtime
 add_library(${PROJECT_NAME} SHARED
+  src/parameters.cpp
   src/positronic_hardware.cpp
   src/serial_arm.cpp
 )
@@ -62,12 +63,15 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
   find_package(ament_index_cpp REQUIRED)
   find_package(lifecycle_msgs REQUIRED)
 
   # M2: load RobotSystem through the ResourceManager, as the controller manager does.
   # It does not link the plugin: pluginlib must find it, so registration is tested too.
-  ament_add_gtest(test_load_robot_system test/test_load_robot_system.cpp)
+  # Isolated: it starts rclcpp, so it gets a ROS_DOMAIN_ID of its own when tests run in
+  # parallel (make test unsets ROS_DOMAIN_ID for that, #144).
+  ament_add_ros_isolated_gtest(test_load_robot_system test/test_load_robot_system.cpp)
   # Only the headers (FakeArm::START_POSE), not the plugin library itself.
   target_include_directories(test_load_robot_system PRIVATE include)
   target_link_libraries(test_load_robot_system
@@ -98,10 +102,23 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
   ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
   target_include_directories(test_link_watchdog PRIVATE include)
+  # Pure-logic unit test of when read() warns about sends without a sync-write (#150).
+  ament_add_gtest(test_echo_timeout_report test/test_echo_timeout_report.cpp)
+  target_include_directories(test_echo_timeout_report PRIVATE include)
 
   # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
   ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)
   target_include_directories(test_servo_temperature PRIVATE include)
+  # Pure-logic unit test for the unfollowed-command check (#103): no port, no thread, header-only.
+  ament_add_gtest(test_tracking_check test/test_tracking_check.cpp)
+  target_include_directories(test_tracking_check PRIVATE include)
+  # The request table (#149): the frame, the command and the wait of every request to the Atom.
+  ament_add_gtest(test_requests test/test_requests.cpp)
+  target_include_directories(test_requests PRIVATE include)
+  target_link_libraries(test_requests positronic_protocol::positronic_protocol)
+  # The hardware parameters (#163): names, ranges, defaults and messages, without a ResourceManager.
+  ament_add_gtest(test_parameters test/test_parameters.cpp)
+  target_link_libraries(test_parameters ${PROJECT_NAME})
   # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
   # moves the real arm (see the header of the file).
   add_executable(hil_link_timeout test/hil_link_timeout.cpp)

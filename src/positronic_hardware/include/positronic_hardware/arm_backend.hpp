@@ -137,6 +137,18 @@ public:
   /// True when no plausible temperature has arrived for longer than the backend's timeout, so
   /// an overheat could go unseen. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual bool temperature_stale() const = 0;
+
+  /// The last send_angles that reached the serial line, or nullopt before the first one and
+  /// after an acknowledged stop or an overheat cut: then the arm is heading nowhere and there is
+  /// nothing the pose should follow. What the plugin's unfollowed-command check (#103) compares
+  /// the pose with every cycle. Safe from the control loop.
+  [[nodiscard]] virtual std::optional<JointPositions> last_target() const = 0;
+
+  /// How many send_angles got no sync-write from the arm within the backend's echo timeout,
+  /// since the backend started (#150). Each made its turn wait the whole timeout: the arm took
+  /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
+  /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
+  [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
 };
 
 }  // namespace positronic_hardware
