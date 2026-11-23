@@ -45,7 +45,7 @@ relative to its namespace (camera.launch.py puts it in /wrist_camera, as Gazebo)
   camera_info           sensor_msgs/CameraInfo, same stamp and frame_id, from calibration_file
   image_raw/compressed  sensor_msgs/CompressedImage, jpeg, encoded only while subscribed
 
-Parameters:
+ROS parameters, with their defaults:
   device            /dev/video0
   width, height     640, 480: the size asked of the camera, BEFORE the rotation. With a 90 deg
                     rotation the published image is height x width (480 x 640)
