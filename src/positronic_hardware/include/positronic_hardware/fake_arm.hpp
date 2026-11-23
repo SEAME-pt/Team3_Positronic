@@ -54,6 +54,16 @@ public:
     target_ = angles;
   }
 
+  void write_gripper(std::uint8_t value) override
+  {
+    gripper_ = value;
+  }
+
+  [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override
+  {
+    return gripper_;
+  }
+
   /// Nothing to interrupt: the fake arm is at every target the moment it gets it.
   [[nodiscard]] bool halt() override
   {
@@ -103,6 +113,12 @@ public:
     return false;
   }
 
+  /// No serial line, so no send waits for a sync-write.
+  [[nodiscard]] std::uint64_t echo_timeouts() const override
+  {
+    return 0;
+  }
+
   /// The last write_angles(), gone with a halt, as the serial backend's last target.
   [[nodiscard]] std::optional<JointPositions> last_target() const override
   {
@@ -112,6 +128,7 @@ public:
 private:
   JointPositions angles_{START_POSE};
   std::optional<JointPositions> target_;
+  std::uint8_t gripper_{GRIPPER_OPEN_VALUE};
 };
 
 }  // namespace positronic_hardware

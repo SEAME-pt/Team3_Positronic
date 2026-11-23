@@ -39,6 +39,9 @@ using JointPositions = std::array<double, NUM_JOINTS>;
 /// The six servo temperatures in degC, J1 first, as the arm reports them (one byte each).
 using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 
+inline constexpr std::uint8_t GRIPPER_CLOSED_VALUE{0};
+inline constexpr std::uint8_t GRIPPER_OPEN_VALUE{100};
+
 /// The servo that tripped the over-temperature cut, and the reading that did it.
 struct Overheat
 {
@@ -81,6 +84,10 @@ public:
   /// replaces the previous command before it was sent. The plugin calls this only while
   /// active, so an implementation does not need to check that itself.
   virtual void write_angles(const JointPositions & angles) = 0;
+
+  virtual void write_gripper(std::uint8_t value) = 0;
+
+  [[nodiscard]] virtual std::optional<std::uint8_t> read_gripper() const = 0;
 
   /// How long halt() and power_on() may wait for the arm to acknowledge their request. Part of
   /// the contract, so the plugin can log the deadline without knowing which backend it holds.
@@ -136,6 +143,12 @@ public:
   /// nothing the pose should follow. What the plugin's unfollowed-command check (#103) compares
   /// the pose with every cycle. Safe from the control loop.
   [[nodiscard]] virtual std::optional<JointPositions> last_target() const = 0;
+
+  /// How many send_angles got no sync-write from the arm within the backend's echo timeout,
+  /// since the backend started (#150). Each made its turn wait the whole timeout: the arm took
+  /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
+  /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
+  [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
 };
 
 }  // namespace positronic_hardware

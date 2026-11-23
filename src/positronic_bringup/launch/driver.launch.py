@@ -37,20 +37,26 @@ driver and the mirror at the same time on one ROS_DOMAIN_ID gives two /tf publis
 same robot, which RViz warns about but tolerates. The 10 minute run only records
 /joint_states and does not need the mirror.
 
-Launch arguments:
+Launch arguments. The driver's (backend to tracking_error_ms) have no default here: unset,
+the driver keeps its own (HardwareConfig and SerialTiming in positronic_hardware, the table in
+its README), and the INFO line of on_init prints the values in use. A default here would win
+over the driver's and hide a change made there.
   backend:=serial|fake        fake stands still, to try the launch without the arm
-  port:=/dev/ttyTHS1          the arm's UART
-  baud:=1000000               the arm's firmware rate (115200 or 1000000)
-  update_rate:=30             Hz, of the control loop and of /joint_states
-  moving_period_ms:=50        ms of a serial-thread turn that sends a command
-  send_settle_ms:=30          ms the thread waits after a send_angles before a get_angles
-  servo_temp_limit_c:=60      degC that cuts the arm (stop, then power off); 30 to 60
-  tracking_error_deg:=8       deg a joint may lag its target before the time counts (#103)
-  tracking_error_ms:=300      ms over that lag that make fault 2, the arm did not follow
+  port:=                      the arm's UART
+  baud:=                      the arm's firmware rate (115200 or 1000000)
+  moving_period_ms:=          ms of a serial-thread turn that sends a command
+  echo_timeout_ms:=           ms the thread waits at most for the arm's sync-write after a send
+  servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
+  tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
+  tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
+  update_rate:=               Hz, of the control loop and of /joint_states; by default the
+                              update_rate of jetson_controllers.yaml
   start_inactive:=false       true: the hardware component and arm_controller come up
                               inactive, and only the safety supervisor makes them active
                               (#45). supervised.launch.py sets it.
 """
+
+import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -59,41 +65,53 @@ from launch.substitutions import Command, FindExecutable, LaunchConfiguration, P
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+import yaml
+
+# jetson_controllers.yaml next to this file, in the source tree and in the install space alike.
+CONTROLLERS_YAML = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'jetson_controllers.yaml')
+
+
+def yaml_update_rate():
+    """Return the update_rate of jetson_controllers.yaml, the one place it is set."""
+    with open(CONTROLLERS_YAML, encoding='utf-8') as config:
+        return yaml.safe_load(config)['controller_manager']['ros__parameters']['update_rate']
 
 
 def generate_launch_description():
     """Return the driver launch: the arguments, the nodes and the xacro call."""
+    # The driver's parameters: empty means unset, and the xacro then writes no <param>.
     backend = DeclareLaunchArgument(
-        'backend', default_value='serial',
+        'backend', default_value='',
         description='serial: the real arm. fake: a standing arm, no serial port.')
     port = DeclareLaunchArgument(
-        'port', default_value='/dev/ttyTHS1',
+        'port', default_value='',
         description="The arm's serial port.")
     baud = DeclareLaunchArgument(
-        'baud', default_value='1000000',
+        'baud', default_value='',
         description='Baud rate of the arm serial link: 115200 or 1000000.')
     # Timings of the serial thread (#32). Arguments so a sweep on the arm needs no rebuild.
     moving_period_ms = DeclareLaunchArgument(
-        'moving_period_ms', default_value='50',
-        description='ms of a serial-thread turn that sends a command (50 measured).')
-    send_settle_ms = DeclareLaunchArgument(
-        'send_settle_ms', default_value='30',
-        description='ms the arm needs after a send_angles before a get_angles (30 measured).')
+        'moving_period_ms', default_value='',
+        description='ms of a serial-thread turn that sends a command.')
+    echo_timeout_ms = DeclareLaunchArgument(
+        'echo_timeout_ms', default_value='',
+        description="ms the thread waits at most for the arm's sync-write after a send.")
     # The over-temperature cut. Only lower it, for the hardware test of the cut.
     servo_temp_limit_c = DeclareLaunchArgument(
-        'servo_temp_limit_c', default_value='60',
+        'servo_temp_limit_c', default_value='',
         description='degC at which a servo stops the arm and powers it off (30 to 60).')
     # The unfollowed-command fault (#103). Arguments so the bench can try other values.
     tracking_error_deg = DeclareLaunchArgument(
-        'tracking_error_deg', default_value='8',
+        'tracking_error_deg', default_value='',
         description='deg a joint may lag its target before the time counts (1 to 45).')
     tracking_error_ms = DeclareLaunchArgument(
-        'tracking_error_ms', default_value='300',
+        'tracking_error_ms', default_value='',
         description='ms a joint may stay over tracking_error_deg before fault 2 (50 to 5000).')
-    # Same default as jetson_controllers.yaml. Here so the 10 minute run can try another rate
-    # without editing the yaml.
+    # The yaml's value by default, read from the yaml. Here so the 10 minute run can try another
+    # rate without editing the yaml.
     update_rate = DeclareLaunchArgument(
-        'update_rate', default_value='30',
+        'update_rate', default_value=str(yaml_update_rate()),
         description='Hz of the control loop, and so of /joint_states.')
     # false keeps the launch as it was: everything active, the arm can move at once. true is
     # for the safety supervisor (#45): nothing can move the arm until it activates the hardware
@@ -117,7 +135,7 @@ def generate_launch_description():
             ' port:=', LaunchConfiguration('port'),
             ' baud:=', LaunchConfiguration('baud'),
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
-            ' send_settle_ms:=', LaunchConfiguration('send_settle_ms'),
+            ' echo_timeout_ms:=', LaunchConfiguration('echo_timeout_ms'),
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
@@ -165,14 +183,16 @@ def generate_launch_description():
         package='controller_manager',
         executable='spawner',
         output='both',
-        arguments=['arm_controller', '--param-file', controllers_yaml],
+        arguments=['arm_controller', 'gripper_action_controller', '--param-file',
+                   controllers_yaml],
         condition=UnlessCondition(inactive))
     # Loaded and configured, not activated: it takes no trajectory goal yet.
     arm_controller_inactive = Node(
         package='controller_manager',
         executable='spawner',
         output='both',
-        arguments=['arm_controller', '--param-file', controllers_yaml, '--inactive'],
+        arguments=['arm_controller', 'gripper_action_controller', '--param-file',
+                   controllers_yaml, '--inactive'],
         condition=IfCondition(inactive))
 
     return LaunchDescription([
@@ -180,7 +200,7 @@ def generate_launch_description():
         port,
         baud,
         moving_period_ms,
-        send_settle_ms,
+        echo_timeout_ms,
         servo_temp_limit_c,
         tracking_error_deg,
         tracking_error_ms,

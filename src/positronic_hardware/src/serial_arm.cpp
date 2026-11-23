@@ -161,18 +161,21 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard}
+SerialArm::SerialArm(
+  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard, bool has_gripper)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard, has_gripper}
 {
 }
 
 SerialArm::SerialArm(
-  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard)
+  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard,
+  bool has_gripper)
 : transport_{std::move(transport)},
   timing_{timing},
   guard_{guard},
   temperature_watchdog_{guard.stale_timeout},
-  detector_{guard.limit_c}
+  detector_{guard.limit_c},
+  has_gripper_{has_gripper}
 {
   // The first temperature request is due at once, so on_activate finds a reading, and the
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
@@ -241,11 +244,22 @@ bool SerialArm::power_on()
   // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
   // the hold goes on before the stop. A target written meanwhile waits for that turn.
   command_.writeFromNonRT(std::nullopt);
+  gripper_command_.writeFromNonRT(std::nullopt);
   // A request_halt() that lands while the thread waits for the power_on ack puts the hold back
   // (see send_pending_request): the arm is powered but held, and must not be reported live. A
   // cut can land there too: the thread then drops the frame and clears the request, so the wait
   // ends, but the servos were not powered.
   return request_and_wait(Pending::POWER_ON) && !halted_.load() && !overheated();
+}
+
+void SerialArm::write_gripper(std::uint8_t value)
+{
+  gripper_command_.writeFromNonRT(value);
+}
+
+std::optional<std::uint8_t> SerialArm::read_gripper() const
+{
+  return *gripper_latest_.readFromRT();
 }
 
 std::optional<ServoTemperatures> SerialArm::read_temperatures() const
@@ -275,6 +289,11 @@ bool SerialArm::temperature_stale() const
 std::optional<JointPositions> SerialArm::last_target() const
 {
   return *last_target_.readFromRT();
+}
+
+std::uint64_t SerialArm::echo_timeouts() const
+{
+  return echo_timeouts_.load();
 }
 
 std::optional<JointPositions> SerialArm::last_sent() const
@@ -323,6 +342,7 @@ void SerialArm::send_pending_request()
   }
   if (pending == Pending::HALT) {
     last_target_.writeFromNonRT(std::nullopt);
+    gripper_last_sent_ = std::nullopt;
   } else if (pending == Pending::POWER_ON) {
     // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
     // right after it must find the hold already released, so its own hold cannot be undone by
@@ -364,6 +384,21 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
       buffer.begin(), std::next(buffer.begin(), static_cast<std::ptrdiff_t>(result.consumed)));
   }
   return false;
+}
+
+void SerialArm::wait_for_sync_write()
+{
+  const auto sync_write_seen{[](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> echo{
+        positronic_protocol::decode_sync_write_echo(rx)};
+      const bool found{echo.status == positronic_protocol::DecodeStatus::FOUND};
+      return ScanResult{found, echo.consumed};
+    }};
+  const bool seen{read_until(Clock::now() + timing_.echo_timeout, sync_write_seen)};
+  // A wait cut short by the destructor is not the arm's doing.
+  if (!seen && !stop_.load()) {
+    echo_timeouts_.fetch_add(1);
+  }
 }
 
 bool SerialArm::perform(const Request & request, const Scanner & reply)
@@ -441,27 +476,30 @@ bool SerialArm::cut_power(const Overheat & trip)
 
 /// The temperatures, once a period, when the arm's input is free (it has just answered) and no
 /// stop or power on is waiting. On a turn that sends no target; a reading older than max_age is
-/// taken before the send of a moving turn, so a long motion cannot hide a hot servo. Never
-/// between a send and its settle: that is the end of the turn.
-void SerialArm::watch_temperatures(bool new_target)
+/// taken in a moving turn too, so a long motion cannot hide a hot servo. Never between a send
+/// and its sync-write: that is the end of the turn. Returns true when it asked: the turn then
+/// sends nothing and the target goes out next turn, ~10 ms later. A request (8 ms, 50 ms when
+/// unanswered) plus a send and its sync-write would run past the period, and would eat the
+/// link watchdog's margin for two lost replies, which only the get_angles reply resets.
+bool SerialArm::watch_temperatures(bool new_target)
 {
   const auto now{Clock::now()};
   const bool due{now - last_temperature_ask_ >= guard_.period};
   const bool overdue{now - last_temperature_ask_ >= guard_.max_age};
   if (!due || (new_target && !overdue) || request_.load() != Pending::NONE) {
-    return;
+    return false;
   }
   last_temperature_ask_ = now;
   const std::optional<ServoTemperatures> temperatures{ask_temperatures()};
   if (!temperatures.has_value()) {
-    return;
+    return true;
   }
   if (plausible(temperatures.value())) {
     temperatures_.writeFromNonRT(temperatures);
     temperature_watchdog_.on_reply(Clock::now());
   }
   if (overheated()) {
-    return;
+    return true;
   }
   if (const std::optional<Overheat> trip{detector_.update(temperatures.value())}) {
     // The cut is the thread's own: it does not wait for the control loop, and it works with
@@ -469,6 +507,57 @@ void SerialArm::watch_temperatures(bool new_target)
     const bool off_written{cut_power(trip.value())};
     next_power_off_ = off_written ? Clock::now() + guard_.period : Clock::now();
   }
+  return true;
+}
+
+bool SerialArm::serve_after_reply(bool new_target)
+{
+  const bool asked_temperatures{watch_temperatures(new_target)};
+  if (has_gripper_ && !new_target && !asked_temperatures && request_.load() == Pending::NONE) {
+    gripper_turn();
+  }
+  return asked_temperatures;
+}
+
+void SerialArm::gripper_turn()
+{
+  const std::optional<std::uint8_t> target{*gripper_command_.readFromRT()};
+  if (!halted_.load() && target.has_value() && target != gripper_last_sent_) {
+    const std::optional<positronic_protocol::Frame> frame{
+      positronic_protocol::encode_set_gripper_value(target.value(), GRIPPER_SPEED)};
+    if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
+      gripper_last_sent_ = target;
+      std::this_thread::sleep_for(timing_.send_settle);
+    }
+    return;
+  }
+  const auto now{Clock::now()};
+  if (now - last_gripper_read_ < GRIPPER_READ_PERIOD) {
+    return;
+  }
+  last_gripper_read_ = now;
+  if (const std::optional<std::uint8_t> value{ask_gripper()}) {
+    gripper_latest_.writeFromNonRT(value);
+  }
+}
+
+std::optional<std::uint8_t> SerialArm::ask_gripper()
+{
+  const positronic_protocol::Frame request{positronic_protocol::encode_get_gripper_value()};
+  if (!transport_->write(request.bytes.data(), request.size)) {
+    return std::nullopt;
+  }
+  std::optional<std::uint8_t> value{};
+  read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> reply{
+        positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
+      const bool found{reply.status == positronic_protocol::DecodeStatus::FOUND};
+      if (found) {
+        value = reply.value;
+      }
+      return ScanResult{found, reply.consumed};
+  });
+  return value;
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
@@ -535,20 +624,20 @@ void SerialArm::poll_loop()
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
     const std::optional<JointPositions> target{*command_.readFromRT()};
-    // Only a changed command goes out: a send_angles keeps the arm busy for the settle, and while
-    // it stands still the port is better spent on fresh poses. last_sent() is the thread's view
-    // of last_target_, the one memory of what went out.
+    // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
+    // and while it stands still the port is better spent on fresh poses. last_sent() is the
+    // thread's view of last_target_, the one memory of what went out.
     const bool new_target{
       replied && !halted_.load() && target.has_value() && target != last_sent()};
 
-    if (replied) {
-      watch_temperatures(new_target);
-    }
+    // The guard only runs after a reply: the arm's input is free then.
+    const bool asked_temperatures{replied && serve_after_reply(new_target)};
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
-    // A turn without a reply sends nothing, the command waits in command_ for the next.
+    // A turn without a reply sends nothing, the command waits in command_ for the next. So
+    // does a turn that asked the temperatures: the request took the time of the send.
     // halted_ again: a cut in this turn holds the target that was about to go.
-    if (new_target && !halted_.load()) {
+    if (new_target && !asked_temperatures && !halted_.load()) {
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
       const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
@@ -556,7 +645,7 @@ void SerialArm::poll_loop()
         sent = true;
         // The arm passes the command to the servos and ignores the port meanwhile: a
         // get_angles inside this window stalls, so the next turn must not start before it.
-        std::this_thread::sleep_for(timing_.send_settle);
+        wait_for_sync_write();
       }
     }
 

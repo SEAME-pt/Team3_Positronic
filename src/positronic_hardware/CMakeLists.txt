@@ -23,6 +23,7 @@ endforeach()
 
 # The plugin: a shared library that pluginlib loads at runtime
 add_library(${PROJECT_NAME} SHARED
+  src/parameters.cpp
   src/positronic_hardware.cpp
   src/serial_arm.cpp
 )
@@ -101,6 +102,9 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the link watchdog (#35): no port, no thread, header-only.
   ament_add_gtest(test_link_watchdog test/test_link_watchdog.cpp)
   target_include_directories(test_link_watchdog PRIVATE include)
+  # Pure-logic unit test of when read() warns about sends without a sync-write (#150).
+  ament_add_gtest(test_echo_timeout_report test/test_echo_timeout_report.cpp)
+  target_include_directories(test_echo_timeout_report PRIVATE include)
 
   # Pure-logic unit test for the servo over-temperature cut: no port, no thread, header-only.
   ament_add_gtest(test_servo_temperature test/test_servo_temperature.cpp)
@@ -112,6 +116,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_requests test/test_requests.cpp)
   target_include_directories(test_requests PRIVATE include)
   target_link_libraries(test_requests positronic_protocol::positronic_protocol)
+  # The hardware parameters (#163): names, ranges, defaults and messages, without a ResourceManager.
+  ament_add_gtest(test_parameters test/test_parameters.cpp)
+  target_link_libraries(test_parameters ${PROJECT_NAME})
   # #35 hardware check: built with the tests, run by hand on the Jetson, never by ctest. It
   # moves the real arm (see the header of the file).
   add_executable(hil_link_timeout test/hil_link_timeout.cpp)

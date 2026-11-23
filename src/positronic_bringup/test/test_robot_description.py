@@ -45,6 +45,10 @@
 #   The safety supervisor does not depend on positronic_hardware: it takes the names of the
 #   hardware component and of the fault interface from config/safety_supervisor.yaml. Check
 #   that those names are the ones of the <ros2_control> block.
+# Follow-up prompt (#150):
+#   The defaults of the driver's parameters now live only in the driver (HardwareConfig): the
+#   xacro writes a <param> only for an argument that is set. Check that no argument, or an
+#   empty one as the launch passes, writes no <param>.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -87,7 +91,7 @@ ARM_JOINTS = [
 
 
 def arm_block(robot):
-    """Return the <ros2_control> block of the arm (RobotSystem), not the gripper mock."""
+    """Return the <ros2_control> block of the arm and the gripper (RobotSystem)."""
     return robot.find("ros2_control[@name='positronic_arm']")
 
 
@@ -134,18 +138,19 @@ def test_uses_the_positronic_plugin():
     )
 
 
-def test_defaults_select_the_real_arm():
-    """Check the default parameters: the serial backend on the Jetson UART."""
-    assert hardware_params(expand()) == {
-        'backend': 'serial',
-        'port': '/dev/ttyTHS1',
-        'baud': '1000000',
-        'moving_period_ms': '50',
-        'send_settle_ms': '30',
-        'servo_temp_limit_c': '60',
-        'tracking_error_deg': '8',
-        'tracking_error_ms': '300',
-    }
+def test_unset_arguments_leave_the_driver_defaults():
+    """
+    Check that no argument writes no <param>: the driver keeps its own defaults.
+
+    The defaults live in one place, HardwareConfig in positronic_hardware, whose test pins them
+    (TheInfoLineHasEveryValue). A value written here as well would win over the driver's.
+    """
+    assert hardware_params(expand()) == {}
+
+
+def test_an_empty_argument_is_unset():
+    """Check that an empty argument, as the launch passes when not given, writes no <param>."""
+    assert hardware_params(expand(moving_period_ms='', port='')) == {}
 
 
 def test_arguments_reach_the_plugin():
@@ -156,7 +161,7 @@ def test_arguments_reach_the_plugin():
             port='/dev/null',
             baud='115200',
             moving_period_ms='40',
-            send_settle_ms='25',
+            echo_timeout_ms='45',
             servo_temp_limit_c='45',
             tracking_error_deg='6',
             tracking_error_ms='200',
@@ -167,7 +172,7 @@ def test_arguments_reach_the_plugin():
         'port': '/dev/null',
         'baud': '115200',
         'moving_period_ms': '40',
-        'send_settle_ms': '25',
+        'echo_timeout_ms': '45',
         'servo_temp_limit_c': '45',
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
@@ -175,9 +180,9 @@ def test_arguments_reach_the_plugin():
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():
-    """Check that the arm block has the six arm joints, J1 to J6, in URDF order."""
+    """Check that the arm block has J1 to J6 in URDF order, then the gripper joint."""
     joints = [joint.get('name') for joint in arm_block(expand()).findall('joint')]
-    assert joints == ARM_JOINTS
+    assert joints == ARM_JOINTS + ['gripper_controller']
     urdf_order = [j for j in revolute_joints(original_urdf()) if j in ARM_JOINTS]
     assert urdf_order == ARM_JOINTS
 
@@ -245,15 +250,7 @@ def test_supervisor_reads_the_names_of_this_description():
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_gripper_is_a_fixed_mock_until_123(backend):
-    """Check the gripper block: one state-only joint at the SRDF "open" value."""
-    block = expand(backend=backend).find(
-        "ros2_control[@name='positronic_gripper_mock']"
-    )
-    assert block.find('hardware/plugin').text == 'mock_components/GenericSystem'
-    joints = block.findall('joint')
-    assert [joint.get('name') for joint in joints] == ['gripper_controller']
-    assert joints[0].findall('command_interface') == []
-    states = joints[0].findall('state_interface')
-    assert [state.get('name') for state in states] == ['position']
-    assert states[0].find("param[@name='initial_value']").text == '0.15'
+def test_the_gripper_is_served_by_the_arm_block(backend):
+    """Check that RobotSystem is the only <ros2_control> block, gripper included (#123)."""
+    blocks = expand(backend=backend).findall('ros2_control')
+    assert [block.get('name') for block in blocks] == ['positronic_arm']

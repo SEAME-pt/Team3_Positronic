@@ -22,9 +22,11 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
+#include <cinttypes>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -32,7 +34,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -97,11 +98,6 @@ constexpr double to_state(FaultCode code)
   return static_cast<double>(std::underlying_type_t<FaultCode>(code));
 }
 
-/// #35: one lost reply costs up to moving_period + REPLY_TIMEOUT + a late reply of silence. A
-/// period at most half the link timeout keeps room for at least one lost reply, so a single
-/// bad turn never trips the fault.
-constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count() / 2)};
-
 /// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
 /// milliseconds, so this is generous; the arm not answering at all is what it catches.
 constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
@@ -109,107 +105,6 @@ constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
 /// How long on_activate waits for the first servo temperatures. The serial thread asks on its
 /// first idle turn and then once a second, so two seconds is two tries.
 constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
-
-/// The <param> names the <hardware> tag may use. Anything else is a typo.
-using Name = std::string_view;
-constexpr std::array KNOWN_PARAMETERS{
-  Name{"backend"},
-  Name{"port"},
-  Name{"baud"},
-  Name{"velocity_filter_alpha"},
-  Name{"moving_period_ms"},
-  Name{"send_settle_ms"},
-  Name{"servo_temp_limit_c"},
-  Name{"tracking_error_deg"},
-  Name{"tracking_error_ms"}};
-
-/// The value of `key`, or nullptr if the URDF does not set it.
-const std::string * find_parameter(
-  const std::unordered_map<std::string, std::string> & parameters, const std::string & key)
-{
-  const auto it{parameters.find(key)};
-  return it == parameters.end() ? nullptr : &it->second;
-}
-
-/// `text` as a number, or nullopt unless the whole text is one. from_chars ignores the
-/// locale and throws nothing, unlike std::stoi/std::stod.
-template<typename Number>
-std::optional<Number> parse_number(const std::string & text)
-{
-  Number value{};
-  const char * const end{std::next(text.data(), static_cast<std::ptrdiff_t>(text.size()))};
-  const auto [stop, error]{std::from_chars(text.data(), end, value)};
-  if (error != std::errc{} || stop != end) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-/// Reads `name` into `out` when the URDF sets it: a number in [min, max], whole for an integer
-/// type. True when the parameter is absent or valid, false with the error logged otherwise.
-template<typename Number>
-bool read_bounded(
-  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
-  const std::string & name, Number min, Number max, Number & out)
-{
-  const std::string * text{find_parameter(parameters, name)};
-  if (text == nullptr) {
-    return true;
-  }
-  const std::optional<Number> value{parse_number<Number>(*text)};
-  if (value.has_value() && *value >= min && *value <= max) {
-    out = *value;
-    return true;
-  }
-  if constexpr (std::is_integral_v<Number>) {
-    RCLCPP_ERROR(
-      logger, "Parameter '%s' is '%s'; use a whole number in [%d, %d].", name.c_str(),
-      text->c_str(), static_cast<int>(min), static_cast<int>(max));
-  } else {
-    RCLCPP_ERROR(
-      logger, "Parameter '%s' is '%s'; use a number in [%.0f, %.0f].", name.c_str(), text->c_str(),
-      static_cast<double>(min), static_cast<double>(max));
-  }
-  return false;
-}
-
-/// read_bounded() for a whole number of milliseconds.
-bool read_milliseconds(
-  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
-  const std::string & name, int min, int max, std::chrono::milliseconds & out)
-{
-  int value{static_cast<int>(out.count())};
-  if (!read_bounded(logger, parameters, name, min, max, value)) {
-    return false;
-  }
-  out = std::chrono::milliseconds{value};
-  return true;
-}
-
-/// The two timings of the serial thread (#32), from the URDF when set. The bounds keep out a
-/// period below the arm's own busy time or too close to the #35 link timeout, and a settle
-/// longer than that timeout.
-bool read_timing(
-  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters,
-  SerialArm::Timing & out)
-{
-  if (
-    !read_milliseconds(
-      logger, parameters, "moving_period_ms", 20, MAX_MOVING_PERIOD_MS, out.moving_period) ||
-    !read_milliseconds(logger, parameters, "send_settle_ms", 0, 200, out.send_settle))
-  {
-    return false;
-  }
-  // The settle is part of a turn, with the reply before it. A settle that fills the turn would
-  // only stretch every turn by itself and hide the value under test in a sweep.
-  if (out.send_settle >= out.moving_period) {
-    RCLCPP_ERROR(
-      logger, "send_settle_ms (%d) must be below moving_period_ms (%d).",
-      static_cast<int>(out.send_settle.count()), static_cast<int>(out.moving_period.count()));
-    return false;
-  }
-  return true;
-}
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
@@ -233,32 +128,20 @@ void log_fault(
     to_string(check.fault), limit.lower, limit.upper);
 }
 
-/// False, with the name logged, when a <param> is not one the plugin knows: a typo in the URDF
-/// must stop the driver, not be ignored.
-bool only_known_parameters(
-  const rclcpp::Logger & logger, const std::unordered_map<std::string, std::string> & parameters)
+std::uint8_t to_gripper_value(double radians, double closed, double open)
 {
-  const auto known{[](const auto & entry) {
-      return std::find(KNOWN_PARAMETERS.begin(), KNOWN_PARAMETERS.end(), entry.first) !=
-             KNOWN_PARAMETERS.end();
-    }};
-  const auto unknown{std::find_if_not(parameters.begin(), parameters.end(), known)};
-  if (unknown == parameters.end()) {
-    return true;
-  }
-  std::string known_names;
-  for (const std::string_view name : KNOWN_PARAMETERS) {
-    if (!known_names.empty()) {
-      known_names += ", ";
-    }
-    known_names += name;
-  }
-  RCLCPP_ERROR(
-    logger, "Unknown hardware parameter '%s'. Known: %s.", unknown->first.c_str(),
-    known_names.c_str());
-  return false;
+  const double fraction{std::clamp((radians - closed) / (open - closed), 0.0, 1.0)};
+  const double value{GRIPPER_CLOSED_VALUE + fraction * (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return static_cast<std::uint8_t>(std::lround(value));
 }
 
+double to_gripper_radians(std::uint8_t value, double closed, double open)
+{
+  const double fraction{
+    (static_cast<double>(value) - GRIPPER_CLOSED_VALUE) /
+    (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return std::clamp(closed + std::clamp(fraction, 0.0, 1.0) * (open - closed), closed, open);
+}
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -271,12 +154,13 @@ CallbackReturn RobotSystem::on_init(
   const hardware_interface::HardwareInfo & info{params.hardware_info};
 
   // The URDF must list the joints in protocol order: J1 (base) first, J6 (flange) last.
-  if (info.joints.size() != NUM_JOINTS) {
+  if (info.joints.size() != NUM_JOINTS && info.joints.size() != NUM_JOINTS + 1) {
     RCLCPP_ERROR(
-      get_logger(), "The URDF must have exactly %zu joints, %zu were read.", NUM_JOINTS,
-      info.joints.size());
+      get_logger(), "The URDF must have %zu joints, or %zu with the gripper; %zu were read.",
+      NUM_JOINTS, NUM_JOINTS + 1, info.joints.size());
     return CallbackReturn::ERROR;
   }
+  has_gripper_ = info.joints.size() == NUM_JOINTS + 1;
 
   for (const auto & joint : info.joints) {
     if (!has_position_and_velocity(joint)) {
@@ -332,93 +216,14 @@ CallbackReturn RobotSystem::on_init(
 
 bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::string> & parameters)
 {
-  if (!only_known_parameters(get_logger(), parameters)) {
+  const ParsedParameters parsed{parse_hardware_parameters(parameters)};
+  if (!parsed.config.has_value()) {
+    RCLCPP_ERROR(get_logger(), "%s", parsed.error.c_str());
     return false;
   }
-  Config config{};
-
-  if (const std::string * backend{find_parameter(parameters, "backend")}) {
-    if (*backend == "serial") {
-      config.backend = Backend::SERIAL;
-    } else if (*backend == "fake") {
-      config.backend = Backend::FAKE;
-    } else {
-      RCLCPP_ERROR(
-        get_logger(), "Parameter 'backend' is '%s'; use 'serial' or 'fake'.", backend->c_str());
-      return false;
-    }
-  }
-
-  if (const std::string * port{find_parameter(parameters, "port")}) {
-    if (port->empty()) {
-      RCLCPP_ERROR(get_logger(), "Parameter 'port' is empty.");
-      return false;
-    }
-    config.port = *port;
-  }
-
-  if (const std::string * baud{find_parameter(parameters, "baud")}) {
-    // Only the rates PosixSerialPort can set.
-    const std::optional<int> value{parse_number<int>(*baud)};
-    if (value != 115200 && value != 1000000) {
-      RCLCPP_ERROR(get_logger(), "Parameter 'baud' is '%s'; use 115200 or 1000000.", baud->c_str());
-      return false;
-    }
-    config.baud = *value;
-  }
-
-  if (const std::string * alpha{find_parameter(parameters, "velocity_filter_alpha")}) {
-    // Not a number becomes NaN. from_chars also accepts "nan" itself. Every comparison with
-    // NaN is false, so both fail the range check.
-    const double value{
-      parse_number<double>(*alpha).value_or(std::numeric_limits<double>::quiet_NaN())};
-    const bool in_range{value > 0.0 && value <= 1.0};
-    if (!in_range) {
-      RCLCPP_ERROR(
-        get_logger(), "Parameter 'velocity_filter_alpha' is '%s'; use a number in (0, 1].",
-        alpha->c_str());
-      return false;
-    }
-    config.velocity_filter_alpha = value;
-  }
-
-  if (!read_timing(get_logger(), parameters, config.timing)) {
-    return false;
-  }
-
-  // servo_temp_limit_c only goes down from 60: a lower limit cuts a warm arm on purpose, which is
-  // how the hardware test exercises the cut without heating anything. The tracking ranges are
-  // wide for the bench to try values; the one rule the plugin cannot check is that the threshold
-  // stays wider than the controller's trajectory tolerance (#103).
-  if (
-    !read_bounded(
-      get_logger(), parameters, "servo_temp_limit_c", MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C,
-      config.servo_temp_limit_c) ||
-    !read_bounded(
-      get_logger(), parameters, "tracking_error_deg", MIN_TRACKING_ERROR_DEG,
-      MAX_TRACKING_ERROR_DEG, config.tracking_error_deg) ||
-    !read_bounded(
-      get_logger(), parameters, "tracking_error_ms", MIN_TRACKING_ERROR_MS, MAX_TRACKING_ERROR_MS,
-      config.tracking_error_ms))
-  {
-    return false;
-  }
-
-  config_ = config;
-  log_config();
+  config_ = parsed.config.value();
+  RCLCPP_INFO(get_logger(), "%s", describe(config_).c_str());
   return true;
-}
-
-void RobotSystem::log_config() const
-{
-  RCLCPP_INFO(
-    get_logger(),
-    "Backend '%s', port %s at %d baud, velocity filter alpha %.3f, moving period %d ms, "
-    "send settle %d ms, servo temperature limit %d degC, tracking error %.1f deg for %d ms.",
-    config_.backend == Backend::SERIAL ? "serial" : "fake", config_.port.c_str(), config_.baud,
-    config_.velocity_filter_alpha, static_cast<int>(config_.timing.moving_period.count()),
-    static_cast<int>(config_.timing.send_settle.count()), config_.servo_temp_limit_c,
-    config_.tracking_error_deg, config_.tracking_error_ms);
 }
 
 bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
@@ -460,6 +265,22 @@ bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
       get_logger(), "Joint '%s' limits: [%.4f, %.4f] rad.", info.joints.at(i).name.c_str(),
       limits_.at(i).lower, limits_.at(i).upper);
   }
+  if (has_gripper_) {
+    const std::string & name{info.joints.at(NUM_JOINTS).name};
+    const urdf::JointConstSharedPtr gripper{model.getJoint(name)};
+    if (
+      gripper == nullptr || gripper->type != urdf::Joint::REVOLUTE || gripper->limits == nullptr ||
+      !std::isfinite(gripper->limits->lower) || !std::isfinite(gripper->limits->upper) ||
+      gripper->limits->lower >= gripper->limits->upper)
+    {
+      RCLCPP_ERROR(
+        get_logger(), "Gripper joint '%s' has no usable revolute <limit>. Refusing to start.",
+        name.c_str());
+      return false;
+    }
+    gripper_closed_ = gripper->limits->lower;
+    gripper_open_ = gripper->limits->upper;
+  }
   return true;
 }
 
@@ -470,6 +291,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // After on_error the old backend is still alive and holds the port (TIOCEXCL refuses a second
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
+  echo_report_.reset();
   tracking_ = TrackingCheck{TrackingLimits{
       config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
@@ -477,7 +299,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
-      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing, guard);
+      arm_ = std::make_unique<SerialArm>(
+        config_.port, config_.baud, config_.timing, guard, has_gripper_);
     } else {
       arm_ = std::make_unique<FakeArm>();
     }
@@ -487,6 +310,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   }
   // A fresh history: the first read() after (re)configure has no earlier sample to difference.
   velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
+  gripper_previous_valid_ = false;
 
   // Look the handles up once, here, so read() and write() build no string. This throws if a
   // name is missing, which is fine outside the control loop.
@@ -498,6 +322,15 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       handles_.at(i).position =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).velocity =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
+    }
+    if (has_gripper_) {
+      const std::string & name{info_.joints.at(NUM_JOINTS).name};
+      gripper_handles_.command =
+        get_command_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.position =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
     fault_handle_ =
@@ -548,6 +381,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       RCLCPP_ERROR(
         get_logger(), "The arm did not answer within %d ms. Is it powered and on %s?",
         static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()), config_.port.c_str());
+      return CallbackReturn::ERROR;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
       return CallbackReturn::ERROR;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
@@ -653,6 +496,7 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // pose, and the silence is the cause to report, not the lag that follows it.
   if (active) {
     check_tracking();
+    report_echo_timeouts();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -660,6 +504,21 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   // as well, because the arm is already cut and must not be driven again before a configure.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
   return temperatures;
+}
+
+void RobotSystem::report_echo_timeouts()
+{
+  const std::optional<std::uint64_t> fresh{
+    echo_report_.due(arm_->echo_timeouts(), EchoTimeoutReport::Clock::now())};
+  if (!fresh.has_value()) {
+    return;
+  }
+  RCLCPP_WARN(
+    get_logger(),
+    "%" PRIu64
+    " send_angles got no sync-write from the arm since the last report: each of their "
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    fresh.value());
 }
 
 bool RobotSystem::temperatures_allow_activation()
@@ -767,7 +626,24 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
     return return_type::ERROR;
   }
 
+  double gripper_target{0.0};
+  const bool gripper_read{
+    has_gripper_ && get_command(gripper_handles_.command, gripper_target, false)};
+  if (
+    gripper_read && (!std::isfinite(gripper_target) || gripper_target < gripper_closed_ ||
+    gripper_target > gripper_open_))
+  {
+    arm_->request_halt();
+    RCLCPP_ERROR(
+      get_logger(), "Command refused, arm halted: joint '%s' = %.4f rad, outside [%.4f, %.4f] rad.",
+      info_.joints.at(NUM_JOINTS).name.c_str(), gripper_target, gripper_closed_, gripper_open_);
+    return return_type::ERROR;
+  }
+
   arm_->write_angles(commands);
+  if (gripper_read) {
+    arm_->write_gripper(to_gripper_value(gripper_target, gripper_closed_, gripper_open_));
+  }
   return return_type::OK;
 }
 
@@ -849,6 +725,16 @@ void RobotSystem::update_states(double dt)
     // wait_until_set = false: never block on a controller that is reading the handle.
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);
     std::ignore = set_state(handles_.at(i).velocity, velocities.at(i), false);
+  }
+  const std::optional<std::uint8_t> gripper{has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  if (gripper.has_value()) {
+    const double position{to_gripper_radians(gripper.value(), gripper_closed_, gripper_open_)};
+    const double velocity{
+      gripper_previous_valid_ && dt > 0.0 ? (position - gripper_previous_) / dt : 0.0};
+    gripper_previous_ = position;
+    gripper_previous_valid_ = true;
+    std::ignore = set_state(gripper_handles_.position, position, false);
+    std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
 }
 

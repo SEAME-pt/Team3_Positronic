@@ -29,6 +29,9 @@
 #   the default false (the launch behaves as before unless asked), that it has the two
 #   variants of the controller manager and of the arm_controller spawner, and that
 #   supervised.launch.py includes the driver launch and starts the safety supervisor.
+# Follow-up prompt (#150):
+#   The driver's arguments have no default of their own any more, and update_rate takes its
+#   default from jetson_controllers.yaml. Check both.
 
 """Check that the launch files of the real arm build their description."""
 
@@ -39,6 +42,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
 import pytest
+import yaml
 
 LAUNCH_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch'
@@ -71,6 +75,36 @@ def test_driver_starts_active_unless_asked():
     assert 'start_inactive' in arguments
     default = ''.join(part.text for part in arguments['start_inactive'].default_value)
     assert default == 'false'
+
+
+DRIVER_ARGUMENTS = [
+    'backend', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms', 'servo_temp_limit_c',
+    'tracking_error_deg', 'tracking_error_ms',
+]
+
+
+def launch_defaults(name):
+    """Return {argument: default text} of launch/<name>."""
+    return {
+        entity.name: ''.join(part.text for part in entity.default_value)
+        for entity in describe(name).entities
+        if isinstance(entity, DeclareLaunchArgument)
+    }
+
+
+def test_driver_arguments_have_no_default_of_their_own():
+    """Check that every driver argument defaults to empty: the driver's default applies."""
+    defaults = launch_defaults('driver.launch.py')
+    assert {name: defaults[name] for name in DRIVER_ARGUMENTS} == dict.fromkeys(
+        DRIVER_ARGUMENTS, '')
+
+
+def test_update_rate_defaults_to_the_yaml():
+    """Check that update_rate defaults to the value of jetson_controllers.yaml."""
+    path = os.path.join(os.path.dirname(LAUNCH_DIR), 'config', 'jetson_controllers.yaml')
+    with open(path, encoding='utf-8') as config:
+        rate = yaml.safe_load(config)['controller_manager']['ros__parameters']['update_rate']
+    assert launch_defaults('driver.launch.py')['update_rate'] == str(rate)
 
 
 def test_driver_has_both_variants_of_what_start_inactive_changes():
