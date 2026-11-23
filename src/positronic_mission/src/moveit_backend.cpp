@@ -26,6 +26,8 @@
 #include <ratio>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/node_options.hpp>
+#include "moveit_msgs/msg/move_it_error_codes.hpp"
+#include "moveit_msgs/msg/robot_trajectory.hpp"
 #include "positronic_mission/motion_backend.hpp"
 
 namespace positronic_mission
@@ -89,6 +91,50 @@ MotionOutcome MoveitBackend::plan_and_execute(const geometry_msgs::msg::PoseStam
 
   // Blocking call
   auto result = move_group_->execute(plan);
+  if (stop_requested_ || result == MoveItErrorCode::PREEMPTED) {
+    return MotionOutcome::PREEMPTED;
+  }
+  if (result != MoveItErrorCode::SUCCESS) {
+    return MotionOutcome::EXECUTION_FAILED;
+  }
+
+  return MotionOutcome::OK;
+}
+
+MotionOutcome MoveitBackend::plan_and_execute_cartesian(
+    const std::vector<geometry_msgs::msg::Pose> & waypoints)
+{
+  if (stop_requested_) {
+    return MotionOutcome::PREEMPTED;
+  }
+
+  if (!move_group_) {
+    return MotionOutcome::PLANNING_FAILED;
+  }
+
+  /*
+    double computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double eef_step,
+        moveit_msgs::msg::RobotTrajectory& trajectory, bool avoid_collisions = true,
+        moveit_msgs::msg::MoveItErrorCodes* error_code = nullptr);
+  */
+
+  moveit_msgs::msg::MoveItErrorCodes error_code;
+  moveit_msgs::msg::RobotTrajectory trajectory;
+  double eef_step = 0.01;
+  bool avoid_collisions = true;
+
+  if (move_group_->computeCartesianPath(waypoints, eef_step, trajectory, avoid_collisions, &error_code) < 0.999f) {
+    return MotionOutcome::PLANNING_FAILED;
+  }
+  if (error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+    return (MotionOutcome::PLANNING_FAILED);
+  }
+
+  if (stop_requested_) {
+    return MotionOutcome::PREEMPTED;
+  }
+
+  auto result = move_group_->execute(trajectory);
   if (stop_requested_ || result == MoveItErrorCode::PREEMPTED) {
     return MotionOutcome::PREEMPTED;
   }

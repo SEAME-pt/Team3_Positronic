@@ -54,7 +54,7 @@ public:
   virtual MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) = 0;
 
   virtual MotionOutcome plan_and_execute_cartesian(
-      const std::vector<geometry_msgs::msg::Pose> & path) = 0;
+      const std::vector<geometry_msgs::msg::Pose> & waypoints) = 0;
 
   // Must be safe to call from any thread. Makes a running
   // plan_and_execute return PREEMPTED.

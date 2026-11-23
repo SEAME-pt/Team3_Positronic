@@ -20,6 +20,7 @@
 
 #include "positronic_mission/mission_node.hpp"
 #include <rclcpp/logging.hpp>
+#include <rclcpp_action/server.hpp>
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "positronic_mission/moveit_backend.hpp"
@@ -253,15 +254,33 @@ rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
     RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
     return rclcpp_action::GoalResponse::REJECT;
   }
-  const std::string reason = validate_pose(goal->target_pose);
+
+  // Here is where I check the flag
+  if (goal->mode != GoToPose::Goal::MODE_CARTESIAN && goal->mode != GoToPose::Goal::MODE_POSE) {
+      RCLCPP_WARN(get_logger(), "Rejected, invalid goal flag");
+      return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  // If func() == GoalResponse::REJECT
+  // Inside func, check mode
+  // Send to validade_pose or to validade_waypoints
+  // Return REJECT or OK
+
+  const std::string reason = validate_input(goal, goal->mode);
   if (!reason.empty()) {
     RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
-  // This is a weird one
-  // compare_exchange_strong does
-  // if equals to first param, change value to second param, return true
-  // if different, set expected to old value, return false
+
+  // // This is for flag == 0. No need to change
+  // const std::string reason = validate_pose(goal->target_pose);
+  // if (!reason.empty()) {
+  //   RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
+  //   return rclcpp_action::GoalResponse::REJECT;
+  // }
+
+  // If state_ == expected, set state_ to State::MOVING
+  // Else, set expected to state_
   State expected = State::IDLE;
   if (!state_.compare_exchange_strong(expected, State::MOVING)) {
     RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");

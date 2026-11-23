@@ -61,6 +61,24 @@ public:
     return outcome.load();
   }
 
+  MotionOutcome plan_and_execute_cartesian(
+      const std::vector<geometry_msgs::msg::Pose> & /* waypoints */) override
+  {
+      ++calls;
+      if (stop_requested_) {
+        return MotionOutcome::PREEMPTED;
+      }
+      const auto end =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms.load());
+      while (std::chrono::steady_clock::now() < end) {
+        if (stop_requested_) {
+          return MotionOutcome::PREEMPTED;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      return outcome.load();
+  }
+
   void stop() override
   {
     ++stops;
