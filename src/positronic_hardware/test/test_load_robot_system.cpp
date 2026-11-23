@@ -98,6 +98,8 @@
 // Follow-up prompt (#150):
 //   echo_timeout_ms replaces send_settle_ms as the parameter: the old name is refused, a value
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
+// Follow-up prompt (#170):
+//   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
 // Follow-up prompt (#122 part 1):
 //   fake_mode=measured reaches the fake arm and its time is the sum of the periods read() gets:
 //   a J1 step reported unmoved by a read of period 0 and 1 - 1/e of the way after a read of one
@@ -777,7 +779,7 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -802,6 +804,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"echo_timeout_ms", "100"},         // two lost replies after it would pass the #35 timeout
     {"echo_timeout_ms", "slow"},        // not a number
     {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
+    {"pose_from_poll", "maybe"},        // true or false only (#170)
     {"servo_temp_limit_c", "61"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
@@ -1303,6 +1306,36 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
   EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
   ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review H1: on a clean exit the controller manager takes the component from ACTIVE
+//   straight to FINALIZED; check that a stop reaches the arm on the way.
+
+TEST_F(LoadRobotSystem, ShutdownFromActiveSendsAStop)
+{
+  // A clean exit (Ctrl+C, launch stopped): the controller manager's pre-shutdown callback takes
+  // every component to FINALIZED. From ACTIVE, ros2_control runs on_deactivate (which sends the
+  // stop and waits for its ack) and then on_shutdown (which closes the port). Our safety on exit
+  // depends on that order in code we do not own: this test locks it in.
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  const std::size_t stops_before{arm->received_requests(0x29)};
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED,
+      hardware_interface::lifecycle_state_names::FINALIZED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED);
+  // halt() returns only once the arm acknowledged the stop, so it has already arrived.
+  EXPECT_GT(arm->received_requests(0x29), stops_before) << "No stop reached the arm on shutdown";
 
   resource_manager_.reset();
   arm.reset();

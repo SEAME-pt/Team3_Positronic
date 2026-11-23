@@ -32,6 +32,9 @@
 //   send_settle_ms is gone: the settle is a constant of the cut. echo_timeout_ms, the longest
 //   wait for the sync-write, is the parameter instead, 20 to 80 ms, and it may be longer than
 //   the period. The INFO line prints it in place of the settle.
+// Follow-up prompt (#170):
+//   pose_from_poll, 'true' or 'false', default true, reaches SerialTiming::pose_from_poll; any
+//   other text is refused with the two values; the INFO line says "pose from poll on" or "off".
 
 #include <gtest/gtest.h>
 
@@ -81,6 +84,8 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.timing.moving_period, defaults.timing.moving_period);
   EXPECT_EQ(config.timing.echo_timeout, defaults.timing.echo_timeout);
   EXPECT_EQ(config.timing.send_settle, defaults.timing.send_settle);
+  EXPECT_EQ(config.timing.pose_from_poll, defaults.timing.pose_from_poll);
+  EXPECT_TRUE(defaults.timing.pose_from_poll);
   EXPECT_EQ(config.servo_temp_limit_c, defaults.servo_temp_limit_c);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, defaults.tracking_error_deg);
   EXPECT_EQ(config.tracking_error_ms, defaults.tracking_error_ms);
@@ -96,6 +101,7 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"velocity_filter_alpha", "0.5"},
       {"moving_period_ms", "40"},
       {"echo_timeout_ms", "45"},
+      {"pose_from_poll", "false"},
       {"servo_temp_limit_c", "45"},
       {"tracking_error_deg", "6.5"},
       {"tracking_error_ms", "200"}})};
@@ -108,6 +114,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_DOUBLE_EQ(config.velocity_filter_alpha, 0.5);
   EXPECT_EQ(config.timing.moving_period, milliseconds{40});
   EXPECT_EQ(config.timing.echo_timeout, milliseconds{45});
+  EXPECT_FALSE(config.timing.pose_from_poll);
   EXPECT_EQ(config.servo_temp_limit_c, 45);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, 6.5);
   EXPECT_EQ(config.tracking_error_ms, 200);
@@ -119,8 +126,8 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
   EXPECT_EQ(
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, fake_mode, port, baud, "
-    "velocity_filter_alpha, moving_period_ms, echo_timeout_ms, servo_temp_limit_c, "
-    "tracking_error_deg, tracking_error_ms.");
+    "velocity_filter_alpha, pose_from_poll, moving_period_ms, echo_timeout_ms, "
+    "servo_temp_limit_c, tracking_error_deg, tracking_error_ms.");
 }
 
 // Every unknown name in one message, in alphabetical order: one run shows every typo.
@@ -227,6 +234,11 @@ TEST(Parameters, TheSpecialParametersKeepTheirRules)
     "Parameter 'velocity_filter_alpha' is '0'; use a number in (0, 1].");
   EXPECT_FALSE(accepted(Parameters{{"velocity_filter_alpha", "1.5"}}));
   EXPECT_TRUE(accepted(Parameters{{"velocity_filter_alpha", "1"}}));
+  EXPECT_EQ(
+    refusal("pose_from_poll", "yes"),
+    "Parameter 'pose_from_poll' is 'yes'; use 'true' or 'false'.");
+  EXPECT_TRUE(accepted(Parameters{{"pose_from_poll", "true"}}));
+  EXPECT_TRUE(accepted(Parameters{{"pose_from_poll", "false"}}));
 }
 
 // The INFO line of on_init, the same text as before #163.
@@ -235,8 +247,8 @@ TEST(Parameters, TheInfoLineHasEveryValue)
   EXPECT_EQ(
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
-    "period 33 ms, echo timeout 60 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
-    "for 300 ms.");
+    "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 60 degC, "
+    "tracking error 8.0 deg for 300 ms.");
 }
 
 // #122: the fake backend says which mode it moves in; the instant one keeps the old line.

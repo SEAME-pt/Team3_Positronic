@@ -58,8 +58,9 @@ with a new name for the next. From a script, start it in the background, wait un
 `/tmp/proxy_port` exists before starting the driver, and stop it with `kill -TERM`: a background
 job of a script ignores SIGINT, and every row is already flushed. On the PC,
 `python3 tools/tap_stalls.py tap_33.csv` prints requests, replies, stalls, repeated poses and
-the round trip, and `python3 tools/tap_turns.py tap_33.csv` the turn after each `send_angles`: when the next `get_angles` left, when the Atom's
-sync-write ended, and every sync-write later than 30 ms.
+the round trip, and `python3 tools/tap_turns.py tap_33.csv` the turn after each `send_angles`:
+when the Atom's sync-write ended, every sync-write later than 30 ms, the sends followed by a
+`get_angles` before the next send (#170) and the intervals between sends.
 
 ## Results (joint 1 swinging 10 deg at speed 30)
 
@@ -120,7 +121,8 @@ of `echo_timeout`. Sends per second over the stream; times in ms after the `send
 | 33, gripper and camera | 60 | 29.2 | 5542 | 5542 | 0 | 24.5 / 41.2 | 18.4 / 26.8 / 31.8 |
 
 - Both stalls at 35 ms came from a late sync-write: one ended 32.7 ms after its send, the other
-  about 54 ms (an outlier: the only sync-write above 50 ms in normal operation on 19 Nov), and
+  about 54 ms (the Atom stalls like this about once in 10 minutes: 54.7 ms on 19 Nov, 70.1 on
+  20 Nov, see #170 below), and
   the `get_angles` sent at the 30 ms bound was lost both times. Hence the 60 ms of
   `echo_timeout`, which only counts when the Atom is late: sync-writes as late as 46.1 ms were
   waited for without a loss.
@@ -141,3 +143,97 @@ of `echo_timeout`. Sends per second over the stream; times in ms after the `send
   and the camera mounted and the arm held at 0 deg, servo 4 heats past about 45 degC and the
   frames of servos 4 and 5 go bad; that is a separate problem, not a timing one, still under
   test.
+
+## #170: the pose from the Atom's poll, the send on the controller's write
+
+After a `send_angles` the Atom reads its six servos (a SYNC READ of 15 bytes at register 56; the
+gripper, id 7, answers too when plugged) before the sync-write. Since #170 the thread decodes
+those status frames, checksum included, and publishes the pose when the sync-write closes: no
+`get_angles` follows a send. The thread is woken by the controller's `write()` and sends then,
+so the stream follows the controller's cadence. A `get_angles` goes out only when a turn has no
+pose from a poll: the first turn, a lost or corrupt poll, a sync-write past `echo_timeout_ms`.
+At rest the controller still writes every cycle, and a write that wakes the thread sends the
+unchanged target again, so the pose keeps coming from the poll (6 to 22 sends/s at rest in the
+final run, between `get_angles`). A target whose last send got no sync-write is not sent again
+until it changes, and a gripper that is due takes the turn of a repeat. With no controller
+writing, the thread polls `get_angles` every 10 ms, as before.
+
+Three runs of 10 minutes at 33 ms, 30 Hz, arm alone (no gripper, no camera), joint 1 swinging
+10 deg, all tapped. The #150 column is the 10-minute run of the table above; the prototype is
+the first cut of #170 on 19 Nov; the last column is this branch on 20 Nov.
+
+| | #150 | #170 prototype, 19 Nov | #170, 20 Nov |
+|---|---|---|---|
+| sends/s in the stream | 28.9 | 29.8 | 30.0 |
+| `get_angles` in the stream | 17214 (one per turn) | 2 | 9 |
+| sync-write end p50 / p99 / max ms | 19.2 / 28.0 / 35.3 | 18.8 / 27.8 / 54.7 | 18.7 / 27.8 / 34.8 |
+| send interval p50 / p90 / p99 ms | 33.4 / 36.9 / 58.0 | 33.3 / 35.4 / 42.7 | 33.3 / 35.5 / 41.7 |
+| send intervals over 40 ms | 4.2 % | 2.0 % | 1.3 % |
+| polls broken / stalls / bad frames | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| `/joint_states` new poses median / p90 ms | 33.3 / 34.0 | 33.3 / 34.0 | 33.3 / 34.0 |
+
+- `get_angles` in 10 minutes: 19804 with #150, 672 here (9 turns fell back to one in the
+  stream, the rest at rest before and after it), 97 % fewer. The pose of every send comes from
+  the servos' own answer to the Atom, 19 ms after the send.
+- Two earlier 10-minute runs of the day shaped the code. The first had 199 `get_angles` in the
+  stream: since #169 the turn that asks the temperatures sends nothing, so the next turn had no
+  pose from a poll and asked one, every 3 s, with 52 ms between the sends around it. The reply
+  to the temperatures now counts as the arm's reply for the next turn, which sends at once. The
+  second run, with that fix, had 4 `get_angles` but 2.1 % of the send intervals over 40 ms:
+  191 around a temperature request (43 ms, the request's own 8 ms) and 182 of 55 to 66 ms, where
+  the controller's `write()` had landed while the thread was still reading the sync-write, and
+  the wait then cleared the wake flag and slept until its two-period deadline. The flag is now
+  cleared when the turn reads its command, so such a write is sent right after the sync-write:
+  those 182 became 49, the 1.3 % of the table. The 192 around a temperature request remain
+  (199 requests went out in the stream, 192 of them inside a slow interval): that is the request
+  itself, which the status frames can replace (the next part of #170).
+- The first run also had the Atom stall once: acknowledged at 2.2 ms, pinged id 7 at 5.1 ms,
+  then nothing on the line for 65 ms, the SYNC READ only at 70.1 ms. The driver waited the 60 ms
+  of `echo_timeout_ms`, sent one `get_angles`, answered, and logged one warning. One such stall
+  per 10 minutes on 19 Nov too (54.7 ms); the timeout is what covers it. The run in the table
+  had none (34.8 ms at most, all waited for).
+- The joints that did not move, J2 to J6, stayed within one step (0.09 deg) on `/joint_states`
+  over the 10 minutes, poses from the poll and from `get_angles` mixed: no offset between the two
+  readings.
+- Refused target, 30 s: the rest pose streamed with J4 at -131.8 deg, which the Atom refuses
+  whole (nothing moves; the URDF allows -150). Three sends got no sync-write and were counted
+  (that code sent the unchanged target again on each write; it now goes out once)
+  and warned about, the pose kept coming by `get_angles` (2610 asked, 2610 answered, 0 stalls),
+  and the tracking check raised its fault after 300 ms and held the targets. The arm stayed
+  within one step of where it was.
+- Gripper and camera mounted, 2 min at 33 ms: the Atom polls seven servos and the frame of id 7
+  is skipped. J4, holding the gripper, went from 37 to 50 degC: 57 % of the frames recognised as
+  its came with a bad checksum, and 2694 of the 6861 polls had none of it (the other six servos:
+  2 bad in about 41000, and J5 missing from 132 polls), so `get_angles` followed 73 % of the
+  sends. Still 29.2 sends/s, 2875 requests and 2875 replies, 0 stalls, 0 warnings: the fallback
+  fits in the period. The send interval went to 61 ms at p99 (7.9 % over 40 ms), the price of
+  the 8 ms of each `get_angles`.
+- That run also showed the hole of an 8-bit checksum: of J4's 2369 corrupt frames about one in
+  256 passed it, and four times `/joint_states` carried J4 at 177.6 or 180.0 deg (0 steps) for
+  two cycles, while the arm held it at -2.4. The Atom's own `get_angles` replies never did: it
+  checks the frame too and keeps a servo's last good position when its frame fails (1123 bad J4
+  frames, 1123 sane replies). The thread now does the same: a frame whose position is more than
+  30 deg from the last pose, or whose voltage or temperature cannot be a servo's, is left out,
+  and a joint missing from a poll keeps its last good position for 100 ms before the
+  `get_angles` comes back. Replayed on the frames of that run, the bridge brings the sends that
+  fall back to `get_angles` from 63 % to 55 % (2163 of 3918): it helps a little, and it has not
+  yet run on a hot servo on the arm.
+- Control loop at 32 and 33 Hz (periods 31 and 30 ms), 2 min each, arm alone: 31.5 and 32.5
+  sends/s, 3 and 5 `get_angles` in the stream, sync-write at most 29.9 and 33.8 ms, 0 stalls,
+  0 echo timeouts, 2.5 % and 2.2 % of the send intervals over 40 ms. Then 10 min at 33 Hz with
+  the final code: 20236 sends, 33.0/s, 15 `get_angles` in the stream, sync-write p99 27.1 and
+  max 42.2 ms (six past the 30 ms period in 20236, two past 33), send intervals p99 38.5 ms
+  and 0.7 % over 40 (132 of the 139 are the temperature turns), 0 stalls, 0 echo timeouts,
+  0 warnings. Nothing
+  lost up to 33 Hz; the Atom's sync-write p99 leaves 2.5 ms at 33 Hz and nothing at 35. 30 stays
+  the default; the choice is #134's, and this is its evidence.
+- `/joint_states` repeats the previous pose in 42 to 50 % of its messages at 30, 32 and 33 Hz
+  alike (41.6 to 46.5 at 30 Hz, 48.8 at 32, 50.1 at 33), and 8 to 11 % of the intervals between
+  new poses span two cycles; #150 had 48 % repeated poses in its 10 minutes. It is how the servos' position reaches the line, not the
+  turn or the rate: the `joint_states_rate.py` p90 crosses from one cycle to two with that share
+  (62 ms at 32 Hz, 34 at 30 and 33). Not measured further here.
+
+How the numbers were made: `python3 tools/tap_turns.py tap.csv` gives the sends per second of
+the stream, the send intervals with the share over 40 ms, the sends followed by a `get_angles`
+before the next send, and the sync-write end; `python3 tools/tap_stalls.py tap.csv` the
+requests, replies and stalls.

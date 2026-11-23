@@ -80,7 +80,8 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_ros REQUIRED)
 
-  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
+  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures
+      test_moveit_backend)
     ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mission_node_component)
     ament_target_dependencies(${test_name} ${dependencies})

@@ -11,8 +11,8 @@
   - ros2_control's joint limiter is off on every joint (#34), see the macro below.
 
   The <param> names are the ones the plugin reads in on_init (#22): backend, fake_mode, port,
-  baud, moving_period_ms, echo_timeout_ms, servo_temp_limit_c, tracking_error_deg,
-  tracking_error_ms.
+  baud, moving_period_ms, echo_timeout_ms, pose_from_poll, servo_temp_limit_c,
+  tracking_error_deg, tracking_error_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
 
   The defaults are the driver's, in one place: HardwareConfig and SerialTiming in
@@ -37,6 +37,9 @@
        the longest wait for the Atom's sync-write after a send. -->
   <xacro:arg name="moving_period_ms" default=""/>
   <xacro:arg name="echo_timeout_ms" default=""/>
+  <!-- "true": the pose comes from the Atom's own poll of the servos and the turn follows the
+       controller's write (#170); "false": a get_angles every turn, as #150. -->
+  <xacro:arg name="pose_from_poll" default=""/>
   <!-- A servo at or above this temperature (degC) stops the arm and powers its servos off.
        Lower only, to test the cut without heating anything. -->
   <xacro:arg name="servo_temp_limit_c" default=""/>
@@ -75,6 +78,7 @@
       <xacro:driver_param name="baud"/>
       <xacro:driver_param name="moving_period_ms"/>
       <xacro:driver_param name="echo_timeout_ms"/>
+      <xacro:driver_param name="pose_from_poll"/>
       <xacro:driver_param name="servo_temp_limit_c"/>
       <xacro:driver_param name="tracking_error_deg"/>
       <xacro:driver_param name="tracking_error_ms"/>
