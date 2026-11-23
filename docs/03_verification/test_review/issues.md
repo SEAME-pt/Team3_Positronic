@@ -5,7 +5,7 @@ into GitHub. The details of each finding are in the package files next to this o
 
 Not here on purpose: the three `MoveitBackend` bugs (destructor hang, `ready()` true without
 `move_group`, crash without a robot description) were sent to the mission owner, who opened
-#165. Check that #165 lists all three.
+#165. All three were fixed in #168 (merged 2026-11-23).
 
 ---
 

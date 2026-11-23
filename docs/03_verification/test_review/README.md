@@ -82,7 +82,7 @@ hardware 94.4 %, safety 88.3 %, bringup 82.4 %, moveit_config 97.8 %, **mission 
 
 | # | Result |
 |---|---|
-| 1 | **Blocked.** `test/test_moveit_backend.cpp` written; it found two bugs in `MoveitBackend` (see mission M1, "What the test found"). Sent to the package owner 2026-11-19. The test hangs until bug 1 is fixed, so it is not registered in `CMakeLists.txt` yet. **Mission stays below 80 % (about 76 %) until it runs: Phase 3 waits for it.** |
+| 1 | **Done.** `test/test_moveit_backend.cpp`, 7 tests. It found three bugs in `MoveitBackend` (see mission M1, "What the test found"), fixed by the package owner in #168 (issue #165). Registered in `CMakeLists.txt` after `dev` was merged on 2026-11-23: 7 of 7 pass, 5 runs in a row, no hang. Mutation: removing #168's wait for the spin thread makes `DestructorReturns` hang again (killed at 60 s). Mission 76.0 % → 86.2 %. |
 | 2 | **Done.** `test/test_planning_scene_node.py`, 6 tests, 1.9 s. moveit_config 56 % → 98 % (left: line 38, C2; line 133, `__main__`). Mutation check: dropping `not result.success` fails `test_apply_is_false_when_move_group_refuses`. |
 | 3 | **Done.** M2 `ActivationRefusedWhenBackendNotReady` (`test_lifecycle.cpp`), M3 the pose check in `GoalSucceedsWhenIdle` + `EachGoalSendsItsOwnPose` (`test_goals.cpp`); `MockBackend` got `ready_result` and `last_pose()`. Mutation checks: a default pose sent to the backend fails both pose tests; deleting the ready check fails the M2 test. |
 | 4 | **Done.** H1 `ShutdownFromActiveSendsAStop` (`test_load_robot_system.cpp`): ACTIVE → FINALIZED through the resource manager, the stop frame `FE FE 02 29 FA` reaches the pseudo-terminal. Mutation: `on_deactivate` without `halt()` fails it, which also confirms that the installed ros2_control deactivates before shutdown. Kept after the merge with `dev`, rewritten with its helpers; mutation check passes again on the merged code. |
@@ -91,6 +91,15 @@ hardware 94.4 %, safety 88.3 %, bringup 82.4 %, moveit_config 97.8 %, **mission 
 | 7 | **Done.** S2 `StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes`: new fake knob `stale_fault_after_activation` (every other message for 500 ms carries code 1 stamped before the activation; alternating because the supervisor keeps only the newest message). A fresh code 1 afterwards still halts. Mutation: removing the filter fails it. |
 | 8 | **Done.** S3 `HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNotStopped`: the fake drops its services; the halt ends STOPPED in < 200 ms with `hardware_stopped == false`. Mutation: waiting for a missing service instead of failing at once fails it. |
 | + | **Done.** Mission M6 (from #161): the flaky feedback check in `GoalSucceedsWhenIdle` removed; `test_goals` 10/10 under parallel load. `TEST_ALONE` for mission (#161) can go after this merges. |
+
+`dev` was merged again on 2026-11-23 (#164, #167, #168, #169, #172, #174). After the merge and
+item 1, `make test`: 782 tests passed (3 skipped, HIL). `make coverage`: protocol 100 %,
+moveit_config 97.8 %, hardware 95.0 %, safety 88.3 %, **mission 86.2 %**, bringup 82.4 %; total
+92.1 %. **PASS: every package at 80 % or more.**
+
+**Phase 3 done (2026-11-23):** `continue-on-error` removed from the coverage step in
+`.github/workflows/ci.yml` (step renamed `Coverage`), so a package below 80 % now blocks the
+merge. ADR 0005, `CONTRIBUTING.md`, `build.md` and the `Makefile` comment updated to match.
 
 ## Issues to open
 

@@ -92,8 +92,12 @@ no test, and needed for the gate.
 Also: MoveIt waits 10 s for the URDF and 10 s for the SRDF by default; the test needs
 `robot_description_timeout` and `robot_description_semantic_timeout` set short.
 
-**Status:** sent to the package owner 2026-11-19. Item 1 of the work list is blocked until bug 1
-is fixed; bugs 2–3 are a new issue.
+**Status:** sent to the package owner 2026-11-19, who opened #165; all three fixed in #168
+(merged 2026-11-23). Bug 1: the constructor waits until the executor is spinning, so the
+destructor's cancel can't be lost. Bug 2: `ready()` first waits up to 2 s for move_group's
+`move_action` server. Bug 3: `ready()` returns false when `robot_description` or
+`robot_description_semantic` is not a parameter, before building `MoveGroupInterface`. The test is
+registered and passes; mission is at 86.2 %.
 
 ### M2. "MoveIt not ready → stay inactive" is untested
 
