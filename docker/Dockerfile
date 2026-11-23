@@ -54,6 +54,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install --no-cache-dir pymycobot
 
+# The wrist camera on the Jetson (camera.launch.py): OpenCV reads the USB camera (V4L2, MJPG)
+# and turns the frames; image_transport_plugins lets a laptop subscribe to the compressed image
+# over Wi-Fi (RViz, rqt), and lets `image_transport republish` run anywhere.
+# OpenCV from pip, headless: Ubuntu's python3-opencv drags GUI and VTK libraries the Jetson's
+# disk can't spare. --no-deps and the apt numpy: pip must not install a second numpy over the
+# one the ROS packages use. 4.10.0.84 accepts numpy >= 1.26 (Ubuntu 24.04 ships 1.26.4).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-numpy \
+      ros-${ROS_DISTRO}-image-transport-plugins \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir --no-deps opencv-python-headless==4.10.0.84
+
 # ---------------------------------------------------------------------------
 # runtime target: core + the container user. Right after core, see the rules above.
 # ---------------------------------------------------------------------------
@@ -133,6 +145,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-rviz2 \
       ros-${ROS_DISTRO}-rqt \
       ros-${ROS_DISTRO}-rqt-common-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+# Camera calibration with a checkerboard (camera_calibration, a GUI), on laptops. It needs
+# Ubuntu's python3-opencv with its GUI: the headless pip OpenCV of core comes first on the path
+# and has no windows, so it goes. wrist_camera.py then uses Ubuntu's OpenCV here.
+RUN pip3 uninstall -y opencv-python-headless \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      ros-${ROS_DISTRO}-camera-calibration \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
