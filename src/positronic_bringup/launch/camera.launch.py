@@ -18,6 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+# AI-generated (Claude, Anthropic).
+# Prompt:
+#   Real wrist camera issue: camera.launch.py in positronic_bringup starts wrist_camera.py
+#   with device, resolution and rate as launch arguments, frame_id equal to the camera link of
+#   positronic_real.urdf.xacro (camera_link), in the namespace the Gazebo bridge uses
+#   (/wrist_camera), and the calibration yaml of config/ as camera_info.
+
 """
 Publish the wrist camera of the real arm, on the Jetson, as Gazebo does.
 
@@ -41,6 +48,8 @@ Launch arguments:
   frame_id:=camera_link     header.frame_id of image and camera_info
   calibration_file:=<share>/config/wrist_camera.yaml   camera_calibration result (ost.yaml)
   jpeg_quality:=80          of image_raw/compressed
+  buffer_size:=4            V4L2 buffers; 4 is the full rate, 1 the lowest latency (half the
+                            rate on some cameras)
 """
 
 from launch import LaunchDescription
@@ -77,6 +86,8 @@ def generate_launch_description():
             description='camera_calibration yaml; missing: camera_info has the size only.'),
         DeclareLaunchArgument('jpeg_quality', default_value='80',
                               description='JPEG quality of image_raw/compressed, 1 to 100.'),
+        DeclareLaunchArgument('buffer_size', default_value='4',
+                              description='V4L2 buffers; 4 full rate, 1 lowest latency.'),
     ]
 
     def integer(name):
@@ -97,6 +108,7 @@ def generate_launch_description():
             'frame_id': LaunchConfiguration('frame_id'),
             'calibration_file': LaunchConfiguration('calibration_file'),
             'jpeg_quality': integer('jpeg_quality'),
+            'buffer_size': integer('buffer_size'),
         }])
 
     return LaunchDescription(arguments + [camera])

@@ -225,9 +225,9 @@ class FakeOpener:
         self.captures = list(captures)
         self.calls = []
 
-    def __call__(self, device, width, height, fps):
+    def __call__(self, device, width, height, fps, buffer_size):
         """Record the call and return the next capture."""
-        self.calls.append((device, width, height, fps))
+        self.calls.append((device, width, height, fps, buffer_size))
         return self.captures.pop(0) if self.captures else None
 
 
@@ -272,7 +272,7 @@ def test_one_frame_gives_an_upright_image_and_its_camera_info(ros):
     node = make_node(opener)
     try:
         assert node.step()
-        assert opener.calls == [('/dev/video0', 640, 480, 30)]
+        assert opener.calls == [('/dev/video0', 640, 480, 30, 4)]
         image = node.image_pub.sent[0]
         assert (image.width, image.height) == (480, 640)
         assert image.encoding == 'bgr8'
@@ -342,6 +342,17 @@ def test_camera_giving_another_size_is_published_at_that_size(ros):
         image = node.image_pub.sent[0]
         assert (image.width, image.height) == (240, 320)
         assert (node.info_pub.sent[0].width, node.info_pub.sent[0].height) == (240, 320)
+    finally:
+        node.destroy_node()
+
+
+def test_buffer_size_reaches_open_capture(ros):
+    """Check the buffer_size parameter is passed through to the opener."""
+    opener = FakeOpener(FakeCapture())
+    node = make_node(opener, buffer_size=1)
+    try:
+        assert node.step()
+        assert opener.calls[0][4] == 1
     finally:
         node.destroy_node()
 

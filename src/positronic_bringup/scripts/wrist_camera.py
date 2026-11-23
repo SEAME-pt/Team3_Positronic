@@ -55,6 +55,11 @@ Parameters:
   calibration_file  camera_calibration yaml (ost.yaml); empty or missing: camera_info carries
                     only the image size, and a warning says the camera is not calibrated
   jpeg_quality      80, of image_raw/compressed
+  buffer_size       4 V4L2 buffers. 1 gives the newest frame (lowest latency) but on cameras
+                    whose frames the node cannot requeue within one frame interval it halves
+                    the rate: the camera drops the frame it has nowhere to put. >= 2 lets the
+                    camera fill the next buffer while this one is handled, for the full rate,
+                    at a frame or two of latency
   report_period     10.0 s between two log lines with the achieved rate
 
 The calibration must be made on the published (turned) image, so its size is the published
@@ -192,8 +197,8 @@ def rate_line(frames, seconds, busy_s):
             f'{1000.0 * busy_s / frames:.1f} ms per frame from grab to publish')
 
 
-def open_v4l2_capture(device, width, height, fps):
-    """Open the camera with V4L2 and ask for MJPG at width x height and fps."""
+def open_v4l2_capture(device, width, height, fps, buffer_size):
+    """Open the camera with V4L2 and ask for MJPG at width x height, fps and buffer_size."""
     capture = cv2.VideoCapture(device, cv2.CAP_V4L2)
     if not capture.isOpened():
         capture.release()
@@ -204,8 +209,9 @@ def open_v4l2_capture(device, width, height, fps):
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     capture.set(cv2.CAP_PROP_FPS, fps)
-    # One buffer: read() returns the newest frame, not one queued a few frames ago.
-    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    # Buffer count: 1 is the newest frame and the lowest latency, >= 2 the full rate (the
+    # docstring explains the trade-off). CAP_PROP_BUFFERSIZE is the V4L2 buffer count here.
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
     return capture
 
 
@@ -223,6 +229,7 @@ class WristCamera(Node):
         self.frame_id = self.declare_parameter('frame_id', 'camera_link').value
         self.calibration_file = self.declare_parameter('calibration_file', '').value
         self.jpeg_quality = self.declare_parameter('jpeg_quality', 80).value
+        self.buffer_size = self.declare_parameter('buffer_size', 4).value
         report_period = self.declare_parameter('report_period', 10.0).value
 
         self.open_capture = open_capture
@@ -278,7 +285,8 @@ class WristCamera(Node):
 
     def open_camera(self):
         """Open the camera; return True on success. Adapts to the size it actually gives."""
-        capture = self.open_capture(self.device, self.width, self.height, self.fps)
+        capture = self.open_capture(self.device, self.width, self.height, self.fps,
+                                    self.buffer_size)
         if capture is None:
             self.warn_throttled(f'cannot open {self.device}, retrying every {RETRY_S:.0f} s')
             return False
