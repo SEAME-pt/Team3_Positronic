@@ -270,8 +270,11 @@ arm move like the arm did in #33 (`docs/03_verification/jtc_on_the_arm`, gripper
 
 The lag and the rest error add on a joint moving up: J1 reads 2.2 + 0.5 = 2.7 deg behind at
 10 deg/s and 4.4 + 0.5 = 4.9 at 20 (the unit test reads 2.75 and 5.0 with a target every 10 ms).
-Moving down the rest error takes off instead, 1.7 at 10 deg/s. Holding the pose it reads, the arm
-settles one rest error below it, as J4 did when never commanded.
+Moving down the rest error takes off instead, 1.7 at 10 deg/s. Each time the pose it reads is
+commanded back (an activate, a controller holding the current state), the arm settles one more
+rest error below it, as J4 did once when never commanded. On the arm a joint with no load stays
+where it is when its measured pose is commanded back, so a test that activates or holds many
+times sees the fake arm drift further than the real one.
 
 Time is the sum of the `period`s `read()` gets, not the `time` argument, which the resource
 manager replaces with its own clock. On the control loop that is the time that passed; a test
