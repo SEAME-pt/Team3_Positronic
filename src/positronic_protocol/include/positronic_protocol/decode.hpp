@@ -72,12 +72,14 @@ namespace positronic_protocol
 /// when plugged. The checksum, same rule as the sync-write's, is checked: a hot servo corrupts
 /// its own frames (69 % at 53 degC on 19 Nov 2026), and a corrupt frame must never become a
 /// pose. `value` is the decoded status. Same search and `consumed` rules as
-/// decode_get_angles_reply(); a frame with a bad checksum counts as rejected.
+/// decode_get_angles_reply(); a frame with a bad checksum, or a position above 4095 steps
+/// (one turn, which no servo reports), counts as rejected.
 [[nodiscard]] Decoded<ServoStatus> decode_servo_status(ByteView rx) noexcept;
 
 /// The joint angle, in 0.01 deg, of a servo at `position` steps: the Atom's own conversion,
 /// checked against get_angles on the taps of 16 and 19 Nov 2026. 2048 steps is 0 deg, one step
-/// is 360/4096 deg, and J3 (`joint` 2) turns the other way.
+/// is 360/4096 deg, and J3 (`joint` 2) turns the other way. `position` is 0 to 4095, as
+/// decode_servo_status() guarantees, and `joint` 0 to 5: the gripper (id 7) is not a joint.
 [[nodiscard]] CentiDegrees angle_from_steps(std::uint16_t position, std::size_t joint) noexcept;
 
 }  // namespace positronic_protocol

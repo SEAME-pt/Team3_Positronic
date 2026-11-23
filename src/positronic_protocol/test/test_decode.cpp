@@ -700,6 +700,48 @@ TEST(DecodeServoStatus, ErrorByteSpeedLoadAndMovingAreDecoded)
   EXPECT_TRUE(result.value.moving);
 }
 
+TEST(DecodeServoStatus, AnIdOutsideOneToSevenOrAWrongLengthIsRejected)
+{
+  // A good checksum each time, so the id or the LEN is the only fault.
+  for (const std::uint8_t id : {std::uint8_t{0}, std::uint8_t{8}}) {
+    Bytes frame{STATUS_FRAME_1};
+    frame.at(2) = id;
+    frame = with_servo_checksum(frame);
+    const auto result{pp::decode_servo_status(view_of(frame))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND) << static_cast<int>(id);
+    EXPECT_EQ(result.rejected, 1U) << static_cast<int>(id);
+  }
+  Bytes frame{STATUS_FRAME_1};
+  frame.at(3) = 0x12;
+  frame = with_servo_checksum(frame);
+  const auto result{pp::decode_servo_status(view_of(frame))};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.rejected, 1U);
+}
+
+TEST(DecodeServoStatus, APositionPastOneTurnIsRejected)
+{
+  // 4095 steps is the last of a turn. Past it no servo reports: a corrupt frame whose checksum
+  // happened to match, which would otherwise wrap into a plausible angle (8000 steps: 132 deg).
+  const auto with_position{[](std::uint16_t position) {
+      Bytes frame{STATUS_FRAME_1};
+      frame.at(5) = static_cast<std::uint8_t>(position & 0xFFU);
+      frame.at(6) = static_cast<std::uint8_t>(position >> 8U);
+      return with_servo_checksum(frame);
+    }};
+  const auto last{pp::decode_servo_status(view_of(with_position(4095)))};
+  ASSERT_EQ(last.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(last.value.position, 4095);
+  // 32767, not 65535: FF FF inside the frame would be a second candidate, rejected too.
+  for (const std::uint16_t position :
+    {std::uint16_t{4096}, std::uint16_t{8000}, std::uint16_t{32767}})
+  {
+    const auto result{pp::decode_servo_status(view_of(with_position(position)))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND) << position;
+    EXPECT_EQ(result.rejected, 1U) << position;
+  }
+}
+
 TEST(DecodeServoStatus, OtherFramesAreNotIt)
 {
   EXPECT_EQ(
@@ -711,8 +753,9 @@ TEST(DecodeServoStatus, OtherFramesAreNotIt)
   EXPECT_EQ(pp::decode_servo_status(pp::ByteView{}).status, pp::DecodeStatus::NOT_FOUND);
 }
 
-// The Atom's conversion, against what pymycobot reported for the same servo positions on
-// 19 and 20 Nov 2026: 1994 steps was 4.75 deg on J1, 2060 was -1.05 on J5, 3758 was 150.29 on J3.
+// The Atom's conversion, against the angles reported for the same servo positions on the taps
+// of 16 and 19 Nov 2026: 1994 steps was 4.75 deg on J1 and 2060 was -1.05 on J5. 3758 steps on
+// J3, the joint that turns the other way, gives 150.29.
 TEST(DecodeServoStatus, AngleFromSteps)
 {
   EXPECT_EQ(pp::angle_from_steps(2048, 0), 0);
@@ -721,4 +764,8 @@ TEST(DecodeServoStatus, AngleFromSteps)
   EXPECT_EQ(pp::angle_from_steps(2053, 1), -44);
   EXPECT_EQ(pp::angle_from_steps(3758, 2), 15029);
   EXPECT_EQ(pp::angle_from_steps(1623, 3), 3735);
+  // The ends of the servo range: inside int16, and J3 mirrored.
+  EXPECT_EQ(pp::angle_from_steps(0, 0), 18000);
+  EXPECT_EQ(pp::angle_from_steps(4095, 0), -17991);
+  EXPECT_EQ(pp::angle_from_steps(0, 2), -18000);
 }

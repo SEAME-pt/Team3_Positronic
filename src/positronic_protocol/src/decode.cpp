@@ -209,6 +209,8 @@ constexpr std::size_t SERVO_STATUS_ID_OFFSET{2};
 constexpr std::size_t SERVO_STATUS_LEN_OFFSET{3};
 constexpr std::size_t SERVO_STATUS_ERROR_OFFSET{4};
 constexpr std::size_t SERVO_STATUS_DATA_OFFSET{5};
+/// The highest position a servo reports: 12 bits, one turn of 4096 steps.
+constexpr std::uint16_t MAX_SERVO_POSITION{4095};
 
 /// The checksum of a servo-bus frame at `start` of `size` bytes: the inverted low byte of the
 /// sum from the id to the last data byte, compared with the last byte.
@@ -222,9 +224,18 @@ bool servo_checksum_ok(ByteView rx, std::size_t start, std::size_t size) noexcep
   return static_cast<std::uint8_t>(~sum) == detail::read_byte(rx, checksum_index);
 }
 
+/// Reads an unsigned int16 stored little-endian at `index`.
+std::uint16_t read_uint16_le(ByteView rx, std::size_t index) noexcept
+{
+  const auto low{static_cast<std::uint16_t>(detail::read_byte(rx, index))};
+  const auto high{static_cast<std::uint16_t>(detail::read_byte(rx, index + 1))};
+  return static_cast<std::uint16_t>(low | (high << 8U));
+}
+
 /// find_frame() for a servo status frame: FF FF, an id 1 to 7, LEN 0x11, then the checksum 17
-/// bytes later. A mismatch after FF FF, or a bad checksum, counts as a rejected candidate; a
-/// buffer that ends while everything still matches is NEED_MORE_DATA.
+/// bytes later, and a position a servo can report. A mismatch after FF FF, a bad checksum or an
+/// impossible position counts as a rejected candidate; a buffer that ends while everything
+/// still matches is NEED_MORE_DATA.
 Match find_servo_status(ByteView rx) noexcept
 {
   Match match{};
@@ -257,7 +268,11 @@ Match find_servo_status(ByteView rx) noexcept
       match.consumed = start;
       return match;
     }
-    if (!servo_checksum_ok(rx, start, SERVO_STATUS_SIZE)) {
+    // A position past one turn cannot come from a servo: a corrupt frame whose checksum
+    // happened to match, rejected like one that did not.
+    const bool position_ok{
+      read_uint16_le(rx, start + SERVO_STATUS_DATA_OFFSET) <= MAX_SERVO_POSITION};
+    if (!servo_checksum_ok(rx, start, SERVO_STATUS_SIZE) || !position_ok) {
       ++match.rejected;
       continue;
     }
@@ -268,14 +283,6 @@ Match find_servo_status(ByteView rx) noexcept
   }
   match.consumed = rx.size;
   return match;
-}
-
-/// Reads an unsigned int16 stored little-endian at `index`.
-std::uint16_t read_uint16_le(ByteView rx, std::size_t index) noexcept
-{
-  const auto low{static_cast<std::uint16_t>(detail::read_byte(rx, index))};
-  const auto high{static_cast<std::uint16_t>(detail::read_byte(rx, index + 1))};
-  return static_cast<std::uint16_t>(low | (high << 8U));
 }
 
 /// A sign-magnitude value: bit `sign_bit` is the sign, the bits below it the magnitude.
