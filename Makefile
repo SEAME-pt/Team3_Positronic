@@ -119,7 +119,7 @@ export ROS_DOMAIN_ID
 
 NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) -v \$$HOME/$(NANO_DIR):/ws
 
-.PHONY: nano-image nano-sync nano-build nano-shell nano-service nano-packages
+.PHONY: nano-image nano-sync nano-build nano-shell nano-camera nano-service nano-packages
 
 nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once per Dockerfile change
 	rsync -a --delete docker/ $(NANO):positronic-docker/
@@ -135,8 +135,19 @@ nano-build: nano-sync ## Sync, then colcon build NANO_PACKAGES on the Jetson
 nano-packages: ## Print the packages the Jetson builds (CI reads this)
 	@echo $(NANO_PACKAGES)
 
-nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
-	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"
+# The wrist camera device on the Jetson. nano-shell maps it when it is plugged in, so
+# driver.launch.py camera:=true can use it; without it the shell starts as before. --group-add:
+# the gid of the device on the Jetson, whatever the image calls it.
+NANO_CAMERA ?= /dev/video0
+NANO_CAMERA_ARGS = \$$([ -e $(NANO_CAMERA) ] && echo --device $(NANO_CAMERA) --group-add \$$(stat -c %g $(NANO_CAMERA)))
+
+nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port (and the camera, if plugged)
+	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_CAMERA_ARGS) $(NANO_IMAGE) bash"
+
+# The camera alone (camera.launch.py), in its own container next to nano-shell's driver.
+nano-camera: nano-sync ## Sync, then shell on the Jetson with the wrist camera only (NANO_CAMERA)
+	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-camera --device $(NANO_CAMERA) \
+	  --group-add \$$(stat -c %g $(NANO_CAMERA)) $(NANO_IMAGE) bash"
 
 NANO_SERVICE := positronic-driver
 
