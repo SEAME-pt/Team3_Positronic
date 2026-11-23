@@ -49,6 +49,8 @@
 #   The defaults of the driver's parameters now live only in the driver (HardwareConfig): the
 #   xacro writes a <param> only for an argument that is set. Check that no argument, or an
 #   empty one as the launch passes, writes no <param>.
+# Follow-up prompt (#183):
+#   load_relief reaches the plugin like the others.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -167,6 +169,7 @@ def test_arguments_reach_the_plugin():
             servo_temp_limit_c='45',
             tracking_error_deg='6',
             tracking_error_ms='200',
+            load_relief='false',
         )
     )
     assert params == {
@@ -180,6 +183,7 @@ def test_arguments_reach_the_plugin():
         'servo_temp_limit_c': '45',
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
+        'load_relief': 'false',
     }
 
 

@@ -32,6 +32,8 @@
 # Follow-up prompt (#150):
 #   The driver's arguments have no default of their own any more, and update_rate takes its
 #   default from jetson_controllers.yaml. Check both.
+# Follow-up prompt (#183):
+#   load_relief is a driver argument too.
 
 """Check that the launch files of the real arm build their description."""
 
@@ -80,6 +82,7 @@ def test_driver_starts_active_unless_asked():
 DRIVER_ARGUMENTS = [
     'backend', 'fake_mode', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms',
     'pose_from_poll', 'servo_temp_limit_c', 'tracking_error_deg', 'tracking_error_ms',
+    'load_relief',
 ]
 
 

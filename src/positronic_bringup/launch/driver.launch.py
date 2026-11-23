@@ -37,7 +37,7 @@ driver and the mirror at the same time on one ROS_DOMAIN_ID gives two /tf publis
 same robot, which RViz warns about but tolerates. The 10 minute run only records
 /joint_states and does not need the mirror.
 
-Launch arguments. The driver's (backend to tracking_error_ms) have no default here: unset,
+Launch arguments. The driver's (backend to load_relief) have no default here: unset,
 the driver keeps its own (HardwareConfig and SerialTiming in positronic_hardware, the table in
 its README), and the INFO line of on_init prints the values in use. A default here would win
 over the driver's and hide a change made there.
@@ -52,6 +52,8 @@ over the driver's and hide a change made there.
   servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
+  load_relief:=true|false     a still joint pushing short of its target is sent where it
+                              stands (#183)
   update_rate:=               Hz, of the control loop and of /joint_states; by default the
                               update_rate of jetson_controllers.yaml
   start_inactive:=false       true: the hardware component and arm_controller come up
@@ -119,6 +121,10 @@ def generate_launch_description():
     tracking_error_ms = DeclareLaunchArgument(
         'tracking_error_ms', default_value='',
         description='ms a joint may stay over tracking_error_deg before fault 2 (50 to 5000).')
+    # The load relief (#183), on by default: false turns it off.
+    load_relief = DeclareLaunchArgument(
+        'load_relief', default_value='',
+        description='true or false: relieve a still joint pushing short of its target.')
     # The yaml's value by default, read from the yaml. Here so the 10 minute run can try another
     # rate without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -152,6 +158,7 @@ def generate_launch_description():
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
+            ' load_relief:=', LaunchConfiguration('load_relief'),
         ]),
         value_type=str)
 
@@ -219,6 +226,7 @@ def generate_launch_description():
         servo_temp_limit_c,
         tracking_error_deg,
         tracking_error_ms,
+        load_relief,
         update_rate,
         start_inactive,
         robot_state_publisher,

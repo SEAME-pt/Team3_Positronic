@@ -2358,3 +2358,154 @@ TEST(SerialArmPollPose, TheJumpEdgeOfAPlausibleFrame)
     pose_after_poll(frames_at(0, far, 7, 0x23, 1), 1).at(0), rad_of(RECORDED_POLL_STEPS.at(0), 0),
     1e-9);
 }
+
+// Follow-up prompt (#183, the load relief on the replayed arm):
+//   The poll frames carry J1 pushing (load 30) while the controller keeps writing J1 1 deg past
+//   where it stands: after the hold (100 ms here) J1 goes out where it stands, the relief is
+//   logged with its values and the other joints go out as commanded; a halt ends it, and a hold
+//   after the power on J1 is relieved again; a new command for J1 goes out as is. Without load,
+//   with the relief off, or where J1 stands outside its URDF limits (refused), the command goes
+//   out.
+
+namespace
+{
+using positronic_hardware::LoadReliefCheck;
+using positronic_hardware::LoadReliefLimits;
+using positronic_hardware::PositionLimits;
+using positronic_hardware::ReliefEvent;
+
+constexpr double ONE_DEG{M_PI / 180.0};
+
+/// The recorded poll, still and at load 0, with J1 reporting `load`.
+std::vector<std::uint8_t> poll_with_j1_load(std::uint16_t load)
+{
+  std::vector<std::uint8_t> frames{
+    with_byte(parse_hex(RECORDED_POLL_FRAMES), 0, 4, static_cast<std::uint8_t>(load & 0xFFU))};
+  return with_byte(std::move(frames), 0, 5, static_cast<std::uint8_t>(load >> 8U));
+}
+
+/// A relief with a 100 ms hold, so a test lasts a fraction of a second; +-3 rad on every joint,
+/// J1's upper end at `j1_upper`.
+LoadReliefCheck fast_relief(double j1_upper = 3.0, bool enabled = true)
+{
+  LoadReliefLimits limits{};
+  limits.enabled = enabled;
+  limits.hold = std::chrono::milliseconds{100};
+  PositionLimits range{};
+  for (positronic_hardware::PositionLimit & limit : range) {
+    limit.lower = -3.0;
+    limit.upper = 3.0;
+  }
+  range.at(0).upper = j1_upper;
+  return LoadReliefCheck{limits, range};
+}
+
+/// The recorded poll's pose with J1 1 deg further: J1 stands 1 deg short of it.
+JointPositions j1_short()
+{
+  JointPositions command{recorded_poll_pose()};
+  command.at(0) += ONE_DEG;
+  return command;
+}
+
+/// Writes `command` every 10 ms, as the controller does, until `done()` or 2 s. Returns done().
+template<typename Done>
+bool write_until(SerialArm & arm, const JointPositions & command, Done done)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    arm.write_angles(command);
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return done();
+}
+
+/// True when the last target on the wire has J1 at `rad`.
+bool j1_on_the_wire(const SerialArm & arm, double rad)
+{
+  const std::optional<JointPositions> target{arm.last_target()};
+  return target.has_value() && std::abs(target.value_or(JointPositions{}).at(0) - rad) < 1e-9;
+}
+
+/// An arm whose poll shows J1 pushing with `load`, with `relief`.
+std::unique_ptr<SerialArm> arm_with(std::uint16_t load, const LoadReliefCheck & relief)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  transport->set_poll_frames(poll_with_j1_load(load));
+  return std::make_unique<SerialArm>(
+    std::move(transport), POLL_TIMING, TemperatureGuard{}, false, relief);
+}
+}  // namespace
+
+TEST(SerialArmLoadRelief, AStillLoadedJointGoesOutWhereItStandsUntilMovedOrHalted)
+{
+  const std::unique_ptr<SerialArm> arm{arm_with(30, fast_relief())};
+  static_cast<void>(wait_for_reply(*arm));
+  const JointPositions command{j1_short()};
+  const double stands{rad_of(RECORDED_POLL_STEPS.at(0), 0)};
+  const auto relieved{[&arm, stands]() {
+      return j1_on_the_wire(*arm, stands);
+    }};
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  const ReliefEvent event{arm->last_load_relief().value_or(ReliefEvent{})};
+  EXPECT_EQ(event.number, 1u);
+  EXPECT_EQ(event.joint, 0u);
+  EXPECT_EQ(event.load, 30);
+  EXPECT_EQ(event.celsius, RECORDED_POLL_TEMPS.at(0));
+  EXPECT_NEAR(event.residual_rad, ONE_DEG, 1e-9);
+  EXPECT_FALSE(event.refused);
+  // The other joints go out as commanded.
+  const JointPositions wire{arm->last_target().value_or(JointPositions{})};
+  for (std::size_t joint{1}; joint < NUM_JOINTS; ++joint) {
+    EXPECT_DOUBLE_EQ(wire.at(joint), command.at(joint)) << joint;
+  }
+  // A halt ends the relief: the first send after the power on carries the controller's
+  // command, and a whole hold later J1 is relieved again.
+  ASSERT_TRUE(arm->halt());
+  ASSERT_TRUE(arm->power_on());
+  ASSERT_TRUE(write_until(*arm, command, [&arm, &command]() {
+      return j1_on_the_wire(*arm, command.at(0));
+  }));
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
+  // The controller moves J1: the new command goes out as is.
+  JointPositions moved{command};
+  moved.at(0) += ONE_DEG;
+  EXPECT_TRUE(write_until(*arm, moved, [&arm, &moved]() {
+      return j1_on_the_wire(*arm, moved.at(0));
+  }));
+  // Polls without a relief leave the last one for the plugin to read.
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
+}
+
+TEST(SerialArmLoadRelief, NothingWithoutLoadWithTheReliefOffOrOutsideTheUrdfLimits)
+{
+  const double stands{rad_of(RECORDED_POLL_STEPS.at(0), 0)};
+  struct Case
+  {
+    std::uint16_t load;
+    LoadReliefCheck relief;
+    bool refused;
+  };
+  for (const Case & one :
+    {Case{0, fast_relief(), false}, Case{30, fast_relief(3.0, false), false},
+      Case{30, fast_relief(stands - 1e-3), true}})
+  {
+    const std::unique_ptr<SerialArm> arm{arm_with(one.load, one.relief)};
+    static_cast<void>(wait_for_reply(*arm));
+    const JointPositions command{j1_short()};
+    if (one.refused) {
+      ASSERT_TRUE(write_until(*arm, command, [&arm]() {
+          return arm->last_load_relief().has_value();
+      }));
+    }
+    // Four holds of writes: the controller's command keeps going out.
+    const auto end{std::chrono::steady_clock::now() + std::chrono::milliseconds{400}};
+    static_cast<void>(write_until(*arm, command, [end]() {
+      return std::chrono::steady_clock::now() > end;
+    }));
+    const std::optional<ReliefEvent> relief{arm->last_load_relief()};
+    EXPECT_EQ(relief.value_or(ReliefEvent{}).refused, one.refused) << one.load;
+    EXPECT_TRUE(j1_on_the_wire(*arm, command.at(0))) << one.load;
+  }
+}

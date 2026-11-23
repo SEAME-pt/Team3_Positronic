@@ -35,7 +35,9 @@
 #include <vector>
 
 #include "positronic_hardware/arm_backend.hpp"
+#include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
+#include "positronic_hardware/load_relief.hpp"
 #include "positronic_hardware/requests.hpp"
 #include "positronic_hardware/serial_transport.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
@@ -181,14 +183,18 @@ public:
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
+  /// `relief` decides on the frames of each poll which still joint is sent its own position
+  /// (#183); off unless given.
   SerialArm(
     const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
-    bool has_gripper = false);
+    bool has_gripper = false,
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}});
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
     std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
-    bool has_gripper = false);
+    bool has_gripper = false,
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}});
 
   ~SerialArm() override;
 
@@ -251,6 +257,8 @@ public:
   /// The sends whose sync-write did not come within SerialTiming::echo_timeout (#150).
   [[nodiscard]] std::uint64_t echo_timeouts() const override;
 
+  [[nodiscard]] std::optional<ReliefEvent> last_load_relief() const override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   /// What halt() and power_on() leave for the thread to send at the start of its next turn.
@@ -302,6 +310,11 @@ private:
   /// One reading for the guard, from the poll or from a reply, taken at `at`: published when
   /// plausible, and fed to the detector, whose trip cuts the arm. Serial thread only.
   void take_temperatures(const ServoTemperatures & temperatures, Clock::time_point at);
+
+  /// The controller's newest command as it goes on the wire: each relieved joint at its own
+  /// position (#183), so last_sent() is the wire. Clears every relief while the arm is held.
+  /// Serial thread only.
+  [[nodiscard]] std::optional<JointPositions> command_to_send();
 
   /// One get_angles: the request, then its reply within REPLY_TIMEOUT, published as the pose.
   /// False when the port refused the request or the reply did not come. Serial thread only.
@@ -407,6 +420,11 @@ private:
   std::atomic<int> overheat_celsius_{0};
   // Sends whose sync-write did not come within echo_timeout (#150). Written by the poll thread.
   std::atomic<std::uint64_t> echo_timeouts_{0};
+  // The load relief (#183), poll thread only: wire() on every command, update() on the frames of
+  // every poll, reset() while held.
+  LoadReliefCheck relief_;
+  // Its last relief, for the plugin's log. Same rule as latest_.
+  mutable realtime_tools::RealtimeBuffer<std::optional<ReliefEvent>> last_relief_{std::nullopt};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   // When the guard last took a reading, from the poll or by asking: what period and max_age

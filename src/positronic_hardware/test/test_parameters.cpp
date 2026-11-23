@@ -35,6 +35,9 @@
 // Follow-up prompt (#170):
 //   pose_from_poll, 'true' or 'false', default true, reaches SerialTiming::pose_from_poll; any
 //   other text is refused with the two values; the INFO line says "pose from poll on" or "off".
+// Follow-up prompt (#183):
+//   load_relief, 'true' or 'false', default true, reaches LoadReliefLimits::enabled; any other
+//   text is refused with the two values; the INFO line ends with "load relief on".
 
 #include <gtest/gtest.h>
 
@@ -89,6 +92,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.servo_temp_limit_c, defaults.servo_temp_limit_c);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, defaults.tracking_error_deg);
   EXPECT_EQ(config.tracking_error_ms, defaults.tracking_error_ms);
+  EXPECT_TRUE(config.relief.enabled);
 }
 
 TEST(Parameters, EveryParameterReachesItsField)
@@ -104,7 +108,8 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"pose_from_poll", "false"},
       {"servo_temp_limit_c", "45"},
       {"tracking_error_deg", "6.5"},
-      {"tracking_error_ms", "200"}})};
+      {"tracking_error_ms", "200"},
+      {"load_relief", "false"}})};
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   EXPECT_EQ(config.backend, Backend::FAKE);
@@ -118,6 +123,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_EQ(config.servo_temp_limit_c, 45);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, 6.5);
   EXPECT_EQ(config.tracking_error_ms, 200);
+  EXPECT_FALSE(config.relief.enabled);
 }
 
 // The list in the message comes from the tables: a parameter added there shows up here.
@@ -126,7 +132,7 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
   EXPECT_EQ(
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, fake_mode, port, baud, "
-    "velocity_filter_alpha, pose_from_poll, moving_period_ms, echo_timeout_ms, "
+    "velocity_filter_alpha, pose_from_poll, load_relief, moving_period_ms, echo_timeout_ms, "
     "servo_temp_limit_c, tracking_error_deg, tracking_error_ms.");
 }
 
@@ -239,6 +245,9 @@ TEST(Parameters, TheSpecialParametersKeepTheirRules)
     "Parameter 'pose_from_poll' is 'yes'; use 'true' or 'false'.");
   EXPECT_TRUE(accepted(Parameters{{"pose_from_poll", "true"}}));
   EXPECT_TRUE(accepted(Parameters{{"pose_from_poll", "false"}}));
+  EXPECT_EQ(
+    refusal("load_relief", "on"), "Parameter 'load_relief' is 'on'; use 'true' or 'false'.");
+  EXPECT_TRUE(accepted(Parameters{{"load_relief", "true"}}));
 }
 
 // The INFO line of on_init, the same text as before #163.
@@ -248,7 +257,7 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
     "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 60 degC, "
-    "tracking error 8.0 deg for 300 ms.");
+    "tracking error 8.0 deg for 300 ms, load relief on.");
 }
 
 // #122: the fake backend says which mode it moves in; the instant one keeps the old line.

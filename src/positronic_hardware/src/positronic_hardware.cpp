@@ -98,6 +98,10 @@ constexpr double to_state(FaultCode code)
   return static_cast<double>(std::underlying_type_t<FaultCode>(code));
 }
 
+/// The least time between two relief lines of read() (#183): at most one relief per poll, 33 ms
+/// apart, so none is dropped.
+constexpr int RELIEF_LOG_PERIOD_MS{20};
+
 /// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
 /// milliseconds, so this is generous; the arm not answering at all is what it catches.
 constexpr std::chrono::milliseconds FIRST_SAMPLE_TIMEOUT{1000};
@@ -292,6 +296,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
   echo_report_.reset();
+  reported_reliefs_ = 0;
   tracking_ = TrackingCheck{TrackingLimits{
       config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
@@ -299,8 +304,10 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
+      // The relief sends a joint its own position: the same URDF limits as every command (#34).
       arm_ = std::make_unique<SerialArm>(
-        config_.port, config_.baud, config_.timing, guard, has_gripper_);
+        config_.port, config_.baud, config_.timing, guard, has_gripper_,
+        LoadReliefCheck{config_.relief, limits_});
     } else {
       // The fake arm's time is the sum of the periods read() got: on the control loop that is
       // the time that passed, and a test that passes the periods in moves the arm without
@@ -508,6 +515,7 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   if (active) {
     check_tracking();
     report_echo_timeouts();
+    report_load_reliefs();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -530,6 +538,32 @@ void RobotSystem::report_echo_timeouts()
     " send_angles got no sync-write from the arm since the last report: each of their "
     "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
     fresh.value());
+}
+
+void RobotSystem::report_load_reliefs()
+{
+  // The event carries its own number, so a read that meets the thread's write and gets the old
+  // box logs it next cycle.
+  const std::optional<ReliefEvent> relief{arm_->last_load_relief()};
+  if (!relief.has_value() || relief->number <= reported_reliefs_) {
+    return;
+  }
+  reported_reliefs_ = relief->number;
+  const char * joint{info_.joints.at(relief->joint).name.c_str()};
+  const double residual_deg{relief->residual_rad * RAD_TO_DEG};
+  if (!relief->refused) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
+      "Joint '%s' stood still %.1f deg from its target pushing with load %d at %d degC: sent "
+      "where it stands, until the controller moves it.",
+      joint, residual_deg, relief->load, relief->celsius);
+    return;
+  }
+  RCLCPP_WARN_THROTTLE(
+    get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
+    "Joint '%s' stood still %.1f deg from its target pushing with load %d at %d degC, but where "
+    "it stands is outside its URDF limits: not relieved.",
+    joint, residual_deg, relief->load, relief->celsius);
 }
 
 bool RobotSystem::temperatures_allow_activation()

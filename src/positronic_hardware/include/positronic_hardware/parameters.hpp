@@ -27,6 +27,7 @@
 #include <unordered_map>
 
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/load_relief.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/tracking_check.hpp"
@@ -56,6 +57,7 @@ struct HardwareConfig
   int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
   double tracking_error_deg{TRACKING_ERROR_DEG};
   int tracking_error_ms{TRACKING_ERROR_MS};
+  LoadReliefLimits relief{};
 };
 
 /// The config read from the URDF, or the reason it was refused: exactly one of the two is set.

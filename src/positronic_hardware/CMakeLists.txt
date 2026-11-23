@@ -116,6 +116,10 @@ if(BUILD_TESTING)
   # Pure-logic unit test for the unfollowed-command check (#103): no port, no thread, header-only.
   ament_add_gtest(test_tracking_check test/test_tracking_check.cpp)
   target_include_directories(test_tracking_check PRIVATE include)
+  # Pure-logic unit test for the load relief of a still joint pushing short of its target (#183).
+  ament_add_gtest(test_load_relief test/test_load_relief.cpp)
+  target_include_directories(test_load_relief PRIVATE include)
+  target_link_libraries(test_load_relief positronic_protocol::positronic_protocol)
   # The request table (#149): the frame, the command and the wait of every request to the Atom.
   ament_add_gtest(test_requests test/test_requests.cpp)
   target_include_directories(test_requests PRIVATE include)
