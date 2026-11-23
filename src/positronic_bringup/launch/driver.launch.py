@@ -46,6 +46,8 @@ over the driver's and hide a change made there.
   baud:=                      the arm's firmware rate (115200 or 1000000)
   moving_period_ms:=          ms of a serial-thread turn that sends a command
   echo_timeout_ms:=           ms the thread waits at most for the arm's sync-write after a send
+  pose_from_poll:=true|false  the pose from the arm's own poll of its servos, the send on the
+                              controller's write (#170); false gives a get_angles every turn
   servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
@@ -97,6 +99,10 @@ def generate_launch_description():
     echo_timeout_ms = DeclareLaunchArgument(
         'echo_timeout_ms', default_value='',
         description="ms the thread waits at most for the arm's sync-write after a send.")
+    pose_from_poll = DeclareLaunchArgument(
+        'pose_from_poll', default_value='',
+        description="true: the pose from the arm's own poll of its servos and the send on the "
+                    'controller write (#170); false: a get_angles every turn.')
     # The over-temperature cut. Only lower it, for the hardware test of the cut.
     servo_temp_limit_c = DeclareLaunchArgument(
         'servo_temp_limit_c', default_value='',
@@ -136,6 +142,7 @@ def generate_launch_description():
             ' baud:=', LaunchConfiguration('baud'),
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
             ' echo_timeout_ms:=', LaunchConfiguration('echo_timeout_ms'),
+            ' pose_from_poll:=', LaunchConfiguration('pose_from_poll'),
             ' servo_temp_limit_c:=', LaunchConfiguration('servo_temp_limit_c'),
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
@@ -201,6 +208,7 @@ def generate_launch_description():
         baud,
         moving_period_ms,
         echo_timeout_ms,
+        pose_from_poll,
         servo_temp_limit_c,
         tracking_error_deg,
         tracking_error_ms,

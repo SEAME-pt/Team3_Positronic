@@ -98,6 +98,8 @@
 // Follow-up prompt (#150):
 //   echo_timeout_ms replaces send_settle_ms as the parameter: the old name is refused, a value
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
+// Follow-up prompt (#170):
+//   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -772,7 +774,7 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -797,6 +799,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"echo_timeout_ms", "100"},         // two lost replies after it would pass the #35 timeout
     {"echo_timeout_ms", "slow"},        // not a number
     {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
+    {"pose_from_poll", "maybe"},        // true or false only (#170)
     {"servo_temp_limit_c", "61"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only

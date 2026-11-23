@@ -39,7 +39,7 @@ Both run on the Jetson, next to each other (ADR 0006). The parameters of the sup
 in config/safety_supervisor.yaml.
 
 Launch arguments: the ones of driver.launch.py, which this launch passes on (backend, port,
-baud, update_rate, moving_period_ms, echo_timeout_ms).
+baud, update_rate, moving_period_ms, echo_timeout_ms, pose_from_poll).
 """
 
 from launch import LaunchDescription
