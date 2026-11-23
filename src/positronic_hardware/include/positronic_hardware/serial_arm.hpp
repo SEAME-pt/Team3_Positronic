@@ -59,18 +59,18 @@ struct SerialTiming
   /// the six servos before it sync-writes them the target; those status frames, with a checksum,
   /// are the pose, published the moment the sync-write closes, and the turn asks no get_angles.
   /// The controller's write() wakes the thread, so the send follows the write and the stream
-  /// keeps the controller's cadence: 10 minutes at 33 ms on 20 Nov 2026 gave 18007 sends, 9
-  /// get_angles in the stream, 0 lost replies, send intervals p50 33.3 / p99 41.7 ms (1.3 % above
-  /// 40 ms, 4.2 % before). At rest a write sends the unchanged target again, unless its last send
-  /// got no sync-write or the gripper is due. get_angles stays as the fallback: a frame missing
-  /// or corrupt (a hot servo), a late sync-write, or a controller that stopped writing. False
-  /// gives the #150 turn back: get_angles every turn, the period from the thread's own clock.
+  /// keeps the controller's cadence (docs/03_verification/write_sweep). At rest a write sends the
+  /// unchanged target again, unless its last send got no sync-write or the gripper is due.
+  /// get_angles stays as the fallback: a frame missing or corrupt (a hot servo), a late
+  /// sync-write, or a controller that stopped writing. False gives the #150 turn back:
+  /// get_angles every turn, the period from the thread's own clock.
   bool pose_from_poll{true};
 
-  /// One turn while the arm moves: a get_angles, a send_angles and the wait for the Atom's
-  /// sync-write (#150). In the 10 minutes at 33 ms of 19 Nov 2026 the reply came 7.8 ms after
-  /// the request (p99 9.4) and the sync-write ended 19.2 ms after the send (p99 28.0), so a
-  /// turn takes about 27 ms and 33 ms is one control period at 30 Hz: 17216 sends, 0 stalls.
+  /// One turn while the arm moves: a get_angles (with pose_from_poll, only when the poll gave no
+  /// pose), a send_angles and the wait for the Atom's sync-write (#150). In the 10 minutes at
+  /// 33 ms of 19 Nov 2026 the reply came 7.8 ms after the request (p99 9.4) and the sync-write
+  /// ended 19.2 ms after the send (p99 28.0), so a turn takes about 27 ms and 33 ms is one
+  /// control period at 30 Hz: 17216 sends, 0 stalls.
   /// A slow turn overruns and the next one starts at once. A shorter period gains nothing at
   /// 30 Hz: the controller has no new target for every turn.
   std::chrono::milliseconds moving_period{33};
@@ -119,11 +119,12 @@ struct TemperatureGuard
 
 /// The real arm behind the ArmBackend interface (#22).
 ///
-/// A dedicated thread owns the serial port: it asks the arm for its angles (get_angles), decodes
-/// the reply and keeps the newest pose in a lock-free buffer. read_angles(), called from the
-/// control loop, only copies that buffer out, so the loop never blocks on the port. This is the
-/// "serial I/O in a dedicated thread owning the port, latest sample through a RealtimeBuffer, no
-/// blocking call in the control loop" that #22 asks for, with the actual device work of #23.
+/// A dedicated thread owns the serial port: it reads the arm's angles (the Atom's poll after a
+/// send with pose_from_poll, else get_angles) and keeps the newest pose in a lock-free buffer.
+/// read_angles(), called from the control loop, only copies that buffer out, so the loop never
+/// blocks on the port. This is the "serial I/O in a dedicated thread owning the port, latest
+/// sample through a RealtimeBuffer, no blocking call in the control loop" that #22 asks for, with
+/// the actual device work of #23.
 class SerialArm : public ArmBackend
 {
 public:
@@ -329,9 +330,9 @@ private:
   /// stores a command, or until a new stop or power on is requested, whichever comes first.
   /// Without it: sleeps until `deadline`. Serial thread only.
   void wait_for_turn_end(Clock::time_point deadline);
-  /// Ends the thread's wait in wait_for_turn_end() at once, for a stop or power on just
-  /// requested: sets request_ready_ under wake_mutex_, so the wake cannot be lost.
-  void wake_thread();
+  /// Ends the thread's wait in wait_for_turn_end() at once: sets `flag` (command_ready_ for a
+  /// write, request_ready_ for a stop or power on) under wake_mutex_, so the wake cannot be lost.
+  void wake_thread(bool & flag);
 
   /// Writes `request` and waits for what it expects (requests.hpp): nothing, the ack of its
   /// command with status 1, or a reply that `reply` recognises, with the request's timeout from
@@ -448,18 +449,16 @@ private:
   // #170, serial thread only: the Atom has finished everything it does for our last request,
   // so the next turn needs no get_angles. Set by wait_for_sync_write() when the poll gave the
   // pose, which it published, and by watch_temperatures() when the arm answered them in a turn
-  // that had a target to send (without that, the turn after every temperature request asked a
-  // get_angles, 200 times in 10 min, 20 Nov 2026). Never from an ack: the Atom acks first and
-  // still works on the servo bus after it (set_gripper_value: ack at ~2 ms, its write to the
-  // gripper until ~12 ms).
+  // that had a target to send. Never from an ack: the Atom acks first and still works on the
+  // servo bus after it (set_gripper_value: ack at ~2 ms, its write to the gripper until ~12 ms).
   bool input_free_{false};
   // #170, serial thread only: whether the last send_angles got its sync-write. An unchanged
   // target is sent again at rest only when it did: a target the Atom refuses would otherwise go
   // out on every write, each one waiting the echo_timeout.
   bool last_send_answered_{true};
-  // #170: write_angles() wakes the thread (command_ready_, under wake_mutex_), so the send goes
-  // out right after the controller's write; a new halt or power on wakes it too
-  // (request_ready_, set by wake_thread()). Each turn clears both before it looks at what they
+  // #170: write_angles() wakes the thread (command_ready_, set by wake_thread()), so the send
+  // goes out right after the controller's write; a new halt or power on wakes it too
+  // (request_ready_). Each turn clears both before it looks at what they
   // announce, so a request still pending without its ack does not end every wait at once.
   std::mutex wake_mutex_;
   std::condition_variable wake_cv_;

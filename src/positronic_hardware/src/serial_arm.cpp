@@ -214,13 +214,8 @@ void SerialArm::write_angles(const JointPositions & angles)
   // port, so the control loop never waits for the serial link here.
   command_.writeFromNonRT(angles);
   if (timing_.pose_from_poll) {
-    // Wake the thread, so the send follows this write instead of the thread's own period
-    // (#170). The lock is held for two stores; the thread holds it for as long.
-    {
-      const std::lock_guard<std::mutex> lock{wake_mutex_};
-      command_ready_ = true;
-    }
-    wake_cv_.notify_one();
+    // Wake the thread, so the send follows this write instead of the thread's own period (#170).
+    wake_thread(command_ready_);
   }
 }
 
@@ -230,24 +225,23 @@ void SerialArm::wait_for_turn_end(Clock::time_point deadline)
     std::this_thread::sleep_until(deadline);
     return;
   }
-  // The flag was cleared before this turn read its command, so a write that landed during the
+  // The flag was cleared when this turn read its command, so a write that landed during the
   // turn, while the sync-write was being read, is still set and ends the wait at once: the
-  // send follows the sync-write instead of waiting for the next write. Cleared here instead,
-  // 1 % of the sends came 55 to 66 ms apart in 10 min (20 Nov 2026): a write lost during a
-  // slow sync-write, the thread asleep until its deadline.
-  // A new stop or power on ends the wait too: the controller stops writing on a halt, and the
-  // stop must not wait for the two-period deadline.
+  // send follows the sync-write instead of waiting for the next write. A new stop or power on
+  // ends the wait too: the controller stops writing on a halt, and the stop must not wait for
+  // the two-period deadline.
   std::unique_lock<std::mutex> lock{wake_mutex_};
   std::ignore = wake_cv_.wait_until(lock, deadline, [this]() {
         return command_ready_ || request_ready_ || stop_.load();
   });
 }
 
-void SerialArm::wake_thread()
+void SerialArm::wake_thread(bool & flag)
 {
   {
+    // Held for one store; the thread holds it as briefly.
     const std::lock_guard<std::mutex> lock{wake_mutex_};
-    request_ready_ = true;
+    flag = true;
   }
   wake_cv_.notify_one();
 }
@@ -273,7 +267,7 @@ void SerialArm::request_halt()
 {
   halted_.store(true);
   request_.store(Pending::HALT);
-  wake_thread();
+  wake_thread(request_ready_);
 }
 
 bool SerialArm::power_on()
@@ -355,7 +349,7 @@ std::optional<JointPositions> SerialArm::last_sent() const
 bool SerialArm::request_and_wait(Pending request)
 {
   request_.store(request);
-  wake_thread();
+  wake_thread(request_ready_);
   // The poll thread writes the frame at the start of its next turn, waits for the arm's ack and
   // then puts request_ back to NONE. 1 ms steps: on the arm the ack is in within a few ms, and
   // this runs in a lifecycle transition, which may wait.
@@ -468,12 +462,9 @@ void SerialArm::wait_for_sync_write()
   if (!seen && !stop_.load()) {
     echo_timeouts_.fetch_add(1);
   }
-  if (!seen || !keep) {
-    return;
-  }
   // Published now, the moment the sync-write closes, not at the start of the next turn: the
   // pose is ~13 ms fresher for the read() that comes next (#170).
-  if (publish_poll_frames()) {
+  if (seen && keep && publish_poll_frames()) {
     input_free_ = true;
   }
 }
@@ -600,9 +591,7 @@ std::chrono::milliseconds SerialArm::turn_period(bool sent) const
   if (timing_.pose_from_poll && input_free_) {
     // The pose is published and the controller's next write ends the wait; the deadline only
     // catches a controller that stopped writing. At one period it raced the controller's own
-    // period (33 vs 33.3 ms) and won a third of the time, each time costing a get_angles turn
-    // (19 Nov 2026). Without a pose from the poll the next turn starts at the period, as
-    // before, and asks get_angles.
+    // period (33 vs 33.3 ms) and won a third of the time, each time costing a get_angles turn.
     return 2 * timing_.moving_period;
   }
   return timing_.moving_period;
@@ -856,9 +845,7 @@ void SerialArm::poll_loop()
     // Whether the controller wrote since the last turn read the command, whenever it landed:
     // in the wait at the end of that turn or during this turn's get_angles. Each write counts
     // once, here, where the turn decides; one from here on is left set for the wait at the end
-    // of this turn (#170). Taken only from the wait, a write that landed during a get_angles
-    // was lost, and after a gripper read the repeat waited 48 to 208 ms for one to land in the
-    // few ms of the wait (23 Nov 2026).
+    // of this turn (#170).
     bool wrote{false};
     {
       const std::lock_guard<std::mutex> lock{wake_mutex_};

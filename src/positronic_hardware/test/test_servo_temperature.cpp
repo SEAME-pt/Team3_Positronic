@@ -42,6 +42,10 @@
 //   trip at the first 60 1 s after the first 60; a 58 stops it. Each servo has its own clock:
 //   J4 held at 59 must not keep alive a clock that J1's false readings start, and the trip names
 //   the servo whose clock ran out.
+//
+// Follow-up prompt (#170, the simplification):
+//   Drop the two hot polls 33 ms apart: one second at the poll's cadence and a cool reading
+//   between hot ones are covered, and no mutant needs it.
 
 #include <gtest/gtest.h>
 
@@ -72,8 +76,6 @@ constexpr ServoTemperatures J3_AT_LIMIT{31, 33, 60, 30, 29, 28};
 constexpr ServoTemperatures J2_HOTTEST{31, 62, 60, 30, 29, 28};
 /// One slot reads 0: what an unanswered servo looks like.
 constexpr ServoTemperatures ONE_ZERO{31, 0, 35, 30, 29, 28};
-/// A false J1 reading as the arm gives them, the others normal (see HOT_FOR).
-constexpr ServoTemperatures J1_SPIKE{76, 34, 32, 33, 32, 35};
 /// The poll's cadence while moving (#170): a reading with every send.
 constexpr std::int64_t POLL_MS{33};
 
@@ -203,18 +205,6 @@ TEST(OverheatDetector, EachServoHasItsOwnClock)
   ASSERT_TRUE(trip.has_value());
   EXPECT_EQ(trip.value_or(Overheat{}).joint, 3U);
   EXPECT_EQ(trip.value_or(Overheat{}).celsius, 60);
-}
-
-TEST(OverheatDetector, TwoHotPolls33MsApartDoNotTrip)
-{
-  // Two readings at or above the limit in a row, the cut of before. 33 ms is not HOT_FOR.
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
-  EXPECT_FALSE(detector.update(J1_SPIKE, at_ms(0)).has_value());
-  EXPECT_FALSE(detector.update(J1_SPIKE, at_ms(POLL_MS)).has_value());
-  EXPECT_FALSE(detector.update(COOL, at_ms(2 * POLL_MS)).has_value());
-  // The normal poll stopped the clock: two false ones a second after the first are new ones.
-  EXPECT_FALSE(detector.update(J1_SPIKE, at_ms(1000 + POLL_MS)).has_value());
-  EXPECT_FALSE(detector.update(J1_SPIKE, at_ms(1000 + 2 * POLL_MS)).has_value());
 }
 
 TEST(OverheatDetector, WithNoWaitOneReadingAloneStillDoesNotTrip)
