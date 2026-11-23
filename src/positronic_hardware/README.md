@@ -20,7 +20,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
                                               │  copy in or out of a buffer, never blocks
                                               ▼
                                            ArmBackend
-                                           ├─ FakeArm      at every target at once, no port (tests, CI)
+                                           ├─ FakeArm      no port (tests, CI): at every target at once,
+                                           │                or lagging like the arm (fake_mode measured)
                                            └─ SerialArm    own thread: ask, decode, publish, send
                                                  │            two realtime_tools::RealtimeBuffer:
                                                  │            newest pose out, newest command in
@@ -231,6 +232,7 @@ says which one.
 | Name                    | Default        | Accepted values      | Meaning                          |
 |-------------------------|----------------|----------------------|----------------------------------|
 | `backend`               | `serial`       | `serial`, `fake`     | Where the angles come from       |
+| `fake_mode`             | `instant`      | `instant`, `measured` | How `FakeArm` moves (#122): at every target at once, or like the real arm (see Measured fake arm). Only the fake backend reads it |
 | `port`                  | `/dev/ttyTHS1` | any non-empty path   | Serial device                    |
 | `baud`                  | `1000000`      | `115200`, `1000000`  | Baud rate                        |
 | `velocity_filter_alpha` | `0.3`          | (0, 1]               | Low-pass weight of the velocity: closer to 1 follows faster but is noisier |
@@ -252,6 +254,43 @@ Then its test in `test_parameters`, and in `positronic_real.urdf.xacro` an empty
 a `driver_param` line, and in `driver.launch.py` a launch argument with an empty default, as for
 every other parameter (#163, #150). The default lives only here: the xacro writes the `<param>`
 only when the argument is set, so a default there would win over this one.
+
+## Measured fake arm (#122)
+
+`FakeArm` is at every target the moment `write_angles()` gets it. The real arm is not, and a
+test against the instant fake cannot see what only shows on the bench: a trajectory too fast for
+the servos, a goal tolerance tighter than the rest error. `fake_mode` `measured` makes the fake
+arm move like the arm did in #33 (`docs/03_verification/jtc_on_the_arm`, gripper off):
+
+| Behaviour | Model | Numbers | From #33 |
+|---|---|---|---|
+| Lag | Each joint follows its target as a first-order lag | Time constant 0.22 s, every joint | J1 2.7 deg behind at 10 deg/s, 4.9 at 20: a line of slope 0.22 s through 0.5 deg at 0 deg/s |
+| Wrist start-up | A standing J4 or J5 starts late after its target changes. A change while it moves does not delay it again | 200 ms | "a wrist servo takes about 0.2 s to start moving after the command changes" |
+| Rest error | The reported pose is a fixed offset below where the joint is, always | J1 0.5, J2 1.0, J3 1.0, J4 0.7, J5 1.4, J6 1.0 deg | Every joint settles 0.5 to 1.5 deg off its command; J4 0.5 to 0.9 and J5 1.4 at rest, never commanded |
+
+The lag and the rest error add on a joint moving up: J1 reads 2.2 + 0.5 = 2.7 deg behind at
+10 deg/s and 4.4 + 0.5 = 4.9 at 20 (the unit test reads 2.75 and 5.0 with a target every 10 ms).
+Moving down the rest error takes off instead, 1.7 at 10 deg/s. Each time the pose it reads is
+commanded back (an activate, a controller holding the current state), the arm settles one more
+rest error below it, as J4 did once when never commanded. On the arm a joint with no load stays
+where it is when its measured pose is commanded back, so a test that activates or holds many
+times sees the fake arm drift further than the real one.
+
+Time is the sum of the `period`s `read()` gets, not the `time` argument, which the resource
+manager replaces with its own clock. On the control loop that is the time that passed; a test
+passes the periods in and never sleeps. A `halt()` stops every joint where it is and cancels a
+wrist that had not started yet.
+
+What it does not imitate:
+- The serial line: bytes, the turn timing, lost replies, the sync-write. `test_serial_arm`
+  replays recorded bytes for that.
+- The gripper's weight: with it J4 rests 2.3 to 2.7 deg off, outside the 0.5 to 1.5 range.
+- A rest error that changes from move to move or depends on the direction the joint came from:
+  here it is one fixed offset per joint.
+- A top speed or acceleration: on a large step the fake arm starts at step / 0.22 s, faster than
+  any servo. The controller sends ramps, not steps, so this only matters to a test that jumps.
+- The plugin's checks: the joint limits are refused in `write()` before the fake arm (#34), and a
+  NaN or infinite target the fake arm ignores, keeping the joint on its previous target.
 
 ## Lifecycle
 
@@ -423,8 +462,9 @@ No arm is needed:
 
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
-| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate; the acknowledged requests (#103): a deactivate whose stop the arm never acknowledges returns ERROR after 300 ms and leaves the component configurable, an activate whose power_on is never acknowledged returns ERROR with a stop after the last power_on and no target sent, and a 58 ms ack still activates; the unfollowed command (#103): a target 2 deg away is never a fault, 9 deg for 300 ms latches fault 2 with a stop and no further target, 9 deg for 100 ms and back is not, a bad tracking parameter is rejected. |
+| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate; the acknowledged requests (#103): a deactivate whose stop the arm never acknowledges returns ERROR after 300 ms and leaves the component configurable, an activate whose power_on is never acknowledged returns ERROR with a stop after the last power_on and no target sent, and a 58 ms ack still activates; the unfollowed command (#103): a target 2 deg away is never a fault, 9 deg for 300 ms latches fault 2 with a stop and no further target, 9 deg for 100 ms and back is not, a bad tracking parameter is rejected; `fake_mode` `measured` (#122) lags on the periods `read()` gets. |
 | `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the acknowledged requests (#103): `halt()` returns only after the ack, fails at the deadline and keeps resending when the arm never acknowledges, a `request_halt()` during the power_on wait puts the hold back, the last target follows the wire and an acknowledged stop clears it; the link timeout (#35), raised by silence and cleared when replies resume; the temperature guard (read while idle, not in turns that send until overdue, then right after a `get_angles`; the cut: stop then power off, `power_on()` refused, the power off repeated, also while halted; implausible readings ignored; stale when `0xE5` never answers); the wait after a send (#150): the next `get_angles` never before the sync-write is whole and long before `echo_timeout`, and an arm that never sync-writes makes the wait last `echo_timeout`, counted in `echo_timeouts()`; `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_fake_arm`            | `FakeArm` with a clock the test sets (#122): instant is at every target at once; measured follows a step with exactly 1 - 1/e after one time constant, lags 2.7 and 4.9 deg on J1 at 10 and 20 deg/s (within 0.5), less the rest error moving down, starts J4 and J5 exactly 200 ms late and not again while they move, nor for a target sent again, rests every joint `REST_ERROR_DEG` off its command (also the pose it read), a halt stops every joint and cancels a waiting wrist, NaN and infinite targets ignored, a clock that stands still or goes back moves nothing. |
 | `test_link_watchdog`       | `LinkWatchdog` alone with made-up time points (#35): no fault right after reset, the 200 ms boundary, a reply restarts the count, no latching. |
 | `test_echo_timeout_report` | When `read()` warns about sends without a sync-write (#150): nothing new is never due, the first count at once, nothing more within the 5 s, the sends since the last warning after it, and a reset for a new backend (without it a new backend's small count would stay hidden). |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
@@ -432,7 +472,7 @@ No arm is needed:
 | `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
 | `test_servo_temperature`   | The over-temperature logic alone: plausible range, hottest servo, activation cool-down, two readings in a row to trip, implausible readings, the trip stays, a lowered limit. |
 | `test_requests`            | The request table (#149): every factory carries the frame its command encodes, the command sits in byte 3 of the frame, what each one waits for, and `ACK_TIMEOUT` between the arm's 60 ms and the 200 ms watchdog. |
-| `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99), a fraction where a whole number is expected, NaN and infinity, a settle longer than the period accepted since #150, the rules of `backend`, `port`, `baud` and `velocity_filter_alpha`, and the INFO line. |
+| `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99), a fraction where a whole number is expected, NaN and infinity, a settle longer than the period accepted since #150, the rules of `backend`, `fake_mode`, `port`, `baud` and `velocity_filter_alpha`, and the INFO line with the fake mode. |
 | `test_tracking_check`      | The unfollowed-command logic alone (#103): the defaults, below the threshold never trips, trips once a joint has been over for the time, coming back inside forgets the clock, the joint and the signed error reported, an unknown pose (NaN) does not count, reset forgets every clock. |
 
 Passing tests do not prove the driver is right on the arm. On the robot, check that activation

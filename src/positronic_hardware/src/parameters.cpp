@@ -108,8 +108,12 @@ constexpr std::array NUMERIC_PARAMETERS{
 
 /// The <param> names that are not a number in a range, each with its own rule in read_special().
 constexpr std::array SPECIAL_NAMES{
-  std::string_view{"backend"}, std::string_view{"port"}, std::string_view{"baud"},
-  std::string_view{"velocity_filter_alpha"}, std::string_view{"pose_from_poll"}};
+  std::string_view{"backend"},
+  std::string_view{"fake_mode"},
+  std::string_view{"port"},
+  std::string_view{"baud"},
+  std::string_view{"velocity_filter_alpha"},
+  std::string_view{"pose_from_poll"}};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(const Parameters & parameters, std::string_view key)
@@ -162,7 +166,7 @@ std::string read_numeric(
          std::to_string(std::lround(parameter.max)) + "].";
 }
 
-/// The five SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
+/// The six SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
 std::string read_special(const Parameters & parameters, HardwareConfig & config)
 {
   if (const std::string * backend{find_parameter(parameters, "backend")}) {
@@ -172,6 +176,15 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
     config.backend = Backend::FAKE;
     if (*backend == "serial") {
       config.backend = Backend::SERIAL;
+    }
+  }
+  if (const std::string * mode{find_parameter(parameters, "fake_mode")}) {
+    if (*mode != "instant" && *mode != "measured") {
+      return "Parameter 'fake_mode' is '" + *mode + "'; use 'instant' or 'measured'.";
+    }
+    config.fake_mode = FakeMode::INSTANT;
+    if (*mode == "measured") {
+      config.fake_mode = FakeMode::MEASURED;
     }
   }
   if (const std::string * port{find_parameter(parameters, "port")}) {
@@ -276,6 +289,8 @@ std::string describe(const HardwareConfig & config)
   std::string backend{"fake"};
   if (config.backend == Backend::SERIAL) {
     backend = "serial";
+  } else if (config.fake_mode == FakeMode::MEASURED) {
+    backend = "fake' in mode 'measured";
   }
   std::string poll{"off"};
   if (config.timing.pose_from_poll) {

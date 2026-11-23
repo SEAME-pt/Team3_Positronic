@@ -100,6 +100,11 @@
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
 // Follow-up prompt (#170):
 //   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
+// Follow-up prompt (#122 part 1):
+//   fake_mode=measured reaches the fake arm and its time is the sum of the periods read() gets:
+//   a J1 step reported unmoved by a read of period 0 and 1 - 1/e of the way after a read of one
+//   lag time constant, without a sleep. A fake_mode that is neither instant nor measured is
+//   refused.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -804,6 +809,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
+    {"fake_mode", "slow"},              // only instant or measured (#122)
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -896,6 +902,36 @@ TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
   EXPECT_DOUBLE_EQ(
     state(JOINTS.at(1), "position").value_or(std::nan("")),
     positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+// #122: the measured fake arm lags, and its clock is the sum of the periods read() gets, so
+// the test moves it without sleeping.
+TEST_F(LoadRobotSystem, MeasuredFakeModeLagsOnThePeriodsOfRead)
+{
+  using positronic_hardware::FakeArm;
+  load(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+
+  const double step{0.1};
+  const double rest_error{FakeArm::REST_ERROR_DEG.at(0) * 3.14159265358979323846 / 180.0};
+  const auto read_after{[this](double seconds) {
+      return resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(seconds)).result;
+    }};
+  ASSERT_TRUE(command(JOINTS.at(0), FakeArm::START_POSE.at(0) + step));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_after(0.0), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")), FakeArm::START_POSE.at(0) - rest_error,
+    1e-12);
+
+  ASSERT_EQ(read_after(FakeArm::LAG_TIME_CONSTANT_S), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")),
+    FakeArm::START_POSE.at(0) + step * (1.0 - std::exp(-1.0)) - rest_error, 1e-9);
 }
 
 TEST_F(LoadRobotSystem, WriteSendsACommandExactlyAtTheLimit)
