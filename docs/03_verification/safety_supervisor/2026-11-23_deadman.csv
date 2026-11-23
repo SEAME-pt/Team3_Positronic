@@ -1,0 +1,11 @@
+test,trial,counted,trigger,goal_to_trigger_s,trigger_to_event_ms,heartbeat_to_fault4_ms,halt_to_inactive_ms,j1_speed_deg_s,travel_deg,note
+8,1,1,kill -9,3.59,503.6,509.1,,1.25,0.52,
+8,2,1,kill -9,3.63,525.0,521.3,,2.33,0.00,
+8,3,0,kill -9,,,,,,,FAULT_DATA_LOST halt 107 ms after the goal was accepted (357 ms gap on /dynamic_joint_states): the kill hit an inactive component
+8,4,0,none,,,,,,,FAULT_DATA_LOST halt 5 s after the resume (348 ms gap): goal rejected; no motion; no kill
+8,5,1,kill -9,3.53,527.5,525.8,,2.33,0.09,
+8,6,1,kill -9,3.56,531.9,526.1,,1.55,0.52,
+8,7,1,kill -9,3.57,541.5,528.2,,2.17,0.00,
+9,1,1,SIGINT,3.59,81.6,,48.7,0.78,0.00,
+9,2,1,SIGINT,3.57,82.4,,51.7,0.78,0.00,
+9,3,1,SIGINT,3.59,82.1,,58.1,0.62,0.35,supervisor exited before switching arm_controller off (component already inactive)
