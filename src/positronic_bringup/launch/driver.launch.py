@@ -48,11 +48,17 @@ Launch arguments:
   start_inactive:=false       true: the hardware component and arm_controller come up
                               inactive, and only the safety supervisor makes them active
                               (#45). supervised.launch.py sets it.
+  camera:=false               true: also start the wrist camera (camera.launch.py). Off
+                              unless asked: the camera costs CPU on the Jetson and the
+                              container needs /dev/video0 (make nano-shell maps it when it is
+                              there). Its arguments (device:=, width:=, height:=, fps:=, ...)
+                              pass through, as this launch's reach it from supervised.launch.py.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -93,6 +99,10 @@ def generate_launch_description():
         'start_inactive', default_value='false',
         description='true: the hardware component and arm_controller come up inactive.')
     inactive = LaunchConfiguration('start_inactive')
+    # The wrist camera is off by default: started only with camera:=true.
+    camera = DeclareLaunchArgument(
+        'camera', default_value='false',
+        description='true: also start the wrist camera (camera.launch.py).')
 
     controllers_yaml = PathJoinSubstitution(
         [FindPackageShare('positronic_bringup'), 'config', 'jetson_controllers.yaml'])
@@ -164,6 +174,12 @@ def generate_launch_description():
         arguments=['arm_controller', '--param-file', controllers_yaml, '--inactive'],
         condition=IfCondition(inactive))
 
+    # The camera launch. Its arguments given to this launch reach it by themselves.
+    wrist_camera = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(PathJoinSubstitution(
+            [FindPackageShare('positronic_bringup'), 'launch', 'camera.launch.py'])),
+        condition=IfCondition(LaunchConfiguration('camera')))
+
     return LaunchDescription([
         backend,
         port,
@@ -173,10 +189,12 @@ def generate_launch_description():
         servo_temp_limit_c,
         update_rate,
         start_inactive,
+        camera,
         robot_state_publisher,
         control_node,
         control_node_inactive,
         joint_state_broadcaster,
         arm_controller,
         arm_controller_inactive,
+        wrist_camera,
     ])
