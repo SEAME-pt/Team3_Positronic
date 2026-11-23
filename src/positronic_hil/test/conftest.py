@@ -111,8 +111,22 @@ class Probe:
         return self.call(self.switch, request)
 
 
+def drift_per_joint(samples, reference):
+    return {
+        name: max((pose[name] - reference[name] for _, pose in samples), key=abs)
+        for name in JOINTS
+    }
+
+
 def max_drift(samples, reference):
-    return max(abs(pose[name] - reference[name]) for _, pose in samples for name in JOINTS)
+    per_joint = drift_per_joint(samples, reference)
+    joint = max(per_joint, key=lambda name: abs(per_joint[name]))
+    return abs(per_joint[joint]), joint
+
+
+def describe(samples, reference):
+    per_joint = drift_per_joint(samples, reference)
+    return ', '.join(f'{name} {math.degrees(value):+.2f}' for name, value in per_joint.items())
 
 
 def driver_log_path(request):

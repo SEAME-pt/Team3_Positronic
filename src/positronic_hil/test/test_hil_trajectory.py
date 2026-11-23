@@ -7,7 +7,7 @@
 import math
 
 from builtin_interfaces.msg import Duration
-from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, JOINTS, MAX_DRIFT, max_drift
+from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, describe, JOINTS, MAX_DRIFT, max_drift
 from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectoryPoint
@@ -18,6 +18,7 @@ def test_hold_trajectory(arm):
         f'{ARM_CONTROLLER} not active after {CONTROLLER_TIMEOUT_S:.0f} s'
 
     reference = arm.samples[0][1]
+    before = describe(arm.record(1.0), reference)
     pose = [arm.samples[-1][1][name] for name in JOINTS]
     goal = FollowJointTrajectory.Goal()
     goal.trajectory.joint_names = JOINTS
@@ -37,5 +38,7 @@ def test_hold_trajectory(arm):
 
     samples = arm.record(2.0)
 
-    drift = max_drift(samples, reference)
-    assert drift <= MAX_DRIFT, f'the arm moved {math.degrees(drift):.2f} deg'
+    drift, joint = max_drift(samples, reference)
+    assert drift <= MAX_DRIFT, (
+        f'{joint} moved {math.degrees(drift):.2f} deg; before the goal: {before} | '
+        f'after: {describe(samples, reference)}')
