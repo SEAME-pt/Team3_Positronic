@@ -127,6 +127,17 @@
 //   The last-target test waits for last_target() instead of reading it the moment the frame is
 //   on the wire: the thread stores it after write() returns. The test whose only readings are
 //   the requests gets a stale timeout over max_age, as on the arm, and the defaults are pinned.
+//
+// Follow-up prompt (#170, the simplification):
+//   Drop what no mutant needs: the impossible voltage and temperature of a first poll and the
+//   impossible jump (the edge tests cover them), the bridged hot frame
+//   (PollsWithABridgedFrameLeaveTheAsksGoing covers it) and the corrupt case of the missing frame
+//   (the decoder's). Share the setup of the replayed poll and the timing of a second send.
+// Follow-up prompt (#170, checks that passed with the rule broken):
+//   Three checks looked after the idle turns had asked get_angles anyway (two periods without a
+//   write): a poll published without a frame, a poll read with pose_from_poll off, a bridge past
+//   its age all passed. Check before that: the get_angles within two periods of the send, the
+//   pose 10 ms after the sync-write.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1610,6 +1621,17 @@ SerialArm::Timing poll_timing()
 }
 const SerialArm::Timing POLL_TIMING{poll_timing()};
 
+/// The replayed arm with `frames` as the Atom's poll before each sync-write, and its line quiet
+/// between a send and that sync-write, like the real arm.
+std::unique_ptr<ReplayTransport> polling_port(
+  std::vector<std::uint8_t> frames = parse_hex(RECORDED_POLL_FRAMES))
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  transport->set_poll_frames(std::move(frames));
+  transport->set_quiet_after_send(true);
+  return transport;
+}
+
 /// The pose the six recorded poll frames carry, through the Atom's own conversion.
 JointPositions recorded_poll_pose()
 {
@@ -1691,6 +1713,33 @@ bool marker_shown(const SerialArm & arm, std::size_t marker)
   });
 }
 
+/// The default timing (33 ms period) on the polling arm: a first send, then `delay` later a
+/// second write. How long after that write its send went out, or a minute if it never did.
+std::chrono::steady_clock::duration second_send_after(std::chrono::milliseconds delay)
+{
+  auto transport{polling_port()};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  static_cast<void>(wait_for_sends(port, 1));
+  std::this_thread::sleep_for(delay);
+  const auto written{std::chrono::steady_clock::now()};
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  if (wait_for_sends(port, 2).size() < 2) {
+    return std::chrono::minutes{1};
+  }
+  const auto frames{port.written()};
+  const auto times{port.written_at()};
+  std::size_t second{0};
+  for (std::size_t i{0}; i < frames.size() && i < times.size(); ++i) {
+    if (frames.at(i).size() == 18) {
+      second = i;
+    }
+  }
+  return times.at(second) - written;
+}
+
 /// The time the first frame with request id `id` was written, if any.
 std::optional<std::chrono::steady_clock::time_point> first_written(
   ReplayTransport & port, std::uint8_t id)
@@ -1705,12 +1754,6 @@ std::optional<std::chrono::steady_clock::time_point> first_written(
   return std::nullopt;
 }
 
-/// The recorded poll frames with servo `joint` (0 = J1) reporting `celsius`, checksum redone.
-std::vector<std::uint8_t> poll_frames_with_temperature(std::size_t joint, std::uint8_t celsius)
-{
-  return with_byte(parse_hex(RECORDED_POLL_FRAMES), joint, 7, celsius);
-}
-
 /// `frames` without servo `joint`'s frame, as when it failed its checksum.
 std::vector<std::uint8_t> without_frame(std::vector<std::uint8_t> frames, std::size_t joint)
 {
@@ -1723,10 +1766,8 @@ std::vector<std::uint8_t> without_frame(std::vector<std::uint8_t> frames, std::s
 
 TEST(SerialArmPollPose, ThePollFramesAreThePoseAndNoGetAnglesFollowsTheSend)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -1748,67 +1789,23 @@ TEST(SerialArmPollPose, ThePollFramesAreThePoseAndNoGetAnglesFollowsTheSend)
 
 TEST(SerialArmPollPose, AWriteWakesTheThreadAndTheSendFollowsIt)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-  ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
-  SerialArm arm{std::move(transport)};  // default timing: 33 ms period
-  static_cast<void>(wait_for_reply(arm));
-  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
   // Past the sync-write, inside the two-period wait: a second write must be sent at once.
-  std::this_thread::sleep_for(SYNC_WRITE_DELAY + DECODE_MARGIN);
-  const auto written{std::chrono::steady_clock::now()};
-  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
-  const auto frames{port.written()};
-  const auto times{port.written_at()};
-  std::size_t second{frames.size()};
-  for (std::size_t i{0}; i < frames.size(); ++i) {
-    if (frames.at(i).size() == 18 && frames.at(i).at(3) == 0x22) {
-      second = i;
-    }
-  }
-  ASSERT_LT(second, times.size());
-  EXPECT_LT(times.at(second) - written, WAKE_MARGIN);
+  EXPECT_LT(second_send_after(SYNC_WRITE_DELAY + DECODE_MARGIN), WAKE_MARGIN);
 }
 
 TEST(SerialArmPollPose, AWriteDuringTheSyncWriteWaitIsSentRightAfterIt)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-  ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
-  SerialArm arm{std::move(transport)};  // default timing: 33 ms period
-  static_cast<void>(wait_for_reply(arm));
-  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
   // Inside the wait for the sync-write (20 ms): the write lands while the thread reads the
   // line. It must go out as soon as the sync-write closes, not at the two-period deadline
   // (66 ms), which is where it went when the wait cleared the flag (1 % of the sends on the
   // arm, 20 Nov 2026).
-  std::this_thread::sleep_for(std::chrono::milliseconds{5});
-  const auto written{std::chrono::steady_clock::now()};
-  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
-  const auto frames{port.written()};
-  const auto times{port.written_at()};
-  std::size_t second{frames.size()};
-  for (std::size_t i{0}; i < frames.size(); ++i) {
-    if (frames.at(i).size() == 18 && frames.at(i).at(3) == 0x22) {
-      second = i;
-    }
-  }
-  ASSERT_LT(second, times.size());
-  EXPECT_LT(times.at(second) - written, SYNC_WRITE_DELAY + DECODE_MARGIN);
+  EXPECT_LT(second_send_after(std::chrono::milliseconds{5}), SYNC_WRITE_DELAY + DECODE_MARGIN);
 }
 
 TEST(SerialArmPollPose, WithoutWritesTheThreadPollsGetAnglesAgain)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -1826,10 +1823,8 @@ TEST(SerialArmPollPose, AHaltWakesTheThreadAndTheStopGoesOutAtOnce)
   // After a send whose poll gave the pose, the thread waits up to two periods for the next
   // write. A halt stops the writes, so it must end that wait itself: the stop goes out at once,
   // not at the deadline (up to 60 ms here, 66 ms on the arm).
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -1887,34 +1882,25 @@ TEST(SerialArmPollPose, ATargetWithoutItsSyncWriteIsNotSentOnEveryWrite)
   EXPECT_EQ(wait_for_sends(port, 2).size(), 2U);
 }
 
-TEST(SerialArmPollPose, AMissingOrCorruptFrameBringsTheGetAnglesBack)
+TEST(SerialArmPollPose, AMissingFrameBringsTheGetAnglesBack)
 {
-  // Servo 3's frame left out, then servo 4's with a bad checksum: five good frames are not a
-  // pose, the next turn asks get_angles and the pose is its reply, like before #170.
-  constexpr auto FRAME{static_cast<std::ptrdiff_t>(POLL_FRAME)};
-  std::vector<std::uint8_t> frames{parse_hex(RECORDED_POLL_FRAMES)};
-  std::vector<std::uint8_t> missing{frames};
-  missing.erase(std::next(missing.begin(), 2 * FRAME), std::next(missing.begin(), 3 * FRAME));
-  std::vector<std::uint8_t> corrupt{frames};
-  const std::size_t checksum_of_4{static_cast<std::size_t>(4 * FRAME) - 1};
-  corrupt.at(checksum_of_4) = static_cast<std::uint8_t>(corrupt.at(checksum_of_4) + 1);
-  for (const auto & poll : {missing, corrupt}) {
-    auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-    ReplayTransport & port{*transport};
-    port.set_poll_frames(poll);
-    port.set_quiet_after_send(true);
-    SerialArm arm{std::move(transport), POLL_TIMING};
-    const JointPositions replayed{wait_for_reply(arm)};
-    arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-    ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
-    std::this_thread::sleep_for(2 * POLL_TIMING.echo_timeout);
-    const SendThenPoll turn{first_send_then_poll(port)};
-    ASSERT_TRUE(turn.found);
-    EXPECT_LT(turn.poll - turn.send, POLL_TIMING.echo_timeout);
-    const JointPositions pose{arm.read_angles()};
-    for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
-      EXPECT_NEAR(pose.at(joint), replayed.at(joint), 1e-9) << joint;
-    }
+  // Servo 3's frame left out (a bad checksum leaves it out the same way): five good frames are
+  // not a pose, the next turn asks get_angles and the pose is its reply, like before #170. It
+  // comes one period after the send (~30 ms): two periods leave 30 ms for the scheduler. A
+  // published poll would put it at two periods plus a 10 ms idle turn (~70 ms).
+  auto transport{polling_port(without_frame(parse_hex(RECORDED_POLL_FRAMES), 2))};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  const JointPositions replayed{wait_for_reply(arm)};
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+  std::this_thread::sleep_for(2 * POLL_TIMING.echo_timeout);
+  const SendThenPoll turn{first_send_then_poll(port)};
+  ASSERT_TRUE(turn.found);
+  EXPECT_LT(turn.poll - turn.send, 2 * POLL_TIMING.moving_period);
+  const JointPositions pose{arm.read_angles()};
+  for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+    EXPECT_NEAR(pose.at(joint), replayed.at(joint), 1e-9) << joint;
   }
 }
 
@@ -1925,10 +1911,8 @@ TEST(SerialArmPollPose, AtRestTheGripperTakesTheTurnOfTheRepeatedSend)
   // gripper: its new value goes out once and it is read, while the controller keeps writing
   // the same pose every 33 ms. The replay does not answer the gripper, so each read waits its
   // 50 ms: in 600 ms the 100 ms read period leaves room for at least 2, and the sends go on.
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING, TemperatureGuard{}, true};
   static_cast<void>(wait_for_reply(arm));
   const JointPositions rest{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -1961,10 +1945,8 @@ TEST(SerialArmPollPose, AWriteDuringAGetAnglesCountsForItsTurn)
   // counted for its turn whenever it lands, the repeat goes on. No clock in the check: 0 sends
   // against about 20. (On the arm a get_angles takes 7 ms, and the sends paused 48 to 208 ms
   // after each gripper read, 23 Nov 2026.)
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   port.set_angles_delay(std::chrono::milliseconds{40});
   port.set_answer_gripper(true);
   SerialArm arm{std::move(transport), POLL_TIMING, TemperatureGuard{}, true};
@@ -1998,10 +1980,8 @@ TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
   // get_angles every turn and the temperatures once max_age, as with a hot servo whose frames
   // come corrupt. (With a whole poll the guard asks nothing: the frames are the reading.)
   const std::vector<std::uint8_t> missing{without_frame(parse_hex(RECORDED_POLL_FRAMES), 2)};
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port(missing)};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(missing);
-  port.set_quiet_after_send(true);
   // The requests are the only readings here, one every max_age plus its reply: a stale timeout
   // equal to max_age, as in fast_guard, turns stale for a moment between two of them. On the
   // arm it is 10 s against 3 s.
@@ -2026,62 +2006,10 @@ TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
   EXPECT_FALSE(arm.temperature_stale());
 }
 
-TEST(SerialArmPollPose, AFrameWithAGoodChecksumAndAnImpossibleJumpIsNotThePose)
-{
-  // The case of 20 Nov: a corrupt frame of a hot J4 that passed the checksum, position 0 steps
-  // (180 deg). After one whole poll the thread knows where J4 is, and 180 deg away in 33 ms is
-  // impossible: the frame is left out, J4 keeps its last good position, nothing is asked.
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-  ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
-  SerialArm arm{std::move(transport), POLL_TIMING};
-  static_cast<void>(wait_for_reply(arm));
-  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
-  ASSERT_TRUE(wait_until([&arm]() {
-      return arm.read_angles() == recorded_poll_pose();
-  }));
-
-  port.set_poll_frames(with_steps(marked_poll(0), 3, 0));  // J4 at 0 steps, J1 the marker
-  const auto sent_at{std::chrono::steady_clock::now()};
-  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
-  ASSERT_TRUE(marker_shown(arm, 0));
-  EXPECT_NEAR(arm.read_angles().at(3), recorded_poll_pose().at(3), 1e-9);
-  EXPECT_EQ(get_angles_between(port, sent_at, std::chrono::steady_clock::now()), 0u);
-}
-
-TEST(SerialArmPollPose, AFrameWithAnImpossibleVoltageOrTemperatureIsNotThePose)
-{
-  for (const auto & frames :
-    {with_byte(parse_hex(RECORDED_POLL_FRAMES), 2, 6, 0x00),      // J3 at 0.0 V
-      with_byte(parse_hex(RECORDED_POLL_FRAMES), 4, 7, 0xC8)})    // J5 at 200 degC
-  {
-    auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-    ReplayTransport & port{*transport};
-    port.set_poll_frames(frames);
-    port.set_quiet_after_send(true);
-    SerialArm arm{std::move(transport), POLL_TIMING};
-    const JointPositions replayed{wait_for_reply(arm)};
-    arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-    ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
-    std::this_thread::sleep_for(2 * POLL_TIMING.echo_timeout);
-    // No earlier poll to bridge from: the poll is incomplete and get_angles comes back.
-    const SendThenPoll turn{first_send_then_poll(port)};
-    ASSERT_TRUE(turn.found);
-    EXPECT_NE(arm.read_angles(), recorded_poll_pose());
-    EXPECT_EQ(arm.read_angles(), replayed);
-  }
-}
-
 TEST(SerialArmPollPose, AJointMissingFromOnePollKeepsItsLastGoodPosition)
 {
-  constexpr auto FRAME{static_cast<std::ptrdiff_t>(POLL_FRAME)};
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -2092,9 +2020,7 @@ TEST(SerialArmPollPose, AJointMissingFromOnePollKeepsItsLastGoodPosition)
 
   // J3's frame drops out of the poll. Within POLL_BRIDGE_AGE the pose stays whole from the
   // last good J3 and no get_angles goes out; after it, the get_angles comes back.
-  std::vector<std::uint8_t> missing{marked_poll(0)};  // J1 the marker
-  missing.erase(std::next(missing.begin(), 2 * FRAME), std::next(missing.begin(), 3 * FRAME));
-  port.set_poll_frames(missing);
+  port.set_poll_frames(without_frame(marked_poll(0), 2));  // J1 the marker
   const auto sent_at{std::chrono::steady_clock::now()};
   arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
   ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
@@ -2102,21 +2028,21 @@ TEST(SerialArmPollPose, AJointMissingFromOnePollKeepsItsLastGoodPosition)
   EXPECT_NEAR(arm.read_angles().at(2), recorded_poll_pose().at(2), 1e-9);
   EXPECT_EQ(get_angles_between(port, sent_at, std::chrono::steady_clock::now()), 0u);
 
+  // Past the age the poll is not published, so the next turn asks get_angles one period after
+  // the send (~30 ms; the window of two periods leaves 30 ms for the scheduler). A published
+  // poll would put it at two periods plus a 10 ms idle turn. Three periods: the window is over.
   std::this_thread::sleep_for(SerialArm::POLL_BRIDGE_AGE);
-  const auto later{std::chrono::steady_clock::now()};
   arm.write_angles(JointPositions{0.3, 0.0, 0.0, 0.0, 0.0, 0.0});
   ASSERT_EQ(wait_for_sends(port, 3).size(), 3u);
-  ASSERT_TRUE(wait_until([&port, later]() {
-      return get_angles_between(port, later, std::chrono::steady_clock::now()) >= 1u;
-  }));
+  const auto third{port.written_at().back()};
+  std::this_thread::sleep_for(3 * POLL_TIMING.moving_period);
+  EXPECT_GE(get_angles_between(port, third, third + 2 * POLL_TIMING.moving_period), 1u);
 }
 
 TEST(SerialArmPollPose, TheTemperaturesComeFromThePollAndNothingIsAsked)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   // A 600 ms period: without the poll as a reading the guard still asks within the 1.2 s
   // stream, and after it the first ask at rest comes ~600 ms after the last poll, so the check
   // below has ~570 ms of margin before a COOL reply replaces the frames' temperatures.
@@ -2136,10 +2062,8 @@ TEST(SerialArmPollPose, TheTemperaturesComeFromThePollAndNothingIsAsked)
 
 TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
   ReplayTransport & port{*transport};
-  port.set_poll_frames(poll_frames_with_temperature(1, 61));
-  port.set_quiet_after_send(true);
   const TemperatureGuard guard{fast_guard()};
   SerialArm arm{std::move(transport), POLL_TIMING, guard};
   static_cast<void>(wait_for_reply(arm));
@@ -2174,50 +2098,13 @@ TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
   EXPECT_EQ(send_angles_frames({off_at, frames.end()}).size(), 0U);
 }
 
-TEST(SerialArmPollPose, ABridgedFrameIsNotATemperatureReading)
-{
-  // The arm, 20 Nov 2026, limit 50: J4's frames came mostly corrupt. One came at 50, the next
-  // two polls had none and bridged it, and the two readings of the cut of then were that frame.
-  // Here J4's hot frame comes once, then the polls go on without it. hot_for is 1 ms, so a
-  // second hot reading would cut at once: only the bridged poll not counting keeps the arm on.
-  constexpr std::size_t HOT{3};  // J4
-  constexpr std::size_t MARKER{0};
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
-  ReplayTransport & port{*transport};
-  port.set_poll_frames(poll_frames_with_temperature(HOT, 61));
-  port.set_quiet_after_send(true);
-  // No ask between the two polls either (period and max_age 10 s): a COOL reply there would
-  // reset the clock and let the test pass without the rule it checks.
-  TemperatureGuard guard{fast_guard()};
-  guard.hot_for = std::chrono::milliseconds{1};
-  guard.period = std::chrono::seconds{10};
-  guard.max_age = std::chrono::seconds{10};
-  SerialArm arm{std::move(transport), POLL_TIMING, guard};
-  static_cast<void>(wait_for_reply(arm));
-  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
-  std::this_thread::sleep_for(SYNC_WRITE_DELAY + DECODE_MARGIN);
-  ASSERT_FALSE(arm.overheat().has_value());  // one hot reading so far
-
-  // The second poll: no J4 frame, so J4's position is bridged and the poll is no reading, and
-  // the marker joint moved: once the
-  // pose shows the marker, the bridged poll was read.
-  port.set_poll_frames(without_frame(marked_poll(MARKER), HOT));
-  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
-  ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
-  ASSERT_TRUE(marker_shown(arm, MARKER));
-  EXPECT_FALSE(arm.overheat().has_value());
-}
-
 TEST(SerialArmPollPose, PollsWithABridgedFrameLeaveTheAsksGoing)
 {
   // A different joint missing in each poll: the bridge covers it, so every poll is the pose, but
   // none is a temperature reading. The guard must keep asking: were a bridged poll taken as a
   // reading, the asks would stop and the guard go blind (temperature_stale, then a halt).
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};  // one whole poll to bridge from
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));  // one whole poll to bridge from
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING, fast_guard()};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.01, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -2241,10 +2128,8 @@ TEST(SerialArmPollPose, AnUnpublishedPollStillKeepsItsGoodFramesForTheBridge)
   // frame, and the next poll, missing J5, bridges it from there. Before, the loop stopped at J3
   // without keeping J5, and the next poll fell back to get_angles too (20 Nov 2026, hot J4).
   constexpr std::size_t MARKER{4};  // J5
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -2265,26 +2150,26 @@ TEST(SerialArmPollPose, AnUnpublishedPollStillKeepsItsGoodFramesForTheBridge)
 
 TEST(SerialArmPollPose, OffKeepsTheTurnOfBefore)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm::Timing timing{POLL_TIMING};
   timing.pose_from_poll = false;
   SerialArm arm{std::move(transport), timing};
   const JointPositions replayed{wait_for_reply(arm)};
   arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
   ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
-  std::this_thread::sleep_for(2 * POLL_TIMING.echo_timeout);
-  // The frames are on the line and ignored: a get_angles follows the sync-write, and the pose is
-  // the replayed reply, not the poll.
-  const SendThenPoll turn{first_send_then_poll(port)};
-  ASSERT_TRUE(turn.found);
-  EXPECT_LT(turn.poll - turn.send, POLL_TIMING.echo_timeout);
+  // The frames are on the line and ignored: 10 ms after the sync-write the pose is still the
+  // replayed reply, not the poll (a poll read would stand until the turn after next), and a
+  // get_angles follows the send.
+  std::this_thread::sleep_until(port.written_at().back() + SYNC_WRITE_DELAY + WAKE_MARGIN);
   const JointPositions pose{arm.read_angles()};
   for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
     EXPECT_NEAR(pose.at(joint), replayed.at(joint), 1e-9) << joint;
   }
+  std::this_thread::sleep_for(2 * POLL_TIMING.echo_timeout);
+  const SendThenPoll turn{first_send_then_poll(port)};
+  ASSERT_TRUE(turn.found);
+  EXPECT_LT(turn.poll - turn.send, POLL_TIMING.echo_timeout);
 }
 
 // Follow-up prompt (#170, the plausibility edges):
@@ -2308,10 +2193,8 @@ std::vector<std::uint8_t> frames_at(
 /// once it shows `marker` moved.
 JointPositions pose_after_poll(const std::vector<std::uint8_t> & frames, std::size_t marker)
 {
-  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  auto transport{polling_port()};
   ReplayTransport & port{*transport};
-  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
-  port.set_quiet_after_send(true);
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   // A first poll publishes the recorded pose: the reference of the jump check and the bridge.
