@@ -45,10 +45,13 @@ public:
   using Clock = std::chrono::steady_clock;
 
   /// No valid reply for this long is a fault (#35). While the arm moves, one lost reply means
-  /// up to ~120 ms of silence: the rest of the turn after the last reply (up to the 50 ms moving
-  /// period), a turn with no reply, which ends after REPLY_TIMEOUT (50 ms, the port reads return
-  /// at once with VTIME = 0), then the next reply (8 ms typical, 20 ms worst seen). Two lost
-  /// replies in a row are ~170 ms. So 200 ms tolerates two lost replies and faults on the third.
+  /// up to ~130 ms of silence: the rest of the turn after the last reply (a sync-write as late
+  /// as echo_timeout, 60 ms, #150), a turn with no reply, which ends after REPLY_TIMEOUT (50 ms,
+  /// the port reads return at once with VTIME = 0) and sends nothing, then the next reply (8 ms
+  /// typical, 20 ms worst seen). Two lost replies in a row are ~180 ms. So 200 ms tolerates two
+  /// lost replies and faults on the third. A temperature request (up to 50 ms unanswered) does
+  /// not reset this watchdog, so the turn that asks sends nothing and its time never adds up
+  /// with a sync-write wait.
   static constexpr std::chrono::milliseconds DEFAULT_TIMEOUT{200};
 
   explicit LinkWatchdog(std::chrono::milliseconds timeout = DEFAULT_TIMEOUT)

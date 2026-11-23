@@ -19,6 +19,7 @@ same `rt_record.py` plus the tools marked #124 below, see [`../pauses.md`](../pa
 | `rt_record.py` | ROS 2 node: one row per `/joint_states` message into `cycles.csv`, and with `--steps N` the commanded steps into `steps.csv`. |
 | `analyze_rt.py` | No ROS 2: reads the csv files, prints period, jitter, late cycles, a histogram and the latency, writes the pngs and the Markdown table. |
 | `test_analyze_rt.py` | Unit tests of the analysis, no ROS 2 and no arm needed: `python3 -m pytest docs/03_verification/rt_profile/tools` |
+| `test_rt_record.py` | Unit tests of how `rt_record.py` reads `/joint_states` (#171): ROS 2 sourced, no arm and no running graph. Same command. |
 | `thread_sampler.py` | No ROS 2: state, wchan and run time of every thread of one process from `/proc`, every ~17 ms, into a csv. Used in #124 to show the loop keeps running during a `/joint_states` pause. |
 | `pauses_124.py` | No ROS 2: finds the gaps above 100 ms in the `cycles.csv` of a #124 run, prints what happened around each one, and draws the figure of `../pauses.md`. |
 | `bench/run124.sh` | The #124 runs on the Jetson: goals through the ros2 CLI (A), throwaway participants without goals (G), goals from one persistent node (H). |
@@ -64,6 +65,13 @@ cycle stamps was not the loop.
 
 ## Safety
 
+- **`rt_record.py` before #171 is wrong after #151.** Since #151 `/joint_states` starts with
+  the gripper mock, and the old `rt_record.py` took the first six positions as J1..J6: the
+  steps commanded five joints at once (J2 +16 deg, J4 +13 deg, J5 -14 deg on the first step, on
+  the fake backend) and the latency had no usable sample. It now takes the six arm joints by
+  name and stops with an error if one is missing. Results recorded with it between #151
+  (2026-11-18) and #171 are not valid. The runs in `../rt_profile_v1.md` (2026-11-10) and
+  `../pauses.md` (2026-11-16) are from before #151 and stand.
 - `idle` and `load` only subscribe. No controller that can move the arm is spawned, so the arm
   cannot move during the two long runs.
 - `steps` moves **one joint**, by `DELTA_RAD` (0.0873 rad, 5 deg) and back, 20 times, at the

@@ -37,10 +37,12 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "positronic_hardware/reply_assembler.hpp"
+#include "positronic_hardware/requests.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_protocol/decode.hpp"
 #include "positronic_protocol/encode.hpp"
@@ -176,6 +178,7 @@ SerialArm::SerialArm(
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
   last_temperature_ask_ = Clock::now() - guard_.max_age;
   temperature_watchdog_.reset(Clock::now());
+  read_buffer_.reserve(512);
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
 
@@ -215,13 +218,13 @@ bool SerialArm::halt()
 {
   // The hold goes first, so the turn that writes the stop already sends no target after it.
   halted_.store(true);
-  return request_and_wait(Request::HALT);
+  return request_and_wait(Pending::HALT);
 }
 
 void SerialArm::request_halt()
 {
   halted_.store(true);
-  request_.store(Request::HALT);
+  request_.store(Pending::HALT);
 }
 
 bool SerialArm::power_on()
@@ -242,7 +245,7 @@ bool SerialArm::power_on()
   // (see send_pending_request): the arm is powered but held, and must not be reported live. A
   // cut can land there too: the thread then drops the frame and clears the request, so the wait
   // ends, but the servos were not powered.
-  return request_and_wait(Request::POWER_ON) && !halted_.load() && !overheated();
+  return request_and_wait(Pending::POWER_ON) && !halted_.load() && !overheated();
 }
 
 std::optional<ServoTemperatures> SerialArm::read_temperatures() const
@@ -274,14 +277,17 @@ std::optional<JointPositions> SerialArm::last_target() const
   return *last_target_.readFromRT();
 }
 
-void SerialArm::set_last_sent(
-  std::optional<JointPositions> & last_sent, const std::optional<JointPositions> & value)
+std::uint64_t SerialArm::echo_timeouts() const
 {
-  last_sent = value;
-  last_target_.writeFromNonRT(value);
+  return echo_timeouts_.load();
 }
 
-bool SerialArm::request_and_wait(Request request)
+std::optional<JointPositions> SerialArm::last_sent() const
+{
+  return *last_target_.readFromNonRT();
+}
+
+bool SerialArm::request_and_wait(Pending request)
 {
   request_.store(request);
   // The poll thread writes the frame at the start of its next turn, waits for the arm's ack and
@@ -289,55 +295,40 @@ bool SerialArm::request_and_wait(Request request)
   // this runs in a lifecycle transition, which may wait.
   const auto deadline{std::chrono::steady_clock::now() + REQUEST_TIMEOUT};
   while (std::chrono::steady_clock::now() < deadline) {
-    if (request_.load() == Request::NONE) {
+    if (request_.load() == Pending::NONE) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{1});
   }
   // One last look: the thread may have cleared it right at the deadline.
-  return request_.load() == Request::NONE;
-}
-
-std::optional<positronic_protocol::Frame> SerialArm::encode_request(Request request)
-{
-  switch (request) {
-    case Request::HALT:
-      return positronic_protocol::encode_stop();
-    case Request::POWER_ON:
-      return positronic_protocol::encode_power_on();
-    case Request::NONE:
-      return std::nullopt;
-  }
-  return std::nullopt;
+  return request_.load() == Pending::NONE;
 }
 
 /// Writes the pending halt or power_on, if any, at the start of a turn (the arm's input is free
 /// then) and waits for its ack. Only the ack clears the request: a frame the arm did not take, or
 /// a failed write, stays pending and goes out again next turn, so nobody hears "stopped" for a
-/// stop the arm never confirmed (#103). An acknowledged stop clears `last_sent`, so the next
-/// target goes out even if it equals the last one. An acknowledged power on ends the hold.
-void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
+/// stop the arm never confirmed (#103). An acknowledged stop clears the last target, so the next
+/// one goes out even if it equals the last. An acknowledged power on ends the hold.
+void SerialArm::send_pending_request()
 {
-  const Request pending{request_.load()};
-  if (pending == Request::POWER_ON && overheated()) {
+  const Pending pending{request_.load()};
+  if (pending == Pending::NONE) {
+    return;
+  }
+  if (pending == Pending::POWER_ON && overheated()) {
     // Never power a cut arm back on. The request is cleared so power_on() stops waiting; it
     // sees the cut and returns false. The hold stays.
-    Request expected{pending};
-    request_.compare_exchange_strong(expected, Request::NONE);
+    Pending expected{pending};
+    request_.compare_exchange_strong(expected, Pending::NONE);
     return;
   }
-  const std::optional<positronic_protocol::Frame> frame{encode_request(pending)};
-  if (!frame.has_value() || !transport_->write(frame->bytes.data(), frame->size)) {
-    return;
-  }
-  // Byte 3 of `FE FE 02 <cmd> FA` is the command the arm will echo in its ack.
-  const auto command{static_cast<positronic_protocol::CommandId>(std::get<3>(frame->bytes))};
-  if (!await_ack(command)) {
+  const Request request{pending == Pending::HALT ? stop_request() : power_on_request()};
+  if (!perform(request)) {
     return;  // not taken: the request stays pending, the frame goes out again next turn
   }
-  if (pending == Request::HALT) {
-    set_last_sent(last_sent, std::nullopt);
-  } else if (pending == Request::POWER_ON) {
+  if (pending == Pending::HALT) {
+    last_target_.writeFromNonRT(std::nullopt);
+  } else if (pending == Pending::POWER_ON) {
     // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
     // right after it must find the hold already released, so its own hold cannot be undone by
     // this store arriving late. Same rule as halt(), the state changes before the signal.
@@ -345,8 +336,8 @@ void SerialArm::send_pending_request(std::optional<JointPositions> & last_sent)
   }
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
-  Request expected{pending};
-  if (!request_.compare_exchange_strong(expected, Request::NONE) && pending == Request::POWER_ON) {
+  Pending expected{pending};
+  if (!request_.compare_exchange_strong(expected, Pending::NONE) && pending == Pending::POWER_ON) {
     // A request_halt() landed during the ack wait: it stored HALT over our POWER_ON (so the CAS
     // failed) and set halted_ before the store above cleared it. Put the hold back: the stop
     // goes out next turn, and power_on() reports false.
@@ -360,8 +351,8 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
   // behind a late pose, so the scan runs over everything read and drops what it rules out. Not
   // the ReplyAssembler: that one only knows poses.
   std::array<std::uint8_t, 256> chunk{};
-  std::vector<std::uint8_t> buffer{};
-  buffer.reserve(512);
+  std::vector<std::uint8_t> & buffer{read_buffer_};
+  buffer.clear();
   while (!stop_.load() && Clock::now() < deadline) {
     const std::size_t got{transport_->read(chunk.data(), chunk.size())};
     if (got == 0) {
@@ -380,18 +371,45 @@ bool SerialArm::read_until(Clock::time_point deadline, const Scanner & scan)
   return false;
 }
 
-bool SerialArm::await_ack(positronic_protocol::CommandId command)
+void SerialArm::wait_for_sync_write()
 {
+  const auto sync_write_seen{[](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> echo{
+        positronic_protocol::decode_sync_write_echo(rx)};
+      const bool found{echo.status == positronic_protocol::DecodeStatus::FOUND};
+      return ScanResult{found, echo.consumed};
+    }};
+  const bool seen{read_until(Clock::now() + timing_.echo_timeout, sync_write_seen)};
+  // A wait cut short by the destructor is not the arm's doing.
+  if (!seen && !stop_.load()) {
+    echo_timeouts_.fetch_add(1);
+  }
+}
+
+bool SerialArm::perform(const Request & request, const Scanner & reply)
+{
+  if (!transport_->write(request.frame.bytes.data(), request.frame.size)) {
+    return false;
+  }
+  const Clock::time_point deadline{Clock::now() + request.timeout};
+  switch (request.expect) {
+    case Expect::NONE:
+      return true;
+    case Expect::REPLY:
+      // A reply nobody scans for is a request that cannot succeed, not a crash on the thread.
+      return static_cast<bool>(reply) && read_until(deadline, reply);
+    case Expect::ACK:
+      break;
+  }
   bool ok{false};
-  const bool found{
-    read_until(Clock::now() + ACK_TIMEOUT, [command, &ok](positronic_protocol::ByteView rx) {
+  const bool found{read_until(deadline, [&request, &ok](positronic_protocol::ByteView rx) {
         const positronic_protocol::Decoded<std::uint8_t> ack{
-          positronic_protocol::decode_ack(rx, command)};
+          positronic_protocol::decode_ack(rx, request.command)};
         if (ack.status == positronic_protocol::DecodeStatus::FOUND) {
           ok = ack.value == 1;
         }
         return ScanResult{ack.status == positronic_protocol::DecodeStatus::FOUND, ack.consumed};
-    })};
+  })};
   return found && ok;
 }
 
@@ -407,49 +425,33 @@ std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointP
 
 std::optional<ServoTemperatures> SerialArm::ask_temperatures()
 {
-  const positronic_protocol::Frame request{positronic_protocol::encode_get_servo_temps()};
-  if (!transport_->write(request.bytes.data(), request.size)) {
-    return std::nullopt;
-  }
-  temperature_buffer_.clear();
-  std::array<std::uint8_t, 256> chunk{};
-  const auto deadline{std::chrono::steady_clock::now() + TEMPERATURE_REPLY_TIMEOUT};
-  while (!stop_.load() && std::chrono::steady_clock::now() < deadline) {
-    const std::size_t got{transport_->read(chunk.data(), chunk.size())};
-    if (got == 0) {
-      // Same as the get_angles reply in poll_loop: the port returns at once, back off.
-      std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
-      continue;
-    }
-    temperature_buffer_.insert(
-      temperature_buffer_.end(), chunk.begin(),
-      std::next(chunk.begin(), static_cast<std::ptrdiff_t>(got)));
-    const positronic_protocol::Decoded<positronic_protocol::ServoTemperatures> decoded{
-      positronic_protocol::decode_servo_temps_reply(
-        positronic_protocol::ByteView{temperature_buffer_.data(), temperature_buffer_.size()})};
-    if (decoded.status == positronic_protocol::DecodeStatus::FOUND) {
-      return decoded.value;
-    }
-    // Keep only what may still become the reply, so servo-bus noise cannot grow the buffer.
-    temperature_buffer_.erase(
-      temperature_buffer_.begin(),
-      std::next(temperature_buffer_.begin(), static_cast<std::ptrdiff_t>(decoded.consumed)));
-  }
-  return std::nullopt;
+  std::optional<ServoTemperatures> temperatures{};
+  const bool replied{
+    perform(get_servo_temps_request(), [&temperatures](positronic_protocol::ByteView rx) {
+        const positronic_protocol::Decoded<positronic_protocol::ServoTemperatures> decoded{
+          positronic_protocol::decode_servo_temps_reply(rx)};
+        if (decoded.status == positronic_protocol::DecodeStatus::FOUND) {
+          temperatures = decoded.value;
+        }
+        return ScanResult{
+        decoded.status == positronic_protocol::DecodeStatus::FOUND, decoded.consumed};
+    })};
+  return replied ? temperatures : std::nullopt;
 }
 
-bool SerialArm::cut_power(const Overheat & trip, std::optional<JointPositions> & last_sent)
+bool SerialArm::cut_power(const Overheat & trip)
 {
   // The hold first, like halt(): from here on no target goes out, whatever the controller does.
   halted_.store(true);
-  set_last_sent(last_sent, std::nullopt);
-  const positronic_protocol::Frame stop{positronic_protocol::encode_stop()};
-  static_cast<void>(transport_->write(stop.bytes.data(), stop.size));
+  last_target_.writeFromNonRT(std::nullopt);
+  // The stop goes out without waiting for its ack: the power off must follow at once.
+  Request stop{stop_request()};
+  stop.expect = Expect::NONE;
+  std::ignore = perform(stop);
   // The arm ignores the port for a moment after a frame (#32): the power off waits the settle,
   // so it is not dropped.
   std::this_thread::sleep_for(timing_.send_settle);
-  const positronic_protocol::Frame off{positronic_protocol::encode_power_off()};
-  const bool off_written{transport_->write(off.bytes.data(), off.size)};
+  const bool off_written{perform(power_off_request())};
   // Recorded after the frames, the value before the joint: the plugin that sees the cut finds
   // the arm already told to stop and power off.
   overheat_celsius_.store(trip.celsius);
@@ -459,34 +461,38 @@ bool SerialArm::cut_power(const Overheat & trip, std::optional<JointPositions> &
 
 /// The temperatures, once a period, when the arm's input is free (it has just answered) and no
 /// stop or power on is waiting. On a turn that sends no target; a reading older than max_age is
-/// taken before the send of a moving turn, so a long motion cannot hide a hot servo. Never
-/// between a send and its settle: that is the end of the turn.
-void SerialArm::watch_temperatures(bool new_target, std::optional<JointPositions> & last_sent)
+/// taken in a moving turn too, so a long motion cannot hide a hot servo. Never between a send
+/// and its sync-write: that is the end of the turn. Returns true when it asked: the turn then
+/// sends nothing and the target goes out next turn, ~10 ms later. A request (8 ms, 50 ms when
+/// unanswered) plus a send and its sync-write would run past the period, and would eat the
+/// link watchdog's margin for two lost replies, which only the get_angles reply resets.
+bool SerialArm::watch_temperatures(bool new_target)
 {
   const auto now{Clock::now()};
   const bool due{now - last_temperature_ask_ >= guard_.period};
   const bool overdue{now - last_temperature_ask_ >= guard_.max_age};
-  if (!due || (new_target && !overdue) || request_.load() != Request::NONE) {
-    return;
+  if (!due || (new_target && !overdue) || request_.load() != Pending::NONE) {
+    return false;
   }
   last_temperature_ask_ = now;
   const std::optional<ServoTemperatures> temperatures{ask_temperatures()};
   if (!temperatures.has_value()) {
-    return;
+    return true;
   }
   if (plausible(temperatures.value())) {
     temperatures_.writeFromNonRT(temperatures);
     temperature_watchdog_.on_reply(Clock::now());
   }
   if (overheated()) {
-    return;
+    return true;
   }
   if (const std::optional<Overheat> trip{detector_.update(temperatures.value())}) {
     // The cut is the thread's own: it does not wait for the control loop, and it works with
     // the component inactive too, where a halted arm still holds its pose.
-    const bool off_written{cut_power(trip.value(), last_sent)};
+    const bool off_written{cut_power(trip.value())};
     next_power_off_ = off_written ? Clock::now() + guard_.period : Clock::now();
   }
+  return true;
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
@@ -499,8 +505,7 @@ void SerialArm::repeat_power_off(Clock::time_point turn_start)
   if (!overheated() || turn_start < next_power_off_) {
     return;
   }
-  const positronic_protocol::Frame off{positronic_protocol::encode_power_off()};
-  static_cast<void>(transport_->write(off.bytes.data(), off.size));
+  std::ignore = perform(power_off_request());
   next_power_off_ = turn_start + guard_.period;
 }
 
@@ -510,10 +515,6 @@ void SerialArm::poll_loop()
   std::array<std::uint8_t, 256> chunk{};
 
   const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
-  // The last target that went out, so an unchanged command is not sent again: a send_angles
-  // keeps the arm busy for the settle, and while it stands still the port is better spent on
-  // fresh poses.
-  std::optional<JointPositions> last_sent{};
   // Count the silence from now, so an arm that never answers also times out (#35).
   watchdog_.reset(Clock::now());
 
@@ -521,7 +522,7 @@ void SerialArm::poll_loop()
     // The deadline is set before the work, so a slow reply does not drift the period.
     const auto turn_start{std::chrono::steady_clock::now()};
 
-    send_pending_request(last_sent);
+    send_pending_request();
 
     repeat_power_off(turn_start);
 
@@ -558,24 +559,28 @@ void SerialArm::poll_loop()
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
     const std::optional<JointPositions> target{*command_.readFromRT()};
-    const bool new_target{replied && !halted_.load() && target.has_value() && target != last_sent};
+    // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
+    // and while it stands still the port is better spent on fresh poses. last_sent() is the
+    // thread's view of last_target_, the one memory of what went out.
+    const bool new_target{
+      replied && !halted_.load() && target.has_value() && target != last_sent()};
 
-    if (replied) {
-      watch_temperatures(new_target, last_sent);
-    }
+    // The guard only runs after a reply: the arm's input is free then.
+    const bool asked_temperatures{replied && watch_temperatures(new_target)};
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
-    // A turn without a reply sends nothing, the command waits in command_ for the next.
+    // A turn without a reply sends nothing, the command waits in command_ for the next. So
+    // does a turn that asked the temperatures: the request took the time of the send.
     // halted_ again: a cut in this turn holds the target that was about to go.
-    if (new_target && !halted_.load()) {
+    if (new_target && !asked_temperatures && !halted_.load()) {
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
       const std::optional<positronic_protocol::Frame> frame{encode_command(target.value())};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
-        set_last_sent(last_sent, target);
+        last_target_.writeFromNonRT(target);
         sent = true;
         // The arm passes the command to the servos and ignores the port meanwhile: a
         // get_angles inside this window stalls, so the next turn must not start before it.
-        std::this_thread::sleep_for(timing_.send_settle);
+        wait_for_sync_write();
       }
     }
 

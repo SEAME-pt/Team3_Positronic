@@ -34,14 +34,15 @@ One `docker/Dockerfile`, three targets that share their lower layers (why: [ADR 
 | Target | Image | Used by | Has |
 | --- | --- | --- | --- |
 | `runtime` | `positronic-runtime:nano` | The Jetson (`make nano-image`) | ros2_control, pymycobot, ROS lint set |
-| `ci` | `positronic-dev:jazzy` in CI | GitHub Actions | `runtime` + clang tools + MoveIt |
+| `ci` | `positronic-dev:jazzy` in CI, pulled from `ghcr.io/seame-pt/team3_positronic-ci` | GitHub Actions | `runtime` + clang tools + MoveIt |
 | `dev` | `positronic-dev:jazzy` | Your machine (`make image`) | `ci` + Gazebo, RViz, rqt |
 
 **Adding a package:** put it in the lowest stage that needs it (rules at the top of the Dockerfile),
 then `make image`. Only that stage's layer is downloaded again. CI builds, lints and tests `src/` in
 `ci`, and builds the Jetson's packages (`NANO_PACKAGES`, see `make nano-build`) in `runtime`, so a
 package in the wrong stage fails in CI, not on your laptop or the Jetson. CI runs on amd64, so it can't
-catch a package that only fails on the Jetson's arm64. Build one target by hand with
+catch a package that only fails on the Jetson's arm64. A PR that only changes `docs/` or `.md` files skips
+all of this: only the `CI` check runs, and it passes. Build one target by hand with
 `docker build --target <name> docker`.
 
 ## First time
@@ -92,7 +93,10 @@ and the editor's clangd use to understand the code (see the README, "Errors and 
 To build only one package, use `make shell` and run `colcon build --packages-select <package>`.
 
 **`make test`**: runs every package's tests plus linters and prints a summary. Read the last lines: they say how
-many tests failed. Run `make build` first, since the tests run against the last build.
+many tests failed. Run `make build` first, since the tests run against the last build. Tests run 4 at a time
+inside each package (`make test TEST_JOBS=1` for one at a time), except `positronic_mission`'s: they run
+after the others, alone, because one of them can miss a message on a loaded machine. `ROS_DOMAIN_ID` is unset for them, so each
+test registered with `ament_add_ros_isolated_gtest` gets a free domain: a new test that starts ROS should use it.
 
 **`make coverage`**: measures which lines of `src/` (C++ and Python) the tests run. It builds and tests
 everything a second time with coverage on, in `build_cov/` and `install_cov/`, so your normal build
@@ -109,8 +113,15 @@ it to check before pushing.
 `make build` first. Warnings don't fail the command; read them and fix what's real.
 
 **`make tidy-strict`**: the same, but only on the packages that talk to the arm or command it
-(`positronic_hardware`, `positronic_protocol`, `positronic_mission`), and every warning is an error.
-CI runs it, so run it before you push changes there. Needs `make build` first.
+(`positronic_hardware`, `positronic_protocol`, `positronic_mission`, `positronic_safety`), and every
+warning is an error. Test files (`test/`) get the `bugprone-*` checks only (ADR 0007). CI runs it after
+each merge to `dev`. Needs `make build` first.
+
+**`make tidy-changed`**: `make tidy-strict` on only the files your branch can affect since
+`origin/dev`: the `.cpp` files you changed, every file that includes a header you changed, a whole
+package if you changed its `CMakeLists.txt` or `package.xml`, and everything if you changed
+`.clang-tidy` or the Dockerfile. CI runs this on PRs, so run it before you push changes to those
+packages. Needs `make build` first. Uncommitted changes count; new files only once you `git add` them.
 
 **`make doctor`**: checks the environment: ROS, tools, write access to the repo, ROS 2 messaging.
 With `ARM_IP=<jetson ip>` it also checks the Jetson is reachable. Run it first when something is
@@ -160,6 +171,20 @@ make nano-service
 
 It copies the unit to `/etc/systemd/system/`, enables it at boot and (re)starts it.
 The file in the repo is the source of truth: never edit the copy on the Jetson.
+
+**Wi-Fi power saving.** Before the container starts, the unit turns Wi-Fi power saving off
+(#147): with it on, `wlan0` has 0.2-0.4 s gaps that the safety supervisor reads as a lost link.
+It sets `802-11-wireless.powersave 2` (off) on the connection active on `wlan0`, so it stays off
+across reconnects and reboots, and runs `iw dev wlan0 set power_save off` for the link that is up.
+Ubuntu's NetworkManager config turns power saving on for every profile, so a Wi-Fi network
+joined later without restarting the unit keeps that default (on): run
+`sudo systemctl restart positronic-driver` after joining it. If `wlan0` has no active connection
+the step is skipped and the container starts anyway; `journalctl -u positronic-driver` says why.
+
+```bash
+ssh nano iw dev wlan0 get power_save                                 # Power save: off
+ssh nano nmcli -g 802-11-wireless.powersave connection show SEAME    # disable (= 2)
+```
 
 **Check it:**
 
@@ -224,6 +249,7 @@ Put per-machine values in `.env` (copy `.env.example`), or override one run with
 | `Permission denied` on the Jetson's `/ws` | The Jetson image is out of date: `make nano-image` |
 | Build fails after pulling someone's Dockerfile change | `make image` (and `make nano-image` for the Jetson) |
 | `make tidy` finds nothing | Run `make build` first |
+| `make tidy-changed` says `git failed` | In a git worktree, git can't run in the dev container: use `make tidy-strict` |
 | `positronic-driver` shows `failed` | `ssh nano journalctl -u positronic-driver -n 50`. Usual causes: image missing (`make nano-image`), serial port missing |
 | `apt-get update` fails with `Release file ... is not valid yet` | The VM's clock is behind (a Mac VM after sleep): `sudo systemctl restart systemd-timesyncd`, then build again |
 | CI fails but the same command passes on your laptop | The package is in a stage `ci` doesn't include (`sim` only?). Move it to `tools` or `core` |

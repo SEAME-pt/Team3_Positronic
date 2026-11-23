@@ -66,6 +66,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
 
   # Pure-logic unit test for the timeouts (heartbeat, fault data, request in flight).
   ament_add_gtest(test_deadline_watchdog test/test_deadline_watchdog.cpp)
@@ -83,7 +84,8 @@ if(BUILD_TESTING)
   # The node against a fake controller manager, trajectory controller and mission node, all in
   # one process: the order of the requests, every trigger, the stay-stopped rule. It has its
   # own main() (rclcpp::init), and every test waits for real timeouts, hence the longer limit.
-  ament_add_gtest(test_safety_supervisor test/test_safety_supervisor.cpp
+  # Isolated: a ROS_DOMAIN_ID of its own when tests run in parallel (#144).
+  ament_add_ros_isolated_gtest(test_safety_supervisor test/test_safety_supervisor.cpp
     TIMEOUT 120
     SKIP_LINKING_MAIN_LIBRARIES
   )

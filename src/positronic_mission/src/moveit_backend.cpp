@@ -19,12 +19,19 @@
 // THE SOFTWARE.
 
 #include "positronic_mission/moveit_backend.hpp"
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/dev
 #include <chrono>
 #include <memory>
+#include <thread>
+
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/utils/moveit_error_code.hpp>
 #include <ratio>
 #include <rclcpp/duration.hpp>
+#include <rclcpp/node.hpp>
 #include <rclcpp/node_options.hpp>
 #include "moveit_msgs/msg/move_it_error_codes.hpp"
 #include "moveit_msgs/msg/robot_trajectory.hpp"
@@ -47,8 +54,14 @@ MoveitBackend::MoveitBackend(std::string group_name)
   spin_thread_ = std::thread([this]() {
         executor_->spin();
   });
+<<<<<<< HEAD
   while (!executor_->is_spinning()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
+=======
+  // Wait until spinning, so a cancel from the destructor can’t be lost
+  while (!executor_->is_spinning() && rclcpp::ok()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+>>>>>>> origin/dev
   }
 }
 
@@ -164,7 +177,25 @@ bool MoveitBackend::ready()
   if (move_group_) {
     return true;
   }
+  // These parameters will only exist if the launch file has them
+  // Which in our case is true. So it checks if the file was actually loaded
+  if (
+    !node_->has_parameter("robot_description") ||
+    !node_->has_parameter("robot_description_semantic"))
+  {
+    RCLCPP_WARN(node_->get_logger(), "Moveit parameters missing");
+    return false;
+  }
   try {
+    // Make sure the move_group responds before returning true.
+    if (!check_client_) {
+      check_client_ =
+        rclcpp_action::create_client<moveit_msgs::action::MoveGroup>(node_, "move_action");
+    }
+    if (!check_client_->wait_for_action_server(std::chrono::seconds(2))) {
+      RCLCPP_WARN(node_->get_logger(), "move_group not answering on move_action");
+      return false;
+    }
     move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
       node_, group_name_, nullptr, rclcpp::Duration::from_seconds(2.0));
     return true;

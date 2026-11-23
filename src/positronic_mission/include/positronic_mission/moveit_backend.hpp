@@ -26,8 +26,10 @@
 #include <string>
 #include <thread>
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "moveit_msgs/action/move_group.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/client.hpp"
 
 // Forwarding the class to the .cpp file
 namespace moveit::planning_interface
@@ -73,6 +75,7 @@ private:
   std::atomic<bool> stop_requested_{false};
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_{nullptr};
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_{nullptr};
+  rclcpp_action::Client<moveit_msgs::action::MoveGroup>::SharedPtr check_client_{nullptr};
 };
 }  // namespace positronic_mission
 
