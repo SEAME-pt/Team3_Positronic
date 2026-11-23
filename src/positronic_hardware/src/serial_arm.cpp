@@ -175,12 +175,12 @@ SerialArm::SerialArm(
   timing_{timing},
   guard_{guard},
   temperature_watchdog_{guard.stale_timeout},
-  detector_{guard.limit_c},
+  detector_{guard.limit_c, guard.hot_for},
   has_gripper_{has_gripper}
 {
   // The first temperature request is due at once, so on_activate finds a reading, and the
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
-  last_temperature_ask_ = Clock::now() - guard_.max_age;
+  last_temperatures_ = Clock::now() - guard_.max_age;
   temperature_watchdog_.reset(Clock::now());
   read_buffer_.reserve(512);
   thread_ = std::thread{&SerialArm::poll_loop, this};
@@ -222,11 +222,11 @@ void SerialArm::write_angles(const JointPositions & angles)
   }
 }
 
-bool SerialArm::wait_for_turn_end(Clock::time_point deadline)
+void SerialArm::wait_for_turn_end(Clock::time_point deadline)
 {
   if (!timing_.pose_from_poll) {
     std::this_thread::sleep_until(deadline);
-    return false;
+    return;
   }
   // The flag was cleared before this turn read its command, so a write that landed during the
   // turn, while the sync-write was being read, is still set and ends the wait at once: the
@@ -239,7 +239,6 @@ bool SerialArm::wait_for_turn_end(Clock::time_point deadline)
   std::ignore = wake_cv_.wait_until(lock, deadline, [this]() {
         return command_ready_ || request_ready_ || stop_.load();
   });
-  return command_ready_;
 }
 
 void SerialArm::wake_thread()
@@ -467,11 +466,7 @@ void SerialArm::wait_for_sync_write()
   }
   // Published now, the moment the sync-write closes, not at the start of the next turn: the
   // pose is ~13 ms fresher for the read() that comes next (#170).
-  if (const std::optional<JointPositions> pose{pose_from_poll_frames()}) {
-    latest_.writeFromNonRT(pose.value());
-    last_pose_ = pose;
-    has_sample_.store(true);
-    watchdog_.on_reply(Clock::now());
+  if (publish_poll_frames()) {
     input_free_ = true;
   }
 }
@@ -492,11 +487,11 @@ bool SerialArm::jumped(std::uint16_t position, std::size_t joint) const
   return std::abs(angle - last_pose_->at(joint)) > MAX_POLL_JUMP_RAD;
 }
 
-std::optional<JointPositions> SerialArm::pose_from_poll_frames()
+bool SerialArm::publish_poll_frames()
 {
   namespace pp = positronic_protocol;
   const auto now{Clock::now()};
-  std::array<std::optional<std::uint16_t>, pp::NUM_JOINTS> steps{};
+  std::array<std::optional<pp::ServoStatus>, pp::NUM_JOINTS> found{};
   pp::ByteView rest{read_buffer_.data(), read_buffer_.size()};
   while (rest.size > 0) {
     const pp::Decoded<pp::ServoStatus> status{pp::decode_servo_status(rest)};
@@ -509,31 +504,43 @@ std::optional<JointPositions> SerialArm::pose_from_poll_frames()
     const bool usable{
       joint < pp::NUM_JOINTS && frame_plausible(status.value) &&
       !jumped(status.value.position, joint)};
+    // Kept for the bridge even when this poll ends up unpublished: the next poll may need it.
     if (usable) {
-      steps.at(joint) = status.value.position;
+      found.at(joint) = status.value;
+      last_steps_.at(joint) = status.value.position;
+      last_steps_at_.at(joint) = now;
     }
     rest = pp::ByteView{
       std::next(rest.data, static_cast<std::ptrdiff_t>(status.consumed)),
       rest.size - status.consumed};
   }
   pp::JointAngles angles{};
+  ServoTemperatures temperatures{};
+  bool fresh{true};
   for (std::size_t joint{0}; joint < pp::NUM_JOINTS; ++joint) {
-    const std::optional<std::uint16_t> & step{steps.at(joint)};
-    const bool bridgeable{
-      last_steps_.at(joint).has_value() && now - last_steps_at_.at(joint) <= POLL_BRIDGE_AGE};
-    std::uint16_t position{0};
-    if (step.has_value()) {
-      position = step.value_or(0);
-      last_steps_.at(joint) = step;
-      last_steps_at_.at(joint) = now;
-    } else if (bridgeable) {
-      position = last_steps_.at(joint).value_or(0);  // the servo's last good position
+    const bool stale{
+      !last_steps_.at(joint).has_value() || now - last_steps_at_.at(joint) > POLL_BRIDGE_AGE};
+    if (found.at(joint).has_value()) {
+      temperatures.at(joint) = found.at(joint).value_or(pp::ServoStatus{}).temperature;
+    } else if (stale) {
+      return false;  // nothing recent for this joint: the next turn asks get_angles
     } else {
-      return std::nullopt;  // nothing recent for this joint: the next turn asks get_angles
+      fresh = false;  // the servo's last good position stands in, and no temperature
     }
-    angles.at(joint) = pp::angle_from_steps(position, joint);
+    angles.at(joint) = pp::angle_from_steps(last_steps_.at(joint).value_or(0), joint);
   }
-  return pp::to_radians(angles);
+  const JointPositions pose{pp::to_radians(angles)};
+  latest_.writeFromNonRT(pose);
+  last_pose_ = pose;
+  has_sample_.store(true);
+  watchdog_.on_reply(now);
+  // The frames are a temperature reading too, one per send, and the guard asks nothing while
+  // they come. Not with a bridged frame: it repeats an older reading.
+  if (fresh) {
+    last_temperatures_ = now;
+    take_temperatures(temperatures, now);
+  }
+  return true;
 }
 
 bool SerialArm::ask_angles(ReplyAssembler & assembler)
@@ -670,12 +677,12 @@ bool SerialArm::cut_power(const Overheat & trip)
 bool SerialArm::watch_temperatures(bool new_target)
 {
   const auto now{Clock::now()};
-  const bool due{now - last_temperature_ask_ >= guard_.period};
-  const bool overdue{now - last_temperature_ask_ >= guard_.max_age};
+  const bool due{now - last_temperatures_ >= guard_.period};
+  const bool overdue{now - last_temperatures_ >= guard_.max_age};
   if (!due || (new_target && !overdue) || request_.load() != Pending::NONE) {
     return false;
   }
-  last_temperature_ask_ = now;
+  last_temperatures_ = now;
   const std::optional<ServoTemperatures> temperatures{ask_temperatures()};
   if (!temperatures.has_value()) {
     return true;
@@ -686,20 +693,27 @@ bool SerialArm::watch_temperatures(bool new_target)
   if (timing_.pose_from_poll && new_target) {
     input_free_ = true;
   }
-  if (plausible(temperatures.value())) {
+  // The time of the ask, not of the reply: two asks a period apart are then exactly a period
+  // apart for the detector, whatever the replies took.
+  take_temperatures(temperatures.value(), now);
+  return true;
+}
+
+void SerialArm::take_temperatures(const ServoTemperatures & temperatures, Clock::time_point at)
+{
+  if (plausible(temperatures)) {
     temperatures_.writeFromNonRT(temperatures);
     temperature_watchdog_.on_reply(Clock::now());
   }
   if (overheated()) {
-    return true;
+    return;
   }
-  if (const std::optional<Overheat> trip{detector_.update(temperatures.value())}) {
+  if (const std::optional<Overheat> trip{detector_.update(temperatures, at)}) {
     // The cut is the thread's own: it does not wait for the control loop, and it works with
     // the component inactive too, where a halted arm still holds its pose.
     const bool off_written{cut_power(trip.value())};
     next_power_off_ = off_written ? Clock::now() + guard_.period : Clock::now();
   }
-  return true;
 }
 
 bool SerialArm::serve_after_reply(bool new_target)
@@ -789,9 +803,6 @@ void SerialArm::poll_loop()
   // Count the silence from now, so an arm that never answers also times out (#35).
   watchdog_.reset(Clock::now());
 
-  // Whether a write was waiting when the last wait ended: that turn may send an unchanged
-  // command again (#170), see `repeat` below.
-  bool woke_by_write{false};
   while (!stop_.load()) {
     // The deadline is set before the work, so a slow reply does not drift the period.
     const auto turn_start{std::chrono::steady_clock::now()};
@@ -815,10 +826,16 @@ void SerialArm::poll_loop()
       replied = ask_angles(assembler);
     }
 
-    // A write from here on is one this turn has not seen: the flag stays set for the wait at
-    // the end of the turn (#170), whenever it lands.
+    // Whether the controller wrote since the last turn read the command, whenever it landed:
+    // in the wait at the end of that turn or during this turn's get_angles. Each write counts
+    // once, here, where the turn decides; one from here on is left set for the wait at the end
+    // of this turn (#170). Taken only from the wait, a write that landed during a get_angles
+    // was lost, and after a gripper read the repeat waited 48 to 208 ms for one to land in the
+    // few ms of the wait (23 Nov 2026).
+    bool wrote{false};
     {
       const std::lock_guard<std::mutex> lock{wake_mutex_};
+      wrote = command_ready_;
       command_ready_ = false;
     }
     // nullopt means no command yet, or a read that lost the race with write_angles() before
@@ -826,13 +843,13 @@ void SerialArm::poll_loop()
     const std::optional<JointPositions> target{*command_.readFromRT()};
     // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
     // and while it stands still the port is better spent on fresh poses. last_sent() is the
-    // thread's view of last_target_, the one memory of what went out. A turn that a write woke
-    // sends even the same command (#170): the stream follows the controller's cadence and the
-    // pose keeps coming from the poll. The repeat needs the last send to have got its
+    // thread's view of last_target_, the one memory of what went out. A turn with a write since
+    // the last sends even the same command (#170): the stream follows the controller's cadence
+    // and the pose keeps coming from the poll. The repeat needs the last send to have got its
     // sync-write, so a target the Atom refuses is not sent on every write, and it gives way to
     // a gripper that is due, which is served only in a turn that sends nothing (#174).
     const bool changed{target.has_value() && target != last_sent()};
-    const bool repeat{woke_by_write && last_send_answered_ && !gripper_due()};
+    const bool repeat{wrote && last_send_answered_ && !gripper_due()};
     const bool new_target{replied && !halted_.load() && target.has_value() && (changed || repeat)};
 
     // The guard only runs after a reply: the arm's input is free then.
@@ -854,7 +871,7 @@ void SerialArm::poll_loop()
       }
     }
 
-    woke_by_write = wait_for_turn_end(turn_start + turn_period(sent));
+    wait_for_turn_end(turn_start + turn_period(sent));
   }
 }
 

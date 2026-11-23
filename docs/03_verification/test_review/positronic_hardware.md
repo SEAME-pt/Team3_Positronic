@@ -117,6 +117,12 @@ store a bad reading, so the control loop keeps the last good pose.
 
 **Decision:** **new issue** (as in protocol F1). Nothing in #46.
 
+**Since #170:** while a controller writes, the pose comes from the servo status frames of the
+Atom's poll, which carry a checksum; a frame whose voltage or temperature cannot be a servo's, or
+whose position jumps more than 0.52 rad (`MAX_POLL_JUMP_RAD`) from the last pose, is left out.
+What H2 describes stays true for the `get_angles` fallback (no controller writing, a late
+sync-write, a hot servo corrupting its frames) and for the joint range, checked nowhere.
+
 ### H3. The arm's acks are never read
 
 **What:** the arm answers `send_angles`, `stop` and `power_on` with `FE FE 03 <cmd> 01 FA`.

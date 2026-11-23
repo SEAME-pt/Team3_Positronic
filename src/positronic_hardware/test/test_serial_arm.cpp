@@ -99,6 +99,33 @@
 //   spin the thread, and a target whose send got no sync-write is not sent again on every
 //   write. The tests that check a frame was left out now move a marker joint and wait for it,
 //   so they cannot pass without the poll being read.
+//
+// Follow-up prompt (#170, the servo state from the frames):
+//   The status frames of the poll also carry the temperature: with the pose from the poll the
+//   guard takes each whole poll as a reading. Check: in a stream the temperatures read equal the
+//   frames' and no get_servo_temps goes out; two polls with a servo at 61 degC cut the arm (stop,
+//   power off, overheat reported) and nothing is sent after; at rest, without polls, the request
+//   still goes out; last_servo_status() returns the six frames decoded, J1 first. A poll with a
+//   bridged frame is not a temperature reading: one fresh hot poll plus bridged ones must not cut.
+//
+// Follow-up prompt (#170, the cut by time):
+//   The cut now waits until the hot readings have lasted hot_for (1 s, 100 ms in fast_guard,
+//   the period, so two requests in a row still cut). Check that hot polls cut the arm only
+//   hot_for after the first send, not at the second poll. The bridged-frame test now follows
+//   the arm of 20 Nov: the hot servo's own frame is the one bridged, hot_for is 1 ms, no ask can
+//   land between the polls, and a marker joint shows the bridged poll was read. Pin the
+//   default period at least hot_for. Polls that each miss a different joint are all published
+//   and none is a reading: the guard must keep asking. A poll that is not published still
+//   keeps its good frames for the bridge of the next one (a fix of the second part, found in
+//   this review). last_servo_status() and its test leave
+//   this change: nothing
+//   here reads it. The at-rest request test goes too: ReadsTheTemperaturesWhileIdle covers it.
+//   A write that lands during a turn's get_angles counts for that turn: at rest, after a
+//   gripper read, the repeat resumes at the next write (get_angles answered in 7 ms and the
+//   gripper answered, as on the arm), no gap between sends over 120 ms.
+//   The last-target test waits for last_target() instead of reading it the moment the frame is
+//   on the wire: the thread stores it after write() returns. The test whose only readings are
+//   the requests gets a stale timeout over max_age, as on the arm, and the defaults are pinned.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -152,6 +179,8 @@ constexpr std::uint8_t GET_GRIPPER_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
 constexpr std::uint8_t SET_GRIPPER_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::SET_GRIPPER_VALUE)};
+/// What the replayed arm answers to get_gripper_value when set_answer_gripper(true).
+constexpr std::uint8_t GRIPPER_REPLY_VALUE{50};
 
 /// The Atom's sync-write to the six servos, recorded on the arm on 13 Nov 2026 right after a
 /// send_angles: `FF FF FE 34 83 29 07` + per servo (id, acc, goal, time, speed) + checksum. It
@@ -179,6 +208,8 @@ constexpr std::string_view RECORDED_POLL_FRAMES{
   "ff ff 05 11 00 14 08 00 00 00 00 4a 1e 00 00 00 13 08 00 00 4a "
   "ff ff 06 11 00 df 08 00 00 00 00 49 22 00 00 00 de 08 00 00 b0"};
 constexpr std::array<std::uint16_t, 6> RECORDED_POLL_STEPS{2024, 2050, 2123, 2112, 2068, 2271};
+/// The temperatures in those frames (byte 7 of each frame's data), degC.
+constexpr std::array<std::uint8_t, 6> RECORDED_POLL_TEMPS{35, 32, 31, 32, 30, 34};
 
 std::vector<std::uint8_t> parse_hex(std::string_view hex);
 
@@ -214,6 +245,11 @@ public:
         if (ack_requests_.load()) {
           queued_.push_back({now + ack_delay_.load(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA}, true});
         }
+      } else if (id == GET_ANGLES_ID && angles_delay_.load().count() > 0) {
+        // The reply comes this late, as on the arm (6.8 ms p50, 23 Nov 2026): nothing before.
+        queued_.push_back({now + angles_delay_.load(), {}, true});
+      } else if (id == GET_GRIPPER_ID && answer_gripper_.load()) {
+        queued_.push_back({now, {0xFE, 0xFE, 0x03, 0x65, GRIPPER_REPLY_VALUE, 0xFA}, true});
       } else if (id == TEMPS_ID) {
         // The temperatures, cool, at once: the turn after them must show that the reply frees
         // the next send (#170).
@@ -287,6 +323,19 @@ public:
     ack_requests_.store(ack);
   }
 
+  /// A get_angles reply that comes `delay` after the request, the line silent until then
+  /// (default: at once, from the recorded bursts).
+  void set_angles_delay(std::chrono::milliseconds delay)
+  {
+    angles_delay_.store(delay);
+  }
+
+  /// An arm that answers get_gripper_value with GRIPPER_REPLY_VALUE (default: no answer).
+  void set_answer_gripper(bool answer)
+  {
+    answer_gripper_.store(answer);
+  }
+
   /// How long the arm takes to acknowledge a request (default 0).
   void set_ack_delay(std::chrono::milliseconds delay)
   {
@@ -356,6 +405,8 @@ private:
   std::atomic<bool> reject_requests_{false};
   std::atomic<bool> ack_requests_{true};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
+  std::atomic<std::chrono::milliseconds> angles_delay_{std::chrono::milliseconds{0}};
+  std::atomic<bool> answer_gripper_{false};
   /// A frame the arm will put on the line at `due`. `silences`: nothing else until then.
   struct Queued
   {
@@ -1065,6 +1116,8 @@ TemperatureGuard fast_guard()
   guard.period = std::chrono::milliseconds{100};
   guard.max_age = std::chrono::milliseconds{300};
   guard.stale_timeout = std::chrono::milliseconds{300};
+  // The period, as on the arm (1 s each): two requests in a row still cut.
+  guard.hot_for = std::chrono::milliseconds{100};
   return guard;
 }
 
@@ -1210,6 +1263,15 @@ std::vector<std::vector<std::uint8_t>> between_sends(
   return {first, last.base()};
 }
 }  // namespace
+
+TEST(SerialArmTemperature, TheDefaultTimesFitTogether)
+{
+  // At rest the guard asks once a period: two hot replies in a row are hot_for apart, and cut,
+  // only while the period is at least hot_for. And the guard turns blind only when no reading
+  // came for longer than the oldest one it lets stand, max_age.
+  EXPECT_GE(TemperatureGuard{}.period, TemperatureGuard{}.hot_for);
+  EXPECT_GT(TemperatureGuard{}.stale_timeout, TemperatureGuard{}.max_age);
+}
 
 TEST(SerialArmTemperature, ReadsTheTemperaturesWhileIdle)
 {
@@ -1521,6 +1583,11 @@ TEST(SerialArm, TheLastTargetFollowsTheWireAndAnAcknowledgedStopClearsIt)
   const JointPositions target{0.2, 0.0, 0.0, 0.0, 0.0, 0.0};
   arm.write_angles(target);
   ASSERT_GE(wait_for_sends(port, 1).size(), 1U);
+  // The thread stores the target once write() has returned, a moment after the frame is on the
+  // wire: wait for it rather than read it at once (it read nullopt on a loaded machine).
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.last_target().has_value();
+  }));
   EXPECT_EQ(arm.last_target(), std::optional<JointPositions>{target});
 
   // The stop is acknowledged: the arm is heading nowhere, there is no target to follow.
@@ -1635,6 +1702,20 @@ std::optional<std::chrono::steady_clock::time_point> first_written(
     }
   }
   return std::nullopt;
+}
+
+/// The recorded poll frames with servo `joint` (0 = J1) reporting `celsius`, checksum redone.
+std::vector<std::uint8_t> poll_frames_with_temperature(std::size_t joint, std::uint8_t celsius)
+{
+  return with_byte(parse_hex(RECORDED_POLL_FRAMES), joint, 7, celsius);
+}
+
+/// `frames` without servo `joint`'s frame, as when it failed its checksum.
+std::vector<std::uint8_t> without_frame(std::vector<std::uint8_t> frames, std::size_t joint)
+{
+  const auto start{std::next(frames.begin(), static_cast<std::ptrdiff_t>(joint * POLL_FRAME))};
+  frames.erase(start, std::next(start, static_cast<std::ptrdiff_t>(POLL_FRAME)));
+  return frames;
 }
 
 }  // namespace
@@ -1870,13 +1951,62 @@ TEST(SerialArmPollPose, AtRestTheGripperTakesTheTurnOfTheRepeatedSend)
   EXPECT_GE(send_angles_frames(during).size(), 5U);
 }
 
-TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
+TEST(SerialArmPollPose, AfterAGripperReadTheRepeatResumesAtTheNextWrite)
 {
+  // At rest the controller writes the same pose every 33 ms and a due gripper takes the turn of
+  // a repeat; the turns after it ask get_angles, 7 ms on the arm. A write that lands during one
+  // counts, so the repeat resumes at the next write. Counted only when it ended the wait, it
+  // had to land in the ~3 ms between get_angles: on the arm the sends paused 48 to 208 ms after
+  // a gripper read (23 Nov 2026).
   auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
   ReplayTransport & port{*transport};
   port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
   port.set_quiet_after_send(true);
-  SerialArm arm{std::move(transport), POLL_TIMING, fast_guard()};
+  port.set_angles_delay(std::chrono::milliseconds{7});
+  port.set_answer_gripper(true);
+  SerialArm arm{std::move(transport), POLL_TIMING, TemperatureGuard{}, true};
+  static_cast<void>(wait_for_reply(arm));
+  const JointPositions rest{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const auto end{std::chrono::steady_clock::now() + std::chrono::milliseconds{1500}};
+  while (std::chrono::steady_clock::now() < end) {
+    arm.write_angles(rest);
+    std::this_thread::sleep_for(std::chrono::milliseconds{33});
+  }
+
+  const auto frames{port.written()};
+  const auto times{port.written_at()};
+  std::vector<std::chrono::steady_clock::time_point> sends{};
+  for (std::size_t i{0}; i < frames.size() && i < times.size(); ++i) {
+    if (frames.at(i).size() == 18) {
+      sends.push_back(times.at(i));
+    }
+  }
+  ASSERT_GE(sends.size(), 20U);
+  EXPECT_GE(frames_with_id(between_sends(frames), GET_GRIPPER_ID).size(), 3U);
+  // The longest gap is one write given to the gripper, a get_angles and the next write: about
+  // 85 ms. 120 ms leaves 35 ms for a loaded machine. Without the fix about half the gaps after a
+  // gripper read pass it, and 1.5 s holds about 15 of them.
+  for (std::size_t i{1}; i < sends.size(); ++i) {
+    EXPECT_LT(sends.at(i) - sends.at(i - 1), std::chrono::milliseconds{120}) << i;
+  }
+}
+
+TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
+{
+  // A poll with the J3 frame missing: no pose and no temperatures from it, so the thread asks
+  // get_angles every turn and the temperatures once max_age, as with a hot servo whose frames
+  // come corrupt. (With a whole poll the guard asks nothing: the frames are the reading.)
+  const std::vector<std::uint8_t> missing{without_frame(parse_hex(RECORDED_POLL_FRAMES), 2)};
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(missing);
+  port.set_quiet_after_send(true);
+  // The requests are the only readings here, one every max_age plus its reply: a stale timeout
+  // equal to max_age, as in fast_guard, turns stale for a moment between two of them. On the
+  // arm it is 10 s against 3 s.
+  TemperatureGuard guard{fast_guard()};
+  guard.stale_timeout = std::chrono::milliseconds{1000};
+  SerialArm arm{std::move(transport), POLL_TIMING, guard};
   ASSERT_TRUE(wait_until([&arm]() {
       return arm.read_temperatures().has_value();
   }));
@@ -1978,6 +2108,158 @@ TEST(SerialArmPollPose, AJointMissingFromOnePollKeepsItsLastGoodPosition)
   ASSERT_TRUE(wait_until([&port, later]() {
       return get_angles_between(port, later, std::chrono::steady_clock::now()) >= 1u;
   }));
+}
+
+TEST(SerialArmPollPose, TheTemperaturesComeFromThePollAndNothingIsAsked)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
+  port.set_quiet_after_send(true);
+  // A 600 ms period: without the poll as a reading the guard still asks within the 1.2 s
+  // stream, and after it the first ask at rest comes ~600 ms after the last poll, so the check
+  // below has ~570 ms of margin before a COOL reply replaces the frames' temperatures.
+  TemperatureGuard guard{fast_guard()};
+  guard.period = std::chrono::milliseconds{600};
+  guard.max_age = std::chrono::milliseconds{600};
+  SerialArm arm{std::move(transport), POLL_TIMING, guard};
+  static_cast<void>(wait_for_reply(arm));
+
+  stream_targets(arm, std::chrono::milliseconds{1200});
+  // Every send brought a whole poll, a reading every 33 ms, so the guard never had to ask.
+  EXPECT_EQ(arm.read_temperatures(), std::optional<ServoTemperatures>{RECORDED_POLL_TEMPS});
+  EXPECT_EQ(frames_with_id(between_sends(port.written()), TEMPS_ID).size(), 0U);
+  EXPECT_FALSE(arm.temperature_stale());
+  EXPECT_FALSE(arm.overheat().has_value());
+}
+
+TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(poll_frames_with_temperature(1, 61));
+  port.set_quiet_after_send(true);
+  const TemperatureGuard guard{fast_guard()};
+  SerialArm arm{std::move(transport), POLL_TIMING, guard};
+  static_cast<void>(wait_for_reply(arm));
+
+  // Six hot_for of hot polls. The cut comes once they have lasted hot_for, not at the second
+  // poll: a stop and a power off, and no target goes out after them.
+  stream_targets(arm, std::chrono::milliseconds{600});
+  ASSERT_TRUE(arm.overheat().has_value());
+  const Overheat trip{arm.overheat().value_or(Overheat{})};
+  EXPECT_EQ(trip.joint, 1U);
+  EXPECT_EQ(trip.celsius, 61);
+  const auto frames{port.written()};
+  const auto times{port.written_at()};
+  const auto is_send{[](const auto & frame) {
+      return frame.size() == 18;
+    }};
+  const auto first_send{std::find_if(frames.begin(), frames.end(), is_send)};
+  const auto stop_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
+        return request_id(frame) == STOP_ID;
+  })};
+  ASSERT_NE(first_send, frames.end());
+  ASSERT_NE(stop_at, frames.end());
+  const auto off_at{std::find_if(stop_at, frames.end(), [](const auto & frame) {
+        return request_id(frame) == POWER_OFF_ID;
+  })};
+  ASSERT_NE(off_at, frames.end());
+  // The first hot reading came after the first send, the trip hot_for after it, then the stop.
+  const auto send_time{times.at(static_cast<std::size_t>(first_send - frames.begin()))};
+  const auto stop_time{times.at(static_cast<std::size_t>(stop_at - frames.begin()))};
+  EXPECT_GE(stop_time - send_time, guard.hot_for);
+  EXPECT_GE(send_angles_frames({frames.begin(), stop_at}).size(), 2U);
+  EXPECT_EQ(send_angles_frames({off_at, frames.end()}).size(), 0U);
+}
+
+TEST(SerialArmPollPose, ABridgedFrameIsNotATemperatureReading)
+{
+  // The arm, 20 Nov 2026, limit 50: J4's frames came mostly corrupt. One came at 50, the next
+  // two polls had none and bridged it, and the two readings of the cut of then were that frame.
+  // Here J4's hot frame comes once, then the polls go on without it. hot_for is 1 ms, so a
+  // second hot reading would cut at once: only the bridged poll not counting keeps the arm on.
+  constexpr std::size_t HOT{3};  // J4
+  constexpr std::size_t MARKER{0};
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(poll_frames_with_temperature(HOT, 61));
+  port.set_quiet_after_send(true);
+  // No ask between the two polls either (period and max_age 10 s): a COOL reply there would
+  // reset the clock and let the test pass without the rule it checks.
+  TemperatureGuard guard{fast_guard()};
+  guard.hot_for = std::chrono::milliseconds{1};
+  guard.period = std::chrono::seconds{10};
+  guard.max_age = std::chrono::seconds{10};
+  SerialArm arm{std::move(transport), POLL_TIMING, guard};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1u);
+  std::this_thread::sleep_for(SYNC_WRITE_DELAY + DECODE_MARGIN);
+  ASSERT_FALSE(arm.overheat().has_value());  // one hot reading so far
+
+  // The second poll: no J4 frame, so J4's position is bridged and the poll is no reading, and
+  // the marker joint moved: once the
+  // pose shows the marker, the bridged poll was read.
+  port.set_poll_frames(without_frame(marked_poll(MARKER), HOT));
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_EQ(wait_for_sends(port, 2).size(), 2u);
+  ASSERT_TRUE(marker_shown(arm, MARKER));
+  EXPECT_FALSE(arm.overheat().has_value());
+}
+
+TEST(SerialArmPollPose, PollsWithABridgedFrameLeaveTheAsksGoing)
+{
+  // A different joint missing in each poll: the bridge covers it, so every poll is the pose, but
+  // none is a temperature reading. The guard must keep asking: were a bridged poll taken as a
+  // reading, the asks would stop and the guard go blind (temperature_stale, then a halt).
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));  // one whole poll to bridge from
+  port.set_quiet_after_send(true);
+  SerialArm arm{std::move(transport), POLL_TIMING, fast_guard()};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.01, 0.0, 0.0, 0.0, 0.0, 0.0});
+  std::size_t sends{1};
+  ASSERT_GE(wait_for_sends(port, sends).size(), sends);
+
+  // Twice fast_guard's max_age (300 ms): an ask is due at least once in the stream.
+  const auto end{std::chrono::steady_clock::now() + std::chrono::milliseconds{600}};
+  while (std::chrono::steady_clock::now() < end) {
+    port.set_poll_frames(without_frame(parse_hex(RECORDED_POLL_FRAMES), 2 + sends % 2));
+    ++sends;
+    arm.write_angles(JointPositions{0.01 * static_cast<double>(sends), 0.0, 0.0, 0.0, 0.0, 0.0});
+    ASSERT_GE(wait_for_sends(port, sends).size(), sends);
+  }
+  EXPECT_GE(frames_with_id(between_sends(port.written()), TEMPS_ID).size(), 1U);
+}
+
+TEST(SerialArmPollPose, AnUnpublishedPollStillKeepsItsGoodFramesForTheBridge)
+{
+  // A poll that cannot be published (J3 missing, its last frame too old) still brings J5's good
+  // frame, and the next poll, missing J5, bridges it from there. Before, the loop stopped at J3
+  // without keeping J5, and the next poll fell back to get_angles too (20 Nov 2026, hot J4).
+  constexpr std::size_t MARKER{4};  // J5
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
+  port.set_quiet_after_send(true);
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_GE(wait_for_sends(port, 1).size(), 1u);
+  // Past the bridge age: J3's frame of this poll can no longer stand in.
+  std::this_thread::sleep_for(SerialArm::POLL_BRIDGE_AGE + SYNC_WRITE_DELAY + DECODE_MARGIN);
+
+  port.set_poll_frames(without_frame(marked_poll(MARKER), 2));  // not published: no J3
+  arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_GE(wait_for_sends(port, 2).size(), 2u);
+  // The transport took that poll at the send: the next one can be set at once. It comes after a
+  // get_angles and a send, ~50 ms after the poll above on the replay, inside the 100 ms bridge.
+  port.set_poll_frames(without_frame(parse_hex(RECORDED_POLL_FRAMES), MARKER));
+  arm.write_angles(JointPositions{0.3, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ASSERT_GE(wait_for_sends(port, 3).size(), 3u);
+  EXPECT_TRUE(marker_shown(arm, MARKER));
 }
 
 TEST(SerialArmPollPose, OffKeepsTheTurnOfBefore)

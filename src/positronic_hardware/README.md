@@ -33,8 +33,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
 ```
 
 - One turn of the serial thread: a pending stop or power on first, if any, waiting for its ack;
-  then `get_angles`, up to 50 ms for the reply; then, once a second, `get_servo_temps` (see Servo
-  over-temperature); then, if the arm answered and there is a new target, one
+  then `get_angles`, up to 50 ms for the reply; then, at rest or while the poll comes broken, once
+  a second, `get_servo_temps` (see Servo over-temperature); then, if the arm answered and there is a new target, one
   `send_angles`, and the thread reads the line until the Atom's sync-write to the servos is
   whole (#150). After a send the Atom acknowledges it, polls its six servos and passes the
   targets on with that sync-write, the last frame it puts on the line, and drops a frame that
@@ -58,8 +58,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
   before they wake the serial thread. The serial thread holds it as briefly, never while it reads
   the line.
 - Without the pose from the poll, a target equal to the last one sent is not sent again. With
-  it, a write that wakes the thread sends even an unchanged target, so the pose keeps coming
-  from the poll, unless the last send got no sync-write or the gripper is due. A target with a
+  it, every write sends even an unchanged target once, so the pose keeps coming from the poll,
+  unless the last send got no sync-write or the gripper is due. A target with a
   NaN or an angle out of the protocol range is skipped and the previous one stays.
 
 ## Use it in a URDF
@@ -133,13 +133,24 @@ The servos of the 280 should not get hot in normal use, so a hot servo means som
 wrong: a joint pushing against an obstacle, a load it cannot hold. The driver does not try to
 work around it. It stops the arm and cuts its power.
 
-- **Reading.** The serial thread sends `get_servo_temps` (`0xE5`) once a second, right after a
-  `get_angles` reply (the arm's input is free), never while a stop or power on is pending, and
-  on a turn that sends no target. A reading older than 3 s is taken before the send of a moving
-  turn instead, so a long motion cannot hide a hot servo. One request costs about one
-  `get_angles`, ~1 % of the line. A reading with a value outside 1 to 99 degC is ignored.
-- **The cut.** Two readings in a row with a servo at or above `servo_temp_limit_c` (60 degC):
-  the serial thread itself, without waiting for the control loop, holds every target, sends a
+- **Reading.** While the arm moves, the temperatures come for free: every servo status frame
+  of the Atom's poll after a `send_angles` carries its servo's temperature, so each whole poll
+  is a reading, 30 a second (#170), as long as every frame is fresh: a joint bridged from an
+  earlier poll carries an old temperature, and such a poll counts for the pose but not for the
+  guard. At rest, or while the poll comes broken (a hot servo corrupts its own frames), the
+  serial thread sends `get_servo_temps` (`0xE5`) once a second, right after
+  a `get_angles` reply (the arm's input is free), never while a stop or power on is pending, and
+  on a turn that sends no target. A reading older than 3 s is asked for before the send of a
+  moving turn instead, so a motion with a broken poll cannot hide a hot servo. One request costs
+  about one `get_angles`. A reading with a value outside 1 to 99 degC is ignored.
+- **The cut.** A servo at or above `servo_temp_limit_c` (60 degC) for 1 s (`HOT_FOR`): the
+  first reading at the limit starts the clock, one at the limit 1 s later trips it (about 30
+  polls while moving, two requests a second apart at rest). Each servo has its own clock. A
+  reading more than 1 degC under the limit stops it, so a false hot reading alone cannot cut the
+  arm (J1 gives some: up to 98 degC in 10 min of sends, each one alone between normal polls). A
+  reading 1 degC under it changes nothing: a servo crossing a degree reads both in turn for
+  seconds (`LIMIT_BAND_C`), so the cut may come up to 1 degC early. Then the
+  serial thread itself, without waiting for the control loop, holds every target, sends a
   `stop` and, after the settle, a `power_off`. It sends the `power_off` again every second from
   then on, and `power_on()` is refused for the life of that backend. It works with the component
   inactive too: a halted arm still holds its pose, and holding heats the servos as well.
@@ -163,8 +174,10 @@ work around it. It stops the arm and cuts its power.
   `on_activate` waits up to 2 s for a first reading and refuses an arm that never reports its
   temperature, or one with a servo within 5 degC of the limit (55 degC by default).
 - **Testing it.** `servo_temp_limit_c` can only be lowered (30 to 60). Launching with a limit a
-  few degrees above the current reading cuts the arm after a few minutes of motion, without
-  heating anything.
+  few degrees above the current reading cuts the arm 1 s (`HOT_FOR`) after a servo warms past
+  it, without heating anything. Keep it at least 2 degC above every servo's resting reading:
+  1 degC above, that servo's normal readings fall in the band and no longer stop the clock that
+  its false ones start.
 
 ## Gripper (#123)
 
@@ -239,7 +252,7 @@ says which one.
 | `moving_period_ms`      | `33`           | 20 to 100            | One serial turn after a `send_angles`: a `get_angles`, the send and the wait for the Atom's sync-write (#150), about 27 ms. 33 is one control period at 30 Hz: 10 minutes on the arm with no stall (`docs/03_verification/write_sweep`). At most half the 200 ms link timeout (#35), so one lost reply never trips it |
 | `pose_from_poll`        | `true`         | `true`, `false`      | The pose from the Atom's own poll of the servos, published when its sync-write closes, and the send right after the controller's `write()` (#170). 10 min at 33 ms on 20 Nov 2026: 18007 sends, 9 `get_angles`, 0 lost, 0 stalls, send intervals p50 33.3 / p99 41.7 ms, 1.3 % over 40 ms. `false` is the #150 turn: a `get_angles` every turn, the period from the thread's clock |
 | `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 80, two lost replies after it fill the 200 ms link timeout (#35). The wait of the overheat cut between its stop and its power off, 30 ms, is a constant now (`SerialTiming::send_settle`): until #150 it was `send_settle_ms`, the wait after every send |
-| `servo_temp_limit_c`    | `60`           | 30 to 60             | A servo at or above this temperature, two readings in a row, stops the arm and powers it off. Only lower, to test the cut |
+| `servo_temp_limit_c`    | `60`           | 30 to 60             | A servo at or above this temperature for 1 s stops the arm and powers it off. Only lower, to test the cut |
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |
 | `tracking_error_ms`     | `300`          | 50 to 5000           | Milliseconds a joint may stay over `tracking_error_deg`, while active, before fault 2: the arm did not follow the command (#103) |
 
@@ -333,7 +346,7 @@ Only `on_activate` clears it, and it refuses a link that is still silent.
 | 0 | No fault |
 | 1 | Link timeout: no valid reply for 200 ms while active |
 | 2 | Tracking error: a joint further than `tracking_error_deg` (8) from the last target on the wire for longer than `tracking_error_ms` (300) while active. The arm did not follow the command; targets held like the link timeout (#103, see Unfollowed command) |
-| 3 | Overheat: a servo at `servo_temp_limit_c` on two readings in a row. The serial thread already stopped the arm and powered it off; `read()` also returns ERROR (see Servo over-temperature) |
+| 3 | Overheat: a servo at or above `servo_temp_limit_c` for 1 s. The serial thread already stopped the arm and powered it off; `read()` also returns ERROR (see Servo over-temperature) |
 
 New codes are added at the end of `FaultCode` in `positronic_hardware.hpp`; a value is never
 reused.
@@ -470,7 +483,7 @@ No arm is needed:
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
 | `test_velocity_estimator`  | The velocity filter: first sample, constant rate, gaps, `reset()`.  |
 | `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
-| `test_servo_temperature`   | The over-temperature logic alone: plausible range, hottest servo, activation cool-down, two readings in a row to trip, implausible readings, the trip stays, a lowered limit. |
+| `test_servo_temperature`   | The over-temperature logic alone: plausible range, hottest servo, activation cool-down, 1 s of hot readings to trip, a false hot reading alone never trips, implausible readings, the trip stays, a lowered limit. |
 | `test_requests`            | The request table (#149): every factory carries the frame its command encodes, the command sits in byte 3 of the frame, what each one waits for, and `ACK_TIMEOUT` between the arm's 60 ms and the 200 ms watchdog. |
 | `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99), a fraction where a whole number is expected, NaN and infinity, a settle longer than the period accepted since #150, the rules of `backend`, `fake_mode`, `port`, `baud` and `velocity_filter_alpha`, and the INFO line with the fake mode. |
 | `test_tracking_check`      | The unfollowed-command logic alone (#103): the defaults, below the threshold never trips, trips once a joint has been over for the time, coming back inside forgets the clock, the joint and the signed error reported, an unknown pose (NaN) does not count, reset forgets every clock. |

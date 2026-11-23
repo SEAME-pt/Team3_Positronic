@@ -152,9 +152,10 @@ those status frames, checksum included, and publishes the pose when the sync-wri
 `get_angles` follows a send. The thread is woken by the controller's `write()` and sends then,
 so the stream follows the controller's cadence. A `get_angles` goes out only when a turn has no
 pose from a poll: the first turn, a lost or corrupt poll, a sync-write past `echo_timeout_ms`.
-At rest the controller still writes every cycle, and a write that wakes the thread sends the
-unchanged target again, so the pose keeps coming from the poll (6 to 22 sends/s at rest in the
-final run, between `get_angles`). A target whose last send got no sync-write is not sent again
+At rest the controller still writes every cycle, and each write sends the unchanged target
+again, so the pose keeps coming from the poll (6 to 22 sends/s at rest in the final run, between
+`get_angles`: until the third part, a write counted only when it ended the thread's wait, and one
+that landed during a `get_angles` was lost). A target whose last send got no sync-write is not sent again
 until it changes, and a gripper that is due takes the turn of a repeat. With no controller
 writing, the thread polls `get_angles` every 10 ms, as before.
 
@@ -237,3 +238,46 @@ How the numbers were made: `python3 tools/tap_turns.py tap.csv` gives the sends 
 the stream, the send intervals with the share over 40 ms, the sends followed by a `get_angles`
 before the next send, and the sync-write end; `python3 tools/tap_stalls.py tap.csv` the
 requests, replies and stalls.
+
+## #170, third part: the temperatures from the poll frames
+
+Since this part a poll whose six frames are all fresh is a temperature reading for the guard, so
+`get_servo_temps` is only asked at rest or while the poll comes broken, and the cut is by time:
+see "Servo over-temperature" in [the driver's README](../../../src/positronic_hardware/README.md).
+The reason for the time: J1 gives false hot readings in frames with a good checksum, one poll at
+a time. In the run below, at a median of 42 degC, 12 polls were 10 degC or more above it, up to
+98, 2 of them at 60 or more, each one alone between normal polls. Two readings in a row, the
+rule before, are 33 ms apart at 30 Hz.
+
+10 minutes at 33 ms, arm alone, 20 Nov 2026, against the run of the second part above:
+
+| | second part | **third part** |
+|---|---|---|
+| sends/s in the stream | 30.0 | 30.0 |
+| temperature requests in the stream | 199 (192 of them a slow interval) | **0** (10 at rest) |
+| turns that fell back to `get_angles` in the stream | 9 | 2 |
+| send interval p50 / p90 / p99 ms | 33.3 / 35.5 / 41.7 | 33.3 / 35.0 / 38.2 |
+| send intervals over 40 ms | 1.3 % | **0.3 %** (61 of 63 are Linux jitter, 1 the Atom at 44.6 ms, 1 a fallback) |
+| stalls / warnings | 0 / 0 | 0 / 0 |
+
+The cut from the frames, gripper mounted, `servo_temp_limit_c` 50, joint 1 swinging, 20 Nov
+(the code of then: two readings in a row, a bridged poll counted). J4 read 45 degC in its frames
+from 25 s and sent 1114 corrupt frames over the run, and `/joint_states` never left -2.37 deg:
+the bridge and the jump check of the second part, at work on a hot servo. Three corrupt frames
+in the polls of sends passed the checksum (75, 73 and 62 degC, all with 0.0 V, at 32, 35 and
+56 s) and were rejected by the plausibility rule. Times from the first send: the first
+plausible J4 frame at 50 in the poll of a send came at 66.44 s, and the stop 87 ms after it,
+then the power off, no send after the stop, the power off repeated every second. That cut came
+from one frame: its poll was not published (J5 missing and not bridgeable), the next two polls
+had no J4 frame, the bridge carried the 50 into both, and the count took them as two readings.
+With this part none of the three is a reading, and that run would have waited for
+`get_servo_temps`, whose last answer, 1.8 s before the stop, was 49.
+
+The repeat of 21 Nov (cut50c, J4 from 40 degC under the gripper, forearm horizontal) shows that
+path: J4's frames stopped passing the checksum at 46 degC and never came back, the guard fell
+back to `get_servo_temps`, which read 46, 47, 48, 49, 50, each two or three times, and the stop
+and power off came 1.8 s after the first reading at 50. The cut by time, replayed on that tap's
+readings, trips at the same reading as the rule of then (the request 53.20 s after the first
+send, the stop 9 ms after it). In replay: `HotPollsCutTheArmOnceTheyLastHotFor`, `ABridgedFrameIsNotATemperatureReading`
+and the `OverheatDetector` tests. The Atom's own reading kept following the servo while no frame
+of it passed: whether it can go stale is not shown by any tap.

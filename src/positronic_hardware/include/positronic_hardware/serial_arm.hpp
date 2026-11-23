@@ -95,15 +95,20 @@ struct SerialTiming
 /// (servo_temp_limit_c); the times are fixed, and only the tests shorten them.
 struct TemperatureGuard
 {
-  /// A servo at or above this, READINGS_TO_TRIP readings in a row, cuts the arm. degC.
+  /// A servo at or above this in every reading for hot_for cuts the arm. degC.
   int limit_c{SERVO_TEMP_LIMIT_C};
 
-  /// How often the thread asks for the temperatures (get_servo_temps), on a turn that sends no
-  /// target. A temperature climbs over minutes; once a second costs ~1 % of the line.
+  /// How long the readings must stay at or above limit_c before the cut (HOT_FOR).
+  std::chrono::milliseconds hot_for{HOT_FOR};
+
+  /// How often the thread takes the temperatures. While the arm moves they come with every
+  /// send, in the servo status frames of the Atom's poll (#170), and nothing is asked. At rest,
+  /// or while the poll comes broken, the thread asks get_servo_temps this often, on a turn that
+  /// sends no target. A temperature climbs over minutes; once a second costs ~1 % of the line.
   std::chrono::milliseconds period{1000};
 
-  /// A reading older than this is taken even on a turn that sends a target, before the send,
-  /// so a long motion cannot hide a hot servo. It adds ~8 ms to that turn, once every 3 s.
+  /// A reading older than this is asked for even on a turn that sends a target, before the send,
+  /// so a motion with a broken poll cannot hide a hot servo. It adds ~8 ms to that turn.
   std::chrono::milliseconds max_age{3000};
 
   /// No plausible reading for this long and temperature_stale() turns true: the guard is blind.
@@ -230,7 +235,8 @@ public:
   void write_gripper(std::uint8_t value) override;
   [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override;
 
-  /// The newest plausible reading of get_servo_temps, or nullopt before the first one.
+  /// The newest plausible temperatures, from the poll's status frames or from get_servo_temps,
+  /// or nullopt before the first one.
   [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override;
 
   /// Set by the thread when it cut the arm: stop, then power off, sent by the thread itself in
@@ -281,18 +287,21 @@ private:
   /// sync-write came. Serial thread only.
   void wait_for_sync_write();
 
-  /// The six joint positions in the servo status frames of read_buffer_, or nullopt when one is
-  /// missing and cannot be bridged. The gripper's frame (id 7) is skipped. A frame that fails
+  /// The servo status frames in read_buffer_: when all six joints are there, publishes them as
+  /// the pose and returns true. The gripper's frame (id 7) is skipped. A frame that fails
   /// frame_plausible() or jumps more than MAX_POLL_JUMP_RAD from the last pose counts as
-  /// missing; a missing joint keeps its last good position for POLL_BRIDGE_AGE. Updates
-  /// last_steps_. Serial thread only.
-  [[nodiscard]] std::optional<JointPositions> pose_from_poll_frames();
+  /// missing; a missing joint keeps its last good position for POLL_BRIDGE_AGE. A poll with no
+  /// frame bridged is also a temperature reading for the guard. Serial thread only.
+  [[nodiscard]] bool publish_poll_frames();
   /// True when a decoded status frame can be a servo's: voltage and temperature in range. A
   /// corrupt frame that passed the 8-bit checksum rarely passes this too.
   [[nodiscard]] static bool frame_plausible(const positronic_protocol::ServoStatus & status);
   /// True when `position` (steps) for `joint` is further than MAX_POLL_JUMP_RAD from the last
   /// pose the thread published, when there is one. Serial thread only.
   [[nodiscard]] bool jumped(std::uint16_t position, std::size_t joint) const;
+  /// One reading for the guard, from the poll or from a reply, taken at `at`: published when
+  /// plausible, and fed to the detector, whose trip cuts the arm. Serial thread only.
+  void take_temperatures(const ServoTemperatures & temperatures, Clock::time_point at);
 
   /// One get_angles: the request, then its reply within REPLY_TIMEOUT, published as the pose.
   /// False when the port refused the request or the reply did not come. Serial thread only.
@@ -304,10 +313,9 @@ private:
   [[nodiscard]] std::chrono::milliseconds turn_period(bool sent) const;
 
   /// The end of a turn. With pose_from_poll: sleeps until `deadline`, until write_angles()
-  /// stores a command, or until a new stop or power on is requested, whichever comes first, and
-  /// returns true when a write is what is waiting. Without it: sleeps until `deadline`, false.
-  /// Serial thread only.
-  bool wait_for_turn_end(Clock::time_point deadline);
+  /// stores a command, or until a new stop or power on is requested, whichever comes first.
+  /// Without it: sleeps until `deadline`. Serial thread only.
+  void wait_for_turn_end(Clock::time_point deadline);
   /// Ends the thread's wait in wait_for_turn_end() at once, for a stop or power on just
   /// requested: sets request_ready_ under wake_mutex_, so the wake cannot be lost.
   void wake_thread();
@@ -387,8 +395,8 @@ private:
   // it. halt() sets it before request_, so the turn that sends the stop already sees the hold;
   // the thread clears it in the turn that sends the power on, so no target gets ahead of that.
   std::atomic<bool> halted_{false};
-  // The newest plausible temperatures. Written by the poll thread once a period, read by the
-  // plugin (on_activate). nullopt until the first plausible reading.
+  // The newest plausible temperatures. Written by the poll thread with every whole poll, or once
+  // a period at rest, read by the plugin (on_activate). nullopt until the first plausible reading.
   mutable realtime_tools::RealtimeBuffer<std::optional<ServoTemperatures>> temperatures_{
     std::nullopt};
   // Time since the last plausible temperature, the way watchdog_ counts the last pose.
@@ -401,7 +409,9 @@ private:
   std::atomic<std::uint64_t> echo_timeouts_{0};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
-  Clock::time_point last_temperature_ask_;
+  // When the guard last took a reading, from the poll or by asking: what period and max_age
+  // count from.
+  Clock::time_point last_temperatures_;
   Clock::time_point next_power_off_;
   // What read_until() has read and not yet ruled out. Reserved once, so the thread does not
   // allocate in a turn.

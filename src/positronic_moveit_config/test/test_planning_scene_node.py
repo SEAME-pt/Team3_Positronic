@@ -9,6 +9,12 @@
 #   Test PlanningSceneLoader.apply() and main() without MoveIt (#46, test review C1): a fake
 #   /apply_planning_scene answers success or refuses, or is not there at all. apply() must
 #   send every object as a diff and return True only on success; main() must exit 1 on failure.
+#
+# Follow-up prompt (#170, a flaky test found while running make test):
+#   The first test of the file failed twice under make test, at 3.1 s, and passes alone in
+#   1.7 s: with every package testing at once, finding the fake service took more than the
+#   2 s the tests that expect it gave it. Give those tests a bound that only a missing service
+#   reaches; the no-service tests keep their 0.2 s.
 
 """
 Check the planning scene loader against a fake move_group service.
@@ -35,9 +41,11 @@ SCRIPT = os.path.join(PKG, 'scripts', 'planning_scene.py')
 
 SERVICE = f'/test_{os.getpid()}/apply_planning_scene'
 REMAP = ['-r', f'/apply_planning_scene:={SERVICE}']
-# Short enough to keep the "no service" tests fast, long enough for the fake to be discovered
-# on a slow CI runner (discovery on one machine takes well under 1 s).
-TIMEOUT = ['-p', 'timeout_sec:=2.0']
+# The tests that expect the fake service: wait_for_service() returns as soon as it is found, so a
+# long bound costs nothing. Under make test, with every package testing at once, finding it took
+# more than 2 s for the first test of the file (failed at 3.1 s twice on 23 Nov 2026; 1.7 s
+# alone). The tests without a service use NO_WAIT and stay fast.
+TIMEOUT = ['-p', 'timeout_sec:=15.0']
 NO_WAIT = ['-p', 'timeout_sec:=0.2']
 
 
