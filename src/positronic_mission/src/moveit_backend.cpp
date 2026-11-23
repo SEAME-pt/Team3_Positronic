@@ -135,7 +135,7 @@ bool MoveitBackend::ready()
     // Make sure the move_group responds before returning true.
     if (!check_client_) {
       check_client_ =
-          rclcpp_action::create_client<moveit_msgs::action::MoveGroup>(node_, "move_action");
+        rclcpp_action::create_client<moveit_msgs::action::MoveGroup>(node_, "move_action");
     }
     if (!check_client_->wait_for_action_server(std::chrono::seconds(2))) {
       RCLCPP_WARN(node_->get_logger(), "move_group not answering on move_action");
