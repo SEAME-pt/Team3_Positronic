@@ -22,7 +22,9 @@
 """
 Show the real arm in RViz on a laptop.
 
-Starts robot_state_publisher with the arm URDF and RViz with a saved config.
+Starts robot_state_publisher with the arm URDF and RViz with a saved config: the model, the
+TF frames (camera_link among them) and the wrist camera image, compressed, from
+camera.launch.py on the Jetson.
 /joint_states is not published here: it comes from the Jetson driver over
 ROS_DOMAIN_ID 17. Do not run it together with a joint_state_publisher_gui.
 """
@@ -36,10 +38,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     # The URDF is read here, when Python runs, so the path is built with os.path, not
-    # with launch substitutions, which only get a value later.
+    # with launch substitutions, which only get a value later. The camera variant, the one
+    # positronic_real.urdf.xacro includes: the driver's robot_state_publisher and this one
+    # publish the same links, camera_link included.
     urdf = os.path.join(
         get_package_share_directory('positronic_description'),
-        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn.urdf')
+        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn_camera.urdf')
     with open(urdf) as f:
         robot_description = f.read()
 
