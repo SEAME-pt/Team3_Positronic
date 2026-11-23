@@ -91,7 +91,7 @@ ARM_JOINTS = [
 
 
 def arm_block(robot):
-    """Return the <ros2_control> block of the arm (RobotSystem), not the gripper mock."""
+    """Return the <ros2_control> block of the arm and the gripper (RobotSystem)."""
     return robot.find("ros2_control[@name='positronic_arm']")
 
 
@@ -180,9 +180,9 @@ def test_arguments_reach_the_plugin():
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():
-    """Check that the arm block has the six arm joints, J1 to J6, in URDF order."""
+    """Check that the arm block has J1 to J6 in URDF order, then the gripper joint."""
     joints = [joint.get('name') for joint in arm_block(expand()).findall('joint')]
-    assert joints == ARM_JOINTS
+    assert joints == ARM_JOINTS + ['gripper_controller']
     urdf_order = [j for j in revolute_joints(original_urdf()) if j in ARM_JOINTS]
     assert urdf_order == ARM_JOINTS
 
@@ -250,15 +250,7 @@ def test_supervisor_reads_the_names_of_this_description():
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_gripper_is_a_fixed_mock_until_123(backend):
-    """Check the gripper block: one state-only joint at the SRDF "open" value."""
-    block = expand(backend=backend).find(
-        "ros2_control[@name='positronic_gripper_mock']"
-    )
-    assert block.find('hardware/plugin').text == 'mock_components/GenericSystem'
-    joints = block.findall('joint')
-    assert [joint.get('name') for joint in joints] == ['gripper_controller']
-    assert joints[0].findall('command_interface') == []
-    states = joints[0].findall('state_interface')
-    assert [state.get('name') for state in states] == ['position']
-    assert states[0].find("param[@name='initial_value']").text == '0.15'
+def test_the_gripper_is_served_by_the_arm_block(backend):
+    """Check that RobotSystem is the only <ros2_control> block, gripper included (#123)."""
+    blocks = expand(backend=backend).findall('ros2_control')
+    assert [block.get('name') for block in blocks] == ['positronic_arm']

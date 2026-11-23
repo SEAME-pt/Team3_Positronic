@@ -161,18 +161,21 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
   return static_cast<std::size_t>(n);
 }
 
-SerialArm::SerialArm(const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard}
+SerialArm::SerialArm(
+  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard, bool has_gripper)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard, has_gripper}
 {
 }
 
 SerialArm::SerialArm(
-  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard)
+  std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard,
+  bool has_gripper)
 : transport_{std::move(transport)},
   timing_{timing},
   guard_{guard},
   temperature_watchdog_{guard.stale_timeout},
-  detector_{guard.limit_c}
+  detector_{guard.limit_c},
+  has_gripper_{has_gripper}
 {
   // The first temperature request is due at once, so on_activate finds a reading, and the
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
@@ -241,11 +244,22 @@ bool SerialArm::power_on()
   // by the thread, in the turn that puts the power on on the wire: the mirror of halt(), where
   // the hold goes on before the stop. A target written meanwhile waits for that turn.
   command_.writeFromNonRT(std::nullopt);
+  gripper_command_.writeFromNonRT(std::nullopt);
   // A request_halt() that lands while the thread waits for the power_on ack puts the hold back
   // (see send_pending_request): the arm is powered but held, and must not be reported live. A
   // cut can land there too: the thread then drops the frame and clears the request, so the wait
   // ends, but the servos were not powered.
   return request_and_wait(Pending::POWER_ON) && !halted_.load() && !overheated();
+}
+
+void SerialArm::write_gripper(std::uint8_t value)
+{
+  gripper_command_.writeFromNonRT(value);
+}
+
+std::optional<std::uint8_t> SerialArm::read_gripper() const
+{
+  return *gripper_latest_.readFromRT();
 }
 
 std::optional<ServoTemperatures> SerialArm::read_temperatures() const
@@ -328,6 +342,7 @@ void SerialArm::send_pending_request()
   }
   if (pending == Pending::HALT) {
     last_target_.writeFromNonRT(std::nullopt);
+    gripper_last_sent_ = std::nullopt;
   } else if (pending == Pending::POWER_ON) {
     // Before the request is cleared: power_on() returns as soon as it sees NONE, and a halt()
     // right after it must find the hold already released, so its own hold cannot be undone by
@@ -495,6 +510,56 @@ bool SerialArm::watch_temperatures(bool new_target)
   return true;
 }
 
+bool SerialArm::serve_after_reply(bool new_target)
+{
+  const bool asked_temperatures{watch_temperatures(new_target)};
+  if (has_gripper_ && !new_target && !asked_temperatures && request_.load() == Pending::NONE) {
+    gripper_turn();
+  }
+  return asked_temperatures;
+}
+
+void SerialArm::gripper_turn()
+{
+  const std::optional<std::uint8_t> target{*gripper_command_.readFromRT()};
+  if (!halted_.load() && target.has_value() && target != gripper_last_sent_) {
+    const std::optional<positronic_protocol::Frame> frame{
+      positronic_protocol::encode_set_gripper_value(target.value(), GRIPPER_SPEED)};
+    if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
+      gripper_last_sent_ = target;
+      std::this_thread::sleep_for(timing_.send_settle);
+    }
+    return;
+  }
+  const auto now{Clock::now()};
+  if (now - last_gripper_read_ < GRIPPER_READ_PERIOD) {
+    return;
+  }
+  last_gripper_read_ = now;
+  if (const std::optional<std::uint8_t> value{ask_gripper()}) {
+    gripper_latest_.writeFromNonRT(value);
+  }
+}
+
+std::optional<std::uint8_t> SerialArm::ask_gripper()
+{
+  const positronic_protocol::Frame request{positronic_protocol::encode_get_gripper_value()};
+  if (!transport_->write(request.bytes.data(), request.size)) {
+    return std::nullopt;
+  }
+  std::optional<std::uint8_t> value{};
+  read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> reply{
+        positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
+      const bool found{reply.status == positronic_protocol::DecodeStatus::FOUND};
+      if (found) {
+        value = reply.value;
+      }
+      return ScanResult{found, reply.consumed};
+  });
+  return value;
+}
+
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
 /// arm's input is free. The arm does ack it (`FE FE 03 11 01 FA`, Atom firmware 7.3), but the
 /// ack is not read here, so a dropped power off would leave the servos torqued and still
@@ -566,7 +631,7 @@ void SerialArm::poll_loop()
       replied && !halted_.load() && target.has_value() && target != last_sent()};
 
     // The guard only runs after a reply: the arm's input is free then.
-    const bool asked_temperatures{replied && watch_temperatures(new_target)};
+    const bool asked_temperatures{replied && serve_after_reply(new_target)};
 
     // The arm answered, so its input is free: send the newest command now, if it is new.
     // A turn without a reply sends nothing, the command waits in command_ for the next. So
