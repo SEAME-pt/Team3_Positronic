@@ -92,6 +92,13 @@
 //   from the last pose, or whose voltage or temperature cannot be a servo's, is left out and the
 //   joint keeps its last good position; a joint missing from one poll is bridged the same way,
 //   with no get_angles; missing for longer than the bridge age brings the get_angles back.
+// Follow-up prompt (#170, the review of 23 Nov):
+//   With #174's gripper, at rest a due gripper takes the turn of the repeated send: check it
+//   is served while the controller writes the same pose every 33 ms. A halt must end the
+//   turn's wait at once (the stop within 10 ms), a stop still pending without its ack must not
+//   spin the thread, and a target whose send got no sync-write is not sent again on every
+//   write. The tests that check a frame was left out now move a marker joint and wait for it,
+//   so they cannot pass without the poll being read.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
