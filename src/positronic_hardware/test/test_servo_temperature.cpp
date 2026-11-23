@@ -46,6 +46,9 @@
 // Follow-up prompt (#170, the simplification):
 //   Drop the two hot polls 33 ms apart: one second at the poll's cadence and a cool reading
 //   between hot ones are covered, and no mutant needs it.
+// Follow-up prompt (#170, the J1 gap):
+//   No test failed with J1 left out of the loop or with the first trip overwritten by a later
+//   joint: J1 and J4 at the limit together for 1 s trip naming J1.
 
 #include <gtest/gtest.h>
 
@@ -204,6 +207,19 @@ TEST(OverheatDetector, EachServoHasItsOwnClock)
   const std::optional<Overheat> trip{detector.update(J4_60, at_ms(3100))};
   ASSERT_TRUE(trip.has_value());
   EXPECT_EQ(trip.value_or(Overheat{}).joint, 3U);
+  EXPECT_EQ(trip.value_or(Overheat{}).celsius, 60);
+}
+
+TEST(OverheatDetector, J1IsWatchedAndNamedFirst)
+{
+  // J1 is joint 0, the first of the loop. At the limit as long as J4, the trip names J1: the
+  // J1 side first.
+  constexpr ServoTemperatures J1_AND_J4_AT_LIMIT{60, 33, 35, 61, 29, 28};
+  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  EXPECT_FALSE(detector.update(J1_AND_J4_AT_LIMIT, at_ms(0)).has_value());
+  const std::optional<Overheat> trip{detector.update(J1_AND_J4_AT_LIMIT, at_ms(1000))};
+  ASSERT_TRUE(trip.has_value());
+  EXPECT_EQ(trip.value_or(Overheat{}).joint, 0U);
   EXPECT_EQ(trip.value_or(Overheat{}).celsius, 60);
 }
 
