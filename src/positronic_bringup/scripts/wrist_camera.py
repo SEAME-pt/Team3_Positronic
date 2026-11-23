@@ -20,6 +20,19 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+# AI-generated (Claude, Anthropic).
+# Prompt:
+#   Real wrist camera issue: the myCobot USB camera (UVC, MJPG 30 fps) must publish on the
+#   topics of the Gazebo camera (/wrist_camera/image_raw, /wrist_camera/camera_info), with
+#   frame_id = camera_link of the URDF. #97 found the raw image lies on its side and decided
+#   the camera node turns every frame 90 deg counterclockwise before publishing, and that the
+#   camera is calibrated on the turned images. v4l2_camera and usb_cam cannot turn a frame, so
+#   write a small rclpy node with OpenCV: device, size, rate, rotation, frame_id and the
+#   calibration yaml (camera_calibration's ost.yaml format) as parameters; image_raw (bgr8),
+#   camera_info with every frame, and image_raw/compressed (jpeg, encoded only while someone
+#   subscribes, for Wi-Fi). Read the camera in its own thread, reopen it if it fails, log the
+#   achieved rate every few seconds, and keep the maths testable without a camera.
+
 """
 Publish the wrist camera of the real arm on the topics of the Gazebo camera.
 
