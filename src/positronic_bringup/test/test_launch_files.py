@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2026 Positronic
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -27,6 +29,9 @@
 #   the default false (the launch behaves as before unless asked), that it has the two
 #   variants of the controller manager and of the arm_controller spawner, and that
 #   supervised.launch.py includes the driver launch and starts the safety supervisor.
+# Follow-up prompt (#150):
+#   The driver's arguments have no default of their own any more, and update_rate takes its
+#   default from jetson_controllers.yaml. Check both.
 # Follow-up prompt (real wrist camera):
 #   Add camera.launch.py to the files that must build. Check that its frame_id default is a link
 #   of positronic_real.urdf.xacro and the link the Gazebo camera sensor sits on (from the
@@ -49,14 +54,18 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch_ros.actions import LifecycleNode, Node
 import pytest
 import xacro
+import yaml
 
-LAUNCH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch')
+LAUNCH_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'launch'
+)
 
 
 def load(name):
     """Import launch/<name> as a module, without launching anything."""
-    spec = importlib.util.spec_from_file_location(name.replace('.', '_'),
-                                                  os.path.join(LAUNCH_DIR, name))
+    spec = importlib.util.spec_from_file_location(
+        name.replace('.', '_'), os.path.join(LAUNCH_DIR, name)
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -65,17 +74,6 @@ def load(name):
 def describe(name):
     """Return the LaunchDescription of launch/<name>, without launching anything."""
     return load(name).generate_launch_description()
-
-
-def argument_defaults(name):
-    """Return {argument: default as text} of launch/<name>, for the plain text defaults."""
-    defaults = {}
-    for entity in describe(name).entities:
-        if isinstance(entity, DeclareLaunchArgument) and entity.default_value is not None:
-            parts = entity.default_value
-            if all(hasattr(part, 'text') for part in parts):
-                defaults[entity.name] = ''.join(part.text for part in parts)
-    return defaults
 
 
 def expand_xacro(file_name, **arguments):
@@ -101,17 +99,60 @@ def test_launch_file_builds_its_description(name):
 
 def test_driver_starts_active_unless_asked():
     """Check that start_inactive exists and defaults to false: the launch is as it was."""
-    arguments = {entity.name: entity for entity in describe('driver.launch.py').entities
-                 if isinstance(entity, DeclareLaunchArgument)}
+    arguments = {
+        entity.name: entity
+        for entity in describe('driver.launch.py').entities
+        if isinstance(entity, DeclareLaunchArgument)
+    }
     assert 'start_inactive' in arguments
     default = ''.join(part.text for part in arguments['start_inactive'].default_value)
     assert default == 'false'
 
 
+DRIVER_ARGUMENTS = [
+    'backend', 'fake_mode', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms',
+    'pose_from_poll', 'servo_temp_limit_c', 'tracking_error_deg', 'tracking_error_ms',
+]
+
+
+def launch_defaults(name):
+    """
+    Return {argument: default text} of launch/<name>, for the plain text defaults.
+
+    A default built from substitutions (camera.launch.py's calibration_file, a path in the
+    installed share) has no text until launch time, so it is left out.
+    """
+    defaults = {}
+    for entity in describe(name).entities:
+        if isinstance(entity, DeclareLaunchArgument) and entity.default_value is not None:
+            parts = entity.default_value
+            if all(hasattr(part, 'text') for part in parts):
+                defaults[entity.name] = ''.join(part.text for part in parts)
+    return defaults
+
+
+def test_driver_arguments_have_no_default_of_their_own():
+    """Check that every driver argument defaults to empty: the driver's default applies."""
+    defaults = launch_defaults('driver.launch.py')
+    assert {name: defaults[name] for name in DRIVER_ARGUMENTS} == dict.fromkeys(
+        DRIVER_ARGUMENTS, '')
+
+
+def test_update_rate_defaults_to_the_yaml():
+    """Check that update_rate defaults to the value of jetson_controllers.yaml."""
+    path = os.path.join(os.path.dirname(LAUNCH_DIR), 'config', 'jetson_controllers.yaml')
+    with open(path, encoding='utf-8') as config:
+        rate = yaml.safe_load(config)['controller_manager']['ros__parameters']['update_rate']
+    assert launch_defaults('driver.launch.py')['update_rate'] == str(rate)
+
+
 def test_driver_has_both_variants_of_what_start_inactive_changes():
     """Check the two controller managers and the two arm_controller spawners."""
-    nodes = [entity for entity in describe('driver.launch.py').entities
-             if isinstance(entity, Node)]
+    nodes = [
+        entity
+        for entity in describe('driver.launch.py').entities
+        if isinstance(entity, Node)
+    ]
     managers = [node for node in nodes if node.node_executable == 'ros2_control_node']
     spawners = [node for node in nodes if node.node_executable == 'spawner']
     # One of each pair runs, chosen by its condition.
@@ -132,7 +173,7 @@ def test_supervised_launch_starts_the_driver_and_the_supervisor():
 
 def test_camera_frame_id_is_the_camera_link_of_both_models():
     """Check frame_id: a link of the real xacro, and the link the Gazebo camera sits on."""
-    frame_id = argument_defaults('camera.launch.py')['frame_id']
+    frame_id = launch_defaults('camera.launch.py')['frame_id']
     real_links = [link.get('name') for link in expand_xacro('positronic_real.urdf.xacro')
                   .findall('link')]
     assert frame_id in real_links
@@ -164,7 +205,7 @@ def test_camera_launch_runs_the_camera_node():
 
 def test_driver_starts_the_camera_only_when_asked():
     """Check camera defaults to false and camera.launch.py is included under a condition."""
-    assert argument_defaults('driver.launch.py')['camera'] == 'false'
+    assert launch_defaults('driver.launch.py')['camera'] == 'false'
     includes = [entity for entity in describe('driver.launch.py').entities
                 if isinstance(entity, IncludeLaunchDescription)]
     assert len(includes) == 1

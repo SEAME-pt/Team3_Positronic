@@ -38,12 +38,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     # The URDF is read here, when Python runs, so the path is built with os.path, not
-    # with launch substitutions, which only get a value later. The camera variant, the one
-    # positronic_real.urdf.xacro includes: the driver's robot_state_publisher and this one
-    # publish the same links, camera_link included.
+    # with launch substitutions, which only get a value later. The gripper and camera variant,
+    # the one positronic_real.urdf.xacro includes: the driver's robot_state_publisher and this
+    # one publish the same links, camera_link included.
     urdf = os.path.join(
         get_package_share_directory('positronic_description'),
-        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn_camera.urdf')
+        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn_gripper_camera.urdf')
     with open(urdf) as f:
         robot_description = f.read()
 
