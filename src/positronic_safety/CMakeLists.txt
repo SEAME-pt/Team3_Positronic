@@ -13,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(positronic_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -34,6 +35,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC
   ${control_msgs_TARGETS}
   ${controller_manager_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
   ${lifecycle_msgs_TARGETS}
   ${positronic_interfaces_TARGETS}
   rclcpp::rclcpp
@@ -79,7 +81,7 @@ if(BUILD_TESTING)
   # Finding driver/fault_code in a /dynamic_joint_states message: only the message type, no node.
   ament_add_gtest(test_fault_code test/test_fault_code.cpp)
   target_include_directories(test_fault_code PRIVATE include)
-  target_link_libraries(test_fault_code ${control_msgs_TARGETS})
+  target_link_libraries(test_fault_code ${control_msgs_TARGETS} ${diagnostic_msgs_TARGETS})
 
   # The node against a fake controller manager, trajectory controller and mission node, all in
   # one process: the order of the requests, every trigger, the stay-stopped rule. It has its

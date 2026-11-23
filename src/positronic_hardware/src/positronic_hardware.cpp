@@ -39,6 +39,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
 #include "urdf/model.h"
@@ -108,6 +109,10 @@ constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
+
+/// How often the component's node looks for a new fault to put on /diagnostics at once (#121).
+/// The supervisor halts on the code; the reason follows within this.
+constexpr std::chrono::milliseconds FAULT_WATCH_PERIOD{50};
 
 /// Logs a refused check (#34) as "<what>: joint '<name>' = <rad> rad (<deg> deg), <fault>
 /// [<lower>, <upper>] rad.", the joint name and value the issue asks for.
@@ -210,6 +215,20 @@ CallbackReturn RobotSystem::on_init(
 
   if (!read_parameters(info.hardware_parameters)) {
     return CallbackReturn::ERROR;
+  }
+
+  // #121: the reason of the fault on /diagnostics, from the node the controller manager gives
+  // the component and spins on its executor, never on the control loop. No node without an
+  // executor (most tests): the fault interface works the same.
+  if (get_node() != nullptr) {
+    diagnostics_ = std::make_unique<diagnostic_updater::Updater>(get_node());
+    diagnostics_->setHardwareID(info.name);
+    diagnostics_->add("driver", this, &RobotSystem::diagnose);
+    fault_watch_ = get_node()->create_wall_timer(FAULT_WATCH_PERIOD, [this]() {
+          if (fault_.load() != diagnosed_) {
+            diagnostics_->force_update();
+          }
+    });
   }
   return CallbackReturn::SUCCESS;
 }
@@ -711,6 +730,17 @@ void RobotSystem::raise_fault(FaultCode code)
       "activate.",
       static_cast<int>(code), static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count()));
   }
+}
+
+void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
+{
+  const FaultCode code{fault_.load()};
+  diagnosed_ = code;
+  std::uint8_t level{diagnostic_msgs::msg::DiagnosticStatus::ERROR};
+  if (code == FaultCode::NONE) {
+    level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  }
+  status.summary(level, std::string{describe_fault(code)});
 }
 
 void RobotSystem::refuse(const CommandCheck & check)

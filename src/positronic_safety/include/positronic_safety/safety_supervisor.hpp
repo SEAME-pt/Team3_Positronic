@@ -33,6 +33,7 @@
 #include "control_msgs/msg/dynamic_joint_state.hpp"
 #include "controller_manager_msgs/srv/set_hardware_component_state.hpp"
 #include "controller_manager_msgs/srv/switch_controller.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "positronic_interfaces/msg/heartbeat.hpp"
 #include "positronic_interfaces/msg/safety_status.hpp"
 #include "positronic_safety/deadline_watchdog.hpp"
@@ -90,6 +91,7 @@ public:
 private:
   using Clock = DeadlineWatchdog::Clock;
   using DynamicJointState = control_msgs::msg::DynamicJointState;
+  using DiagnosticArray = diagnostic_msgs::msg::DiagnosticArray;
   using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
   using Heartbeat = positronic_interfaces::msg::Heartbeat;
   using SafetyStatus = positronic_interfaces::msg::SafetyStatus;
@@ -135,6 +137,10 @@ private:
 
   /// A /dynamic_joint_states message: follows the fault code and halts on a fault.
   void on_joint_states(const DynamicJointState & message);
+
+  /// A /diagnostics message: logs the driver's fault reason once, when it comes (#121). It
+  /// comes within 50 ms of the code, before or after it, so it has a line of its own.
+  void on_diagnostics(const DiagnosticArray & message);
 
   /// The timer: gives up on a request that was not answered, then checks the heartbeat and
   /// the fault data.
@@ -193,6 +199,9 @@ private:
 
   rclcpp::Subscription<Heartbeat>::SharedPtr heartbeat_subscription_;
   rclcpp::Subscription<DynamicJointState>::SharedPtr fault_subscription_;
+  rclcpp::Subscription<DiagnosticArray>::SharedPtr diagnostics_subscription_;
+  /// The driver's reason last logged, "" without a fault: the status comes once a second.
+  std::string driver_reason_;
   /// A plain publisher, not a lifecycle one: the status must also go out while INACTIVE.
   rclcpp::Publisher<SafetyStatus>::SharedPtr status_publisher_;
   rclcpp::Service<Trigger>::SharedPtr stop_service_;

@@ -35,9 +35,15 @@
 //   a halt; the supervisor stays stopped until it is activated again; it resumes after a driver
 //   fault once the driver cleared it; a person deactivating the supervisor halts the arm.
 //   Every test uses its own namespace, so tests running at the same time do not hear each other.
+// Follow-up prompt (#121):
+//   The fake also publishes /diagnostics. The supervisor logs the driver's reason once when it
+//   comes, although the status repeats every second, and again after an OK; the controller
+//   manager's own status is not the driver's. Capture the log lines with an rcutils output
+//   handler for the test.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -52,10 +58,13 @@
 #include "control_msgs/msg/interface_value.hpp"
 #include "controller_manager_msgs/srv/set_hardware_component_state.hpp"
 #include "controller_manager_msgs/srv/switch_controller.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_interfaces/msg/heartbeat.hpp"
 #include "positronic_interfaces/msg/safety_status.hpp"
 #include "positronic_safety/safety_supervisor.hpp"
+#include "rcl_interfaces/msg/log.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -67,6 +76,8 @@ using control_msgs::msg::DynamicJointState;
 using control_msgs::msg::InterfaceValue;
 using controller_manager_msgs::srv::SetHardwareComponentState;
 using controller_manager_msgs::srv::SwitchController;
+using diagnostic_msgs::msg::DiagnosticArray;
+using diagnostic_msgs::msg::DiagnosticStatus;
 using lifecycle_msgs::msg::State;
 using positronic_interfaces::msg::Heartbeat;
 using positronic_interfaces::msg::SafetyStatus;
@@ -111,6 +122,26 @@ public:
   bool goal_running() const
   {
     return goal_ != nullptr;
+  }
+
+  /// One /diagnostics message with one status, as a hardware component or the controller
+  /// manager publishes it (#121).
+  void publish_diagnostics(
+    const std::string & hardware_id, std::uint8_t level, const std::string & message)
+  {
+    DiagnosticStatus status;
+    status.hardware_id = hardware_id;
+    status.level = level;
+    status.message = message;
+    DiagnosticArray array;
+    array.status.push_back(status);
+    diagnostics_publisher_->publish(array);
+  }
+
+  /// True once the supervisor listens to /diagnostics: a message sent before is lost.
+  bool diagnostics_heard() const
+  {
+    return diagnostics_publisher_->get_subscription_count() > 0;
   }
 
   /// The controller manager crashed: its two services are gone. Returns once this node no
@@ -161,6 +192,7 @@ private:
       "mission/heartbeat", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
     joint_states_publisher_ =
       create_publisher<DynamicJointState>("dynamic_joint_states", rclcpp::SystemDefaultsQoS());
+    diagnostics_publisher_ = create_publisher<DiagnosticArray>("/diagnostics", rclcpp::QoS(10));
     // 100 Hz: well inside the supervisor's timeouts, so a halt in a test is never an accident.
     publish_timer_ = create_wall_timer(milliseconds{10}, [this]() {
           publish();
@@ -288,6 +320,7 @@ private:
 
   rclcpp::Publisher<Heartbeat>::SharedPtr heartbeat_publisher_;
   rclcpp::Publisher<DynamicJointState>::SharedPtr joint_states_publisher_;
+  rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostics_publisher_;
   rclcpp::Subscription<SafetyStatus>::SharedPtr status_subscription_;
   rclcpp::Service<SetHardwareComponentState>::SharedPtr hardware_service_;
   rclcpp::Service<SwitchController>::SharedPtr switch_service_;
@@ -700,6 +733,44 @@ TEST_F(SafetySupervisorTest, HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNo
   // The honest report: the supervisor could not stop the arm.
   EXPECT_FALSE(fake_->statuses.back().hardware_stopped);
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
+}
+
+TEST_F(SafetySupervisorTest, TheDriversReasonIsLoggedOnceWhenItComes)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->diagnostics_heard();
+  }));
+  // The supervisor's lines on /rosout, as a rosbag keeps them. Transient local, like /rosout:
+  // the lines logged before this subscription matched still come.
+  std::vector<std::string> log;
+  const auto rosout = fake_->create_subscription<rcl_interfaces::msg::Log>(
+    "/rosout", rclcpp::QoS(100).transient_local(), [&log](const rcl_interfaces::msg::Log & line) {
+      log.push_back(line.msg);
+    });
+  const std::string reason{"The driver says why: LINK_TIMEOUT: no valid reply."};
+  const auto lines = [&log, &reason]() {
+      return std::count(log.begin(), log.end(), reason);
+    };
+
+  // The driver's ERROR comes once a second while it lasts: one line.
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    fake_->publish_diagnostics(
+      "positronic_arm", DiagnosticStatus::ERROR, "LINK_TIMEOUT: no valid reply");
+  }
+  ASSERT_TRUE(spin_until([&lines]() {
+      return lines() > 0;
+  }));
+  spin_for(milliseconds{200});
+  EXPECT_EQ(lines(), 1);
+
+  // After an OK (an activate cleared the fault), the same fault is a new one.
+  fake_->publish_diagnostics("positronic_arm", DiagnosticStatus::OK, "NONE: no fault");
+  fake_->publish_diagnostics(
+    "positronic_arm", DiagnosticStatus::ERROR, "LINK_TIMEOUT: no valid reply");
+  EXPECT_TRUE(spin_until([&lines]() {
+      return lines() == 2;
+  }));
 }
 
 int main(int argc, char ** argv)

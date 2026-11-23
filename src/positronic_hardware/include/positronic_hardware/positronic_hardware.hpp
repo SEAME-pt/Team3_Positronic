@@ -29,6 +29,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -36,6 +37,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/echo_timeout_report.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/fault_code.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/parameters.hpp"
 #include "positronic_hardware/serial_arm.hpp"
@@ -47,27 +49,6 @@
 
 namespace positronic_hardware
 {
-
-/// What the driver reports in its fault state interface (#35), as a whole number in a double.
-/// The supervisor (#45) stops the arm on any value other than NONE, so a new fault needs no
-/// change there. The values are part of the interface: add new ones at the end, never reuse or
-/// renumber one.
-enum class FaultCode : std::uint8_t
-{
-  /// No fault: the link is alive (or the component is not active).
-  NONE = 0,
-  /// No valid reply from the arm for LinkWatchdog::DEFAULT_TIMEOUT while active. Latched until
-  /// the next activate.
-  LINK_TIMEOUT = 1,
-  /// A joint further than tracking_error_deg from the last target on the wire for longer than
-  /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
-  /// the next activate, targets held meanwhile, like the link timeout.
-  TRACKING_ERROR = 2,
-  /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
-  /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
-  /// next activate.
-  OVERHEAT = 3,
-};
 
 /// The <gpio> of the <ros2_control> block that carries the fault, and its one state interface.
 /// The supervisor reads "driver/fault_code".
@@ -120,6 +101,11 @@ private:
   /// once (an overheat is logged by check_temperatures(), which knows the joint and the value).
   /// Only the first fault is kept; on_activate clears it. No allocation: safe from read().
   void raise_fault(FaultCode code);
+
+  /// The driver's status on /diagnostics (#121): OK for no fault, ERROR with the name and the
+  /// reason of the latched one. Runs on the executor that spins the component's node, beside a
+  /// transition that may be replacing arm_: it reads fault_ only.
+  void diagnose(diagnostic_updater::DiagnosticStatusWrapper & status);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
@@ -185,6 +171,15 @@ private:
   JointHandles gripper_handles_{};
   double gripper_previous_{0.0};
   bool gripper_previous_valid_{false};
+
+  // #121, last so they go first: their callbacks read the members above. Both run on the
+  // node's default callback group, never at the same time, so diagnosed_ needs no atomic.
+  /// The fault diagnose() last published.
+  FaultCode diagnosed_{FaultCode::NONE};
+  /// Null without a node: a resource manager loaded without an executor (most tests).
+  std::unique_ptr<diagnostic_updater::Updater> diagnostics_;
+  /// Publishes a new fault at once instead of at the next once-a-second status.
+  rclcpp::TimerBase::SharedPtr fault_watch_;
 };
 
 }  // namespace positronic_hardware
