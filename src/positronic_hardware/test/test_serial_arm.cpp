@@ -118,6 +118,10 @@ constexpr std::uint8_t GET_ANGLES_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_ANGLES)};
 constexpr std::uint8_t TEMPS_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_SERVO_TEMPS)};
+constexpr std::uint8_t GET_GRIPPER_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
+constexpr std::uint8_t SET_GRIPPER_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::SET_GRIPPER_VALUE)};
 
 /// The Atom's sync-write to the six servos, recorded on the arm on 13 Nov 2026 right after a
 /// send_angles: `FF FF FE 34 83 29 07` + per servo (id, acc, goal, time, speed) + checksum. It
@@ -1008,8 +1012,16 @@ public:
       pending_.push_back(0xFA);
     } else if (id == STOP_ID || id == POWER_ON_ID) {
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA});
+    } else if (id == GET_GRIPPER_ID) {
+      pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, GET_GRIPPER_ID, gripper_, 0xFA});
     }
     return true;
+  }
+
+  void set_gripper(std::uint8_t value)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    gripper_ = value;
   }
 
   std::size_t read(std::uint8_t * dst, std::size_t max) override
@@ -1045,6 +1057,7 @@ private:
   std::vector<std::uint8_t> pending_;
   ServoTemperatures temperatures_{COOL};
   bool answer_temperatures_{true};
+  std::uint8_t gripper_{100};
   std::mutex mutex_;
 };
 
@@ -1052,6 +1065,30 @@ private:
 std::uint8_t request_id(const std::vector<std::uint8_t> & frame)
 {
   return frame.size() == 5 ? frame[3] : std::uint8_t{0};
+}
+
+bool is_gripper_set(const std::vector<std::uint8_t> & frame)
+{
+  return frame.size() == 7 && frame[3] == SET_GRIPPER_ID;
+}
+
+bool is_gripper_frame(const std::vector<std::uint8_t> & frame)
+{
+  return is_gripper_set(frame) || request_id(frame) == GET_GRIPPER_ID;
+}
+
+template<typename Port>
+std::size_t gripper_sets(Port & port)
+{
+  const auto frames{port.written()};
+  return static_cast<std::size_t>(std::count_if(frames.begin(), frames.end(), is_gripper_set));
+}
+
+template<typename Port>
+std::size_t gripper_frames(Port & port)
+{
+  const auto frames{port.written()};
+  return static_cast<std::size_t>(std::count_if(frames.begin(), frames.end(), is_gripper_frame));
 }
 
 /// Waits until `done()` is true, or two seconds pass. Returns `done()`.
@@ -1251,6 +1288,143 @@ TEST(SerialArmTemperature, ReportsStaleWhenTheArmNeverAnswersTheTemperature)
   EXPECT_FALSE(arm.read_temperatures().has_value());
   EXPECT_TRUE(arm.temperature_stale());
   EXPECT_FALSE(arm.overheat().has_value());
+}
+
+TEST(SerialArmGripper, ReadsTheGripperWhileIdle)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  port.set_gripper(42);
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard(), true};
+
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_gripper().has_value();
+  }));
+  EXPECT_EQ(arm.read_gripper().value_or(0), 42);
+  const auto frames{port.written()};
+  for (std::size_t i{1}; i < frames.size(); ++i) {
+    if (request_id(frames[i]) == GET_GRIPPER_ID) {
+      EXPECT_EQ(request_id(frames[i - 1]), GET_ANGLES_ID) << i;
+    }
+  }
+}
+
+TEST(SerialArmGripper, SendsANewTargetOnceAfterAGetAnglesReply)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard(), true};
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.has_sample();
+  }));
+
+  arm.write_gripper(30);
+  ASSERT_TRUE(wait_until([&port]() {
+      return gripper_sets(port) == 1;
+  }));
+  std::this_thread::sleep_for(std::chrono::milliseconds{200});
+  EXPECT_EQ(gripper_sets(port), 1U);
+
+  const auto frames{port.written()};
+  const auto set{std::find_if(frames.begin(), frames.end(), is_gripper_set)};
+  ASSERT_NE(set, frames.end());
+  EXPECT_EQ(
+    *set, (std::vector<std::uint8_t>{0xFE, 0xFE, 0x04, 0x67, 30, SerialArm::GRIPPER_SPEED, 0xFA}));
+  ASSERT_NE(set, frames.begin());
+  EXPECT_EQ(request_id(*std::prev(set)), GET_ANGLES_ID);
+}
+
+TEST(SerialArmGripper, WaitsWhileTheArmHasTargetsToSend)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  TemperatureGuard guard{fast_guard()};
+  guard.max_age = std::chrono::seconds{5};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, guard, true};
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.has_sample();
+  }));
+
+  arm.write_angles(JointPositions{0.0005, 0.0, 0.0, 0.0, 0.0, 0.0});
+  arm.write_gripper(10);
+  stream_targets(arm, std::chrono::milliseconds{400});
+  for (const auto & frame : between_sends(port.written())) {
+    EXPECT_FALSE(is_gripper_frame(frame));
+  }
+  EXPECT_TRUE(wait_until([&port]() {
+      return gripper_sets(port) == 1;
+  }));
+}
+
+TEST(SerialArmGripper, AHaltHoldsTheGripperTargetAndPowerOnDropsIt)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard(), true};
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.has_sample();
+  }));
+
+  ASSERT_TRUE(arm.halt());
+  arm.write_gripper(10);
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  EXPECT_EQ(gripper_sets(port), 0U);
+  EXPECT_TRUE(arm.read_gripper().has_value());
+
+  ASSERT_TRUE(arm.power_on());
+  std::this_thread::sleep_for(std::chrono::milliseconds{200});
+  EXPECT_EQ(gripper_sets(port), 0U);
+  arm.write_gripper(20);
+  EXPECT_TRUE(wait_until([&port]() {
+      return gripper_sets(port) == 1;
+  }));
+}
+
+TEST(SerialArmGripper, SendsNoGripperFrameWithoutAGripper)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard()};
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.has_sample();
+  }));
+
+  arm.write_gripper(10);
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  EXPECT_EQ(gripper_frames(port), 0U);
+  EXPECT_FALSE(arm.read_gripper().has_value());
+}
+
+TEST(SerialArmGripper, TheLinkNeverTimesOutWhileTheGripperIsServed)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport), SerialArm::Timing{}, TemperatureGuard{}, true};
+  wait_for_reply(arm);
+  ASSERT_TRUE(arm.has_sample());
+
+  const auto end{std::chrono::steady_clock::now() + std::chrono::seconds{1}};
+  auto next_target{std::chrono::steady_clock::now()};
+  std::uint8_t value{0};
+  while (std::chrono::steady_clock::now() < end) {
+    if (std::chrono::steady_clock::now() >= next_target) {
+      value = static_cast<std::uint8_t>((value + 10) % 101);
+      arm.write_gripper(value);
+      next_target += std::chrono::milliseconds{100};
+    }
+    ASSERT_FALSE(arm.link_timed_out());
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  const auto frames{port.written()};
+  EXPECT_GT(std::count_if(frames.begin(), frames.end(), is_gripper_set), 0);
+  EXPECT_GT(
+    std::count_if(
+      frames.begin(), frames.end(),
+      [](const auto & frame) {
+        return request_id(frame) == GET_GRIPPER_ID;
+      }),
+    0);
+  EXPECT_FALSE(arm.read_gripper().has_value());
 }
 
 // #103 part 2: what the plugin's unfollowed-command check reads.

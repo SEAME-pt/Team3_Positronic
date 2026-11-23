@@ -47,6 +47,11 @@ namespace positronic_protocol
 /// Request frame for get_servo_temps: `FE FE 02 E5 FA`.
 [[nodiscard]] Frame encode_get_servo_temps() noexcept;
 
+[[nodiscard]] Frame encode_get_gripper_value() noexcept;
+
+[[nodiscard]] std::optional<Frame> encode_set_gripper_value(
+  std::uint8_t value, std::uint8_t speed) noexcept;
+
 /// Request frame for send_angles: `FE FE 0F 22` + 6 x int16 big-endian + speed + `FA`.
 ///
 /// @param angles Target joint angles in 0.01 deg.

@@ -183,14 +183,16 @@ def generate_launch_description():
         package='controller_manager',
         executable='spawner',
         output='both',
-        arguments=['arm_controller', '--param-file', controllers_yaml],
+        arguments=['arm_controller', 'gripper_action_controller', '--param-file',
+                   controllers_yaml],
         condition=UnlessCondition(inactive))
     # Loaded and configured, not activated: it takes no trajectory goal yet.
     arm_controller_inactive = Node(
         package='controller_manager',
         executable='spawner',
         output='both',
-        arguments=['arm_controller', '--param-file', controllers_yaml, '--inactive'],
+        arguments=['arm_controller', 'gripper_action_controller', '--param-file',
+                   controllers_yaml, '--inactive'],
         condition=IfCondition(inactive))
 
     return LaunchDescription([

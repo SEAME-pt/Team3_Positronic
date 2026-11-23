@@ -168,3 +168,35 @@ TEST(EncodeSendAngles, SpeedLimits)
   EXPECT_TRUE(pp::encode_send_angles({}, pp::MIN_SPEED).has_value());
   EXPECT_TRUE(pp::encode_send_angles({}, pp::MAX_SPEED).has_value());
 }
+
+TEST(EncodeGripper, GetGripperValue)
+{
+  EXPECT_EQ(to_hex(bytes_of(pp::encode_get_gripper_value())), "fe fe 02 65 fa");
+}
+
+TEST(EncodeGripper, SetGripperValueFrame)
+{
+  EXPECT_EQ(
+    to_hex(bytes_of(pp::encode_set_gripper_value(50, 20).value_or(pp::Frame{}))),
+    "fe fe 04 67 32 14 fa");
+}
+
+TEST(EncodeGripper, SetGripperValueLimits)
+{
+  EXPECT_EQ(
+    to_hex(bytes_of(pp::encode_set_gripper_value(0, 20).value_or(pp::Frame{}))),
+    "fe fe 04 67 00 14 fa");
+  EXPECT_EQ(
+    to_hex(bytes_of(pp::encode_set_gripper_value(pp::GRIPPER_VALUE_MAX, 20).value_or(pp::Frame{}))),
+    "fe fe 04 67 64 14 fa");
+  EXPECT_FALSE(pp::encode_set_gripper_value(pp::GRIPPER_VALUE_MAX + 1, 20).has_value());
+  EXPECT_FALSE(pp::encode_set_gripper_value(255, 20).has_value());
+}
+
+TEST(EncodeGripper, SetGripperValueSpeedLimits)
+{
+  EXPECT_TRUE(pp::encode_set_gripper_value(50, pp::MIN_SPEED).has_value());
+  EXPECT_TRUE(pp::encode_set_gripper_value(50, pp::MAX_SPEED).has_value());
+  EXPECT_FALSE(pp::encode_set_gripper_value(50, 0).has_value());
+  EXPECT_FALSE(pp::encode_set_gripper_value(50, pp::MAX_SPEED + 1).has_value());
+}

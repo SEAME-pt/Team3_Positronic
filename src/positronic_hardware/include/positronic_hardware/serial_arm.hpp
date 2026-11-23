@@ -134,14 +134,20 @@ public:
   // temperature request is written while a stop or power_on is pending. ACK_TIMEOUT itself
   // lives in requests.hpp.
 
+  static constexpr std::uint8_t GRIPPER_SPEED{20};
+  static constexpr std::chrono::milliseconds GRIPPER_READ_PERIOD{100};
+  static constexpr std::chrono::milliseconds GRIPPER_REPLY_TIMEOUT{50};
+
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
   SerialArm(
-    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {});
+    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
+    bool has_gripper = false);
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
-    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {});
+    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
+    bool has_gripper = false);
 
   ~SerialArm() override;
 
@@ -182,6 +188,9 @@ public:
   /// power_on is dropped, and the arm must not be treated as live (#103). After an overheat
   /// cut it returns false at once and sends nothing: the servos stay off.
   [[nodiscard]] bool power_on() override;
+
+  void write_gripper(std::uint8_t value) override;
+  [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override;
 
   /// The newest plausible reading of get_servo_temps, or nullopt before the first one.
   [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override;
@@ -258,6 +267,10 @@ private:
   /// it asked: the turn sends nothing, the target goes out next turn.
   bool watch_temperatures(bool new_target);
 
+  bool serve_after_reply(bool new_target);
+  void gripper_turn();
+  std::optional<std::uint8_t> ask_gripper();
+
   /// After a cut, sends the power off again once a period, at the start of a turn.
   void repeat_power_off(Clock::time_point turn_start);
 
@@ -315,6 +328,11 @@ private:
   // What read_until() has read and not yet ruled out. Reserved once, so the thread does not
   // allocate in a turn.
   std::vector<std::uint8_t> read_buffer_;
+  const bool has_gripper_;
+  realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_command_{std::nullopt};
+  mutable realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_latest_{std::nullopt};
+  std::optional<std::uint8_t> gripper_last_sent_;
+  Clock::time_point last_gripper_read_;
   std::thread thread_;
 };
 
