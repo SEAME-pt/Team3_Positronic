@@ -158,6 +158,7 @@ def test_arguments_reach_the_plugin():
     params = hardware_params(
         expand(
             backend='fake',
+            fake_mode='measured',
             port='/dev/null',
             baud='115200',
             moving_period_ms='40',
@@ -169,6 +170,7 @@ def test_arguments_reach_the_plugin():
     )
     assert params == {
         'backend': 'fake',
+        'fake_mode': 'measured',
         'port': '/dev/null',
         'baud': '115200',
         'moving_period_ms': '40',
