@@ -3,6 +3,13 @@
 Evidence that the safety supervisor (`src/positronic_safety/README.md`) halts the real arm.
 Raw data: `2026-11-13_halts.csv`, one line per halt.
 
+**`halt_latency.py` before #171 is wrong after #151.** Since #151 `/joint_states` starts with
+the gripper mock, whose velocity is NaN, so the old script never saw the arm at rest: `rest_ms`
+and `travel_deg` came out empty and `speed_deg_s` too. It now keeps only the six arm joints, by
+name, and stops with an error if one is missing. Lines recorded with it between #151
+(2026-11-18) and #171 are not valid. The results below (2026-11-13) are from before #151 and
+stand.
+
 ## How it was run
 
 Two people, one with a hand on the power switch; bench clear; trajectory `T1.yaml` of

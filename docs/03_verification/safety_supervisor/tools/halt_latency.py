@@ -28,6 +28,8 @@
 #   heartbeat to the trigger. Times between messages of the Jetson come from their stamps, so
 #   the network delay to the script does not count. Pure functions for the maths, unit-tested
 #   without ROS; rclpy is imported only in main().
+#   #171: since #151 /joint_states has the gripper mock first (velocity NaN), so keep only the
+#   six arm joints, by name, and fail loudly when one is missing instead of guessing.
 """One CSV line per halt of the safety supervisor: how long the arm took to stop (#45)."""
 
 # Run it where the supervisor runs (the Jetson), before the test, and leave it running:
@@ -64,6 +66,10 @@ REASONS = {
     0: 'NONE', 1: 'STOP_SERVICE', 2: 'HEARTBEAT_LOST', 3: 'DRIVER_FAULT',
     4: 'FAULT_DATA_LOST', 5: 'DEACTIVATED', 6: 'RESUME_FAILED',
 }
+# The six arm joints, J1 first. /joint_states also has the gripper mock (first, since #151, with
+# velocity NaN, which would never be at rest): keep only these, by name.
+ARM_JOINTS = ('joint2_to_joint1', 'joint3_to_joint2', 'joint4_to_joint3', 'joint5_to_joint4',
+              'joint6_to_joint5', 'joint6output_to_joint6')
 HEADER = ('trial,reason,hardware_stopped,halt_ms,rest_ms,speed_deg_s,travel_deg,'
           'heartbeat_to_halt_ms')
 
@@ -71,6 +77,24 @@ HEADER = ('trial,reason,hardware_stopped,halt_ms,rest_ms,speed_deg_s,travel_deg,
 def stamp_ns(stamp):
     """Return a builtin_interfaces/Time as nanoseconds."""
     return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+
+def arm_values(names, values):
+    """
+    Return the values of the six arm joints, J1 first, from one /joint_states field.
+
+    An empty field stays empty (JointState allows it). Raises ValueError when a joint is
+    missing or the field does not match the names.
+    """
+    missing = [name for name in ARM_JOINTS if name not in names]
+    if missing:
+        raise ValueError(f'/joint_states has no {", ".join(missing)} (names: {list(names)})')
+    if not values:
+        return ()
+    if len(values) != len(names):
+        raise ValueError(f'/joint_states has {len(names)} names and {len(values)} values')
+    index = {name: i for i, name in enumerate(names)}
+    return tuple(values[index[name]] for name in ARM_JOINTS)
 
 
 def at_rest(velocities, rest_speed):
@@ -180,8 +204,9 @@ def main(argv=None):
     state = {'trial': 0, 'halt': None, 'last_heartbeat': None}
 
     def on_joint_states(message):
-        samples.append((stamp_ns(message.header.stamp), tuple(message.position),
-                        tuple(message.velocity)))
+        samples.append((stamp_ns(message.header.stamp),
+                        arm_values(message.name, message.position),
+                        arm_values(message.name, message.velocity)))
 
     def on_heartbeat(_):
         state['last_heartbeat'] = time.monotonic_ns()
@@ -230,6 +255,10 @@ def main(argv=None):
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except ValueError as error:
+        # From arm_values(): no numbers rather than wrong ones.
+        print(f'halt_latency: {error}', file=sys.stderr)
+        return 1
     return 0
 
 
