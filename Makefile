@@ -97,7 +97,7 @@ test: ## colcon test, then a summary per package and each failure (VERBOSE: full
 	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
-# CI runs it as report-only (continue-on-error) until #46.
+# CI runs it on every PR and blocks the merge below 80 % (#46).
 coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below 80 %
 	$(RUN) bash -c 'bash scripts/coverage.sh && python3 scripts/coverage_gate.py'
 

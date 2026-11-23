@@ -172,14 +172,7 @@ protected:
     GoToPose::Goal goal;
     goal.target_pose = pose;
 
-    auto options = rclcpp_action::Client<GoToPose>::SendGoalOptions();
-    options.feedback_callback = [this](
-      const GoalHandleClient::SharedPtr &,
-      const std::shared_ptr<const GoToPose::Feedback> &) {
-        ++feedback_count_;
-      };
-
-    auto future = action_client_->async_send_goal(goal, options);
+    auto future = action_client_->async_send_goal(goal);
     if (future.wait_for(2s) != std::future_status::ready) {
       ADD_FAILURE() << "Timed out waiting for goal response";
       return nullptr;
@@ -266,13 +259,12 @@ protected:
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::thread spin_thread_;
 
-  // Written by subscription/feedback callbacks (executor thread), read by tests
+  // Written by the heartbeat subscription (executor thread), read by tests
   std::atomic<uint8_t> last_state_{255};  // 255 = no heartbeat yet
   std::atomic<bool> node_name_ok_{true};
   std::atomic<bool> last_stamp_ok_{true};
   std::atomic<int64_t> last_stamp_ns_{0};
   std::atomic<int> heartbeat_count_{0};
-  std::atomic<int> feedback_count_{0};
 };
 
 }  // namespace positronic_mission::test
