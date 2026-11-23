@@ -50,6 +50,8 @@ inline constexpr std::uint8_t MIN_SPEED{1};
 /// Highest speed accepted by send_angles (percent of the firmware maximum).
 inline constexpr std::uint8_t MAX_SPEED{100};
 
+inline constexpr std::uint8_t GRIPPER_VALUE_MAX{100};
+
 /// Command ids of the Elephant serial protocol (myCobot 280).
 enum class CommandId : std::uint8_t
 {
@@ -59,6 +61,8 @@ enum class CommandId : std::uint8_t
   GET_ANGLES = 0x20,          ///< Read the six joint angles.
   SEND_ANGLES = 0x22,         ///< Move the six joints to the given angles.
   STOP = 0x29,                ///< Stop the current motion.
+  GET_GRIPPER_VALUE = 0x65,
+  SET_GRIPPER_VALUE = 0x67,
   GET_SERVO_TEMPS = 0xE5,     ///< Read the six servo temperatures, degC.
 };
 

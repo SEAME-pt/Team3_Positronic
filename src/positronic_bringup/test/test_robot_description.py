@@ -74,7 +74,7 @@ def original_urdf():
     """Return the root element of the arm's URDF as installed by positronic_description."""
     path = os.path.join(
         get_package_share_directory('positronic_description'),
-        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn.urdf')
+        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn_gripper_camera.urdf')
     return ElementTree.parse(path).getroot()
 
 
@@ -121,11 +121,13 @@ def test_arguments_reach_the_plugin():
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():
-    """Check that the ros2_control joints are the six URDF joints, J1 to J6."""
+    """Check that the ros2_control joints are J1 to J6, then the gripper joint."""
     robot = expand()
     joints = [joint.get('name') for joint in robot.findall('ros2_control/joint')]
-    assert len(joints) == 6
-    assert joints == revolute_joints(original_urdf())
+    actuated = [j.get('name') for j in original_urdf().findall('joint')
+                if j.get('type') == 'revolute' and j.find('mimic') is None]
+    assert len(joints) == 7
+    assert joints == actuated
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])

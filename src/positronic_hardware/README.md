@@ -147,6 +147,59 @@ work around it. It stops the arm and cuts its power.
   few degrees above the current reading cuts the arm after a few minutes of motion, without
   heating anything.
 
+## Gripper (#123)
+
+The adaptive gripper is an optional seventh joint, `gripper_controller`, after J6 in the
+`<ros2_control>` block, with the same interfaces as the others (`position` and `velocity`
+states, one `position` command, `<limits enable="false"/>`). `on_init` accepts six or seven
+joints; with seven, the gripper joint needs a revolute `<limit>` with `lower < upper`, or the
+driver refuses to start. `positronic_real.urdf.xacro` uses
+`mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf`, the same arm as Gazebo and MoveIt, so
+the gripper goes through the same `GripperCommand` action (`gripper_action_controller`,
+`position_controllers/GripperActionController`, in `jetson_controllers.yaml`).
+
+**Mapping.** Linear between the URDF limits and the firmware value (`0x67` / `0x65`, see
+`positronic_protocol`):
+
+| URDF (rad) | Firmware value | Gripper |
+|---|---|---|
+| `lower` = -0.74 | 0 | closed |
+| `upper` = 0.15 | 100 | open |
+
+`value = round((rad - lower) / (upper - lower) * 100)`, and back `rad = lower + value / 100 *
+(upper - lower)`, kept inside `[lower, upper]`. One firmware step is 0.0089 rad. The velocity
+state is the difference of two positions over the control period.
+
+**Tolerance.** `gripper_action_controller` uses its `goal_tolerance` (0.01 rad by default,
+just over one firmware step) and `allow_stalling: true`: an adaptive gripper that closes on an
+object stops short of the target, and that is a success, not an error. Measured on the arm, 15
+goals (open, closed, half): all reached, largest error 0.0089 rad, one firmware step
+(`docs/03_verification/gripper_on_the_arm/README.md`).
+
+**Commands.** `write()` checks the gripper command like a joint (#34): NaN, infinity or a value
+outside the URDF limits is refused, the arm halts and `write()` returns ERROR. A valid command is
+converted to the firmware value and handed to the serial thread through a buffer.
+
+**The idle turn.** The serial thread serves the gripper only in a turn where the arm answered
+`get_angles`, no arm target is sent, no temperature was asked and no stop or power on is
+pending. A new gripper value goes out as one `set_gripper_value` at speed 20, followed by the
+`send_settle_ms` settle; otherwise, every 100 ms, a `get_gripper_value` waits up to 50 ms for
+its reply. So a gripper frame never waits behind an arm command and a turn never adds the
+gripper to a temperature request: the link timeout of 200 ms (#35) is never tripped by the
+gripper. While halted no gripper value is sent; `power_on()` drops the value held during the
+halt, so after a resume the gripper only moves on a new command.
+
+**Activation.** `on_activate` also waits for a first gripper reading and refuses to activate
+("The gripper did not answer within ... ms") if none comes. `FakeArm` starts open (100) and is at
+every gripper target at once.
+
+**Tests.** `test_serial_arm` (`SerialArmGripper.*`: reads while idle, one send after a
+`get_angles` reply, waits while the arm has targets, halt and power on, no gripper frame without
+a gripper, the link never times out while the gripper is served, with the replay transport) and
+`test_load_robot_system` (the seventh joint, its limits, mapping at the limits, refused targets,
+velocity, activation without a gripper reply). The recorded frames are checked in
+`positronic_protocol` (`test_recorded_gripper.cpp`).
+
 ## Parameters
 
 All optional. An unknown name (a typo) or a bad value makes `on_init` fail with a message that

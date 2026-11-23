@@ -24,7 +24,9 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -229,6 +231,22 @@ void log_fault(
     info.joints.at(check.joint).name.c_str(), check.value, check.value * RAD_TO_DEG,
     to_string(check.fault), limit.lower, limit.upper);
 }
+
+std::uint8_t to_gripper_value(double radians, double closed, double open)
+{
+  const double fraction{std::clamp((radians - closed) / (open - closed), 0.0, 1.0)};
+  const double value{
+    GRIPPER_CLOSED_VALUE + fraction * (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return static_cast<std::uint8_t>(std::lround(value));
+}
+
+double to_gripper_radians(std::uint8_t value, double closed, double open)
+{
+  const double fraction{
+    (static_cast<double>(value) - GRIPPER_CLOSED_VALUE) /
+    (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return std::clamp(closed + std::clamp(fraction, 0.0, 1.0) * (open - closed), closed, open);
+}
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -241,12 +259,13 @@ CallbackReturn RobotSystem::on_init(
   const hardware_interface::HardwareInfo & info{params.hardware_info};
 
   // The URDF must list the joints in protocol order: J1 (base) first, J6 (flange) last.
-  if (info.joints.size() != NUM_JOINTS) {
+  if (info.joints.size() != NUM_JOINTS && info.joints.size() != NUM_JOINTS + 1) {
     RCLCPP_ERROR(
-      get_logger(), "The URDF must have exactly %zu joints, %zu were read.", NUM_JOINTS,
-      info.joints.size());
+      get_logger(), "The URDF must have %zu joints, or %zu with the gripper; %zu were read.",
+      NUM_JOINTS, NUM_JOINTS + 1, info.joints.size());
     return CallbackReturn::ERROR;
   }
+  has_gripper_ = info.joints.size() == NUM_JOINTS + 1;
 
   for (const auto & joint : info.joints) {
     if (!has_position_and_velocity(joint)) {
@@ -420,6 +439,22 @@ bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
       get_logger(), "Joint '%s' limits: [%.4f, %.4f] rad.", info.joints.at(i).name.c_str(),
       limits_.at(i).lower, limits_.at(i).upper);
   }
+  if (has_gripper_) {
+    const std::string & name{info.joints.at(NUM_JOINTS).name};
+    const urdf::JointConstSharedPtr gripper{model.getJoint(name)};
+    if (
+      gripper == nullptr || gripper->type != urdf::Joint::REVOLUTE || gripper->limits == nullptr ||
+      !std::isfinite(gripper->limits->lower) || !std::isfinite(gripper->limits->upper) ||
+      gripper->limits->lower >= gripper->limits->upper)
+    {
+      RCLCPP_ERROR(
+        get_logger(), "Gripper joint '%s' has no usable revolute <limit>. Refusing to start.",
+        name.c_str());
+      return false;
+    }
+    gripper_closed_ = gripper->limits->lower;
+    gripper_open_ = gripper->limits->upper;
+  }
   return true;
 }
 
@@ -434,7 +469,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
-      arm_ = std::make_unique<SerialArm>(config_.port, config_.baud, config_.timing, guard);
+      arm_ = std::make_unique<SerialArm>(
+        config_.port, config_.baud, config_.timing, guard, has_gripper_);
     } else {
       arm_ = std::make_unique<FakeArm>();
     }
@@ -444,6 +480,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   }
   // A fresh history: the first read() after (re)configure has no earlier sample to difference.
   velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
+  gripper_previous_valid_ = false;
 
   // Look the handles up once, here, so read() and write() build no string. This throws if a
   // name is missing, which is fine outside the control loop.
@@ -455,6 +492,15 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       handles_.at(i).position =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).velocity =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
+    }
+    if (has_gripper_) {
+      const std::string & name{info_.joints.at(NUM_JOINTS).name};
+      gripper_handles_.command =
+        get_command_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.position =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
     fault_handle_ =
@@ -505,6 +551,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       RCLCPP_ERROR(
         get_logger(), "The arm did not answer within %d ms. Is it powered and on %s?",
         static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()), config_.port.c_str());
+      return CallbackReturn::ERROR;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
       return CallbackReturn::ERROR;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
@@ -718,7 +774,25 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
     return return_type::ERROR;
   }
 
+  double gripper_target{0.0};
+  const bool gripper_read{
+    has_gripper_ && get_command(gripper_handles_.command, gripper_target, false)};
+  if (
+    gripper_read && (!std::isfinite(gripper_target) || gripper_target < gripper_closed_ ||
+    gripper_target > gripper_open_))
+  {
+    arm_->request_halt();
+    RCLCPP_ERROR(
+      get_logger(),
+      "Command refused, arm halted: joint '%s' = %.4f rad, outside [%.4f, %.4f] rad.",
+      info_.joints.at(NUM_JOINTS).name.c_str(), gripper_target, gripper_closed_, gripper_open_);
+    return return_type::ERROR;
+  }
+
   arm_->write_angles(commands);
+  if (gripper_read) {
+    arm_->write_gripper(to_gripper_value(gripper_target, gripper_closed_, gripper_open_));
+  }
   return return_type::OK;
 }
 
@@ -768,6 +842,17 @@ void RobotSystem::update_states(double dt)
     // wait_until_set = false: never block on a controller that is reading the handle.
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);
     std::ignore = set_state(handles_.at(i).velocity, velocities.at(i), false);
+  }
+  const std::optional<std::uint8_t> gripper{
+    has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  if (gripper.has_value()) {
+    const double position{to_gripper_radians(gripper.value(), gripper_closed_, gripper_open_)};
+    const double velocity{
+      gripper_previous_valid_ && dt > 0.0 ? (position - gripper_previous_) / dt : 0.0};
+    gripper_previous_ = position;
+    gripper_previous_valid_ = true;
+    std::ignore = set_state(gripper_handles_.position, position, false);
+    std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
 }
 

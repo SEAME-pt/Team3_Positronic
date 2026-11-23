@@ -126,14 +126,20 @@ public:
   /// How long a temperature request waits for its reply, like REPLY_TIMEOUT for get_angles.
   static constexpr std::chrono::milliseconds TEMPERATURE_REPLY_TIMEOUT{50};
 
+  static constexpr std::uint8_t GRIPPER_SPEED{20};
+  static constexpr std::chrono::milliseconds GRIPPER_READ_PERIOD{100};
+  static constexpr std::chrono::milliseconds GRIPPER_REPLY_TIMEOUT{50};
+
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
   SerialArm(
-    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {});
+    const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
+    bool has_gripper = false);
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
-    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {});
+    std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
+    bool has_gripper = false);
 
   ~SerialArm() override;
 
@@ -174,6 +180,9 @@ public:
   /// power_on is dropped, and the arm must not be treated as live (#103). After an overheat
   /// cut it returns false at once and sends nothing: the servos stay off.
   [[nodiscard]] bool power_on() override;
+
+  void write_gripper(std::uint8_t value) override;
+  [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override;
 
   /// The newest plausible reading of get_servo_temps, or nullopt before the first one.
   [[nodiscard]] std::optional<ServoTemperatures> read_temperatures() const override;
@@ -239,6 +248,9 @@ private:
   /// when the detector trips. `new_target` says whether this turn is about to send one.
   void watch_temperatures(bool new_target, std::optional<JointPositions> & last_sent);
 
+  void gripper_turn();
+  std::optional<std::uint8_t> ask_gripper();
+
   /// After a cut, sends the power off again once a period, at the start of a turn.
   void repeat_power_off(Clock::time_point turn_start);
 
@@ -285,6 +297,11 @@ private:
   Clock::time_point last_temperature_ask_;
   Clock::time_point next_power_off_;
   std::vector<std::uint8_t> temperature_buffer_;
+  const bool has_gripper_;
+  realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_command_{std::nullopt};
+  mutable realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_latest_{std::nullopt};
+  std::optional<std::uint8_t> gripper_last_sent_;
+  Clock::time_point last_gripper_read_;
   std::thread thread_;
 };
 

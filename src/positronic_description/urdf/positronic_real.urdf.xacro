@@ -34,7 +34,7 @@
   <xacro:arg name="servo_temp_limit_c" default="60"/>
 
   <!-- Links, joints and meshes of the arm. -->
-  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn.urdf"/>
+  <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
 
@@ -63,6 +63,7 @@
     <xacro:real_arm_joint name="joint5_to_joint4"/>
     <xacro:real_arm_joint name="joint6_to_joint5"/>
     <xacro:real_arm_joint name="joint6output_to_joint6"/>
+    <xacro:real_arm_joint name="gripper_controller"/>
     <!-- #35: what the driver reports to the supervisor (#45), as driver/fault_code. 0 = no
          fault; any other value is a latched fault, see FaultCode in positronic_hardware.hpp. -->
     <gpio name="driver">
