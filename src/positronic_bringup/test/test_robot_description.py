@@ -43,6 +43,11 @@
 #   The safety supervisor does not depend on positronic_hardware: it takes the names of the
 #   hardware component and of the fault interface from config/safety_supervisor.yaml. Check
 #   that those names are the ones of the <ros2_control> block.
+# Follow-up prompt (real wrist camera):
+#   The real xacro now includes mycobot_280_jn_camera.urdf, so the real camera images can use
+#   camera_link as their frame_id. Compare against that file, and check that camera_link is in
+#   the description and hangs under joint 6 (joint6_flange) through fixed joints only, for both
+#   backends.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -71,16 +76,32 @@ def expand(**arguments):
 
 
 def original_urdf():
-    """Return the root element of the arm's URDF as installed by positronic_description."""
+    """Return the root element of the arm's URDF (with the wrist camera) the xacro includes."""
     path = os.path.join(
         get_package_share_directory('positronic_description'),
-        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn.urdf')
+        'urdf', 'mycobot_280_jn_sim', 'mycobot_280_jn_camera.urdf')
     return ElementTree.parse(path).getroot()
 
 
 def revolute_joints(robot):
     """Return the names of the revolute joints of `robot`, in file order."""
     return [j.get('name') for j in robot.findall('joint') if j.get('type') == 'revolute']
+
+
+def chain_to(robot, link, ancestor):
+    """
+    Return the joints from `ancestor` down to `link`, as (name, type), ancestor side first.
+
+    Fails the test if `link` does not hang under `ancestor`.
+    """
+    parent_joint = {joint.find('child').get('link'): joint for joint in robot.findall('joint')}
+    chain = []
+    while link != ancestor:
+        assert link in parent_joint, f'{link} does not hang under {ancestor}'
+        joint = parent_joint[link]
+        chain.insert(0, (joint.get('name'), joint.get('type')))
+        link = joint.find('parent').get('link')
+    return chain
 
 
 def hardware_params(robot):
@@ -179,3 +200,18 @@ def test_supervisor_reads_the_names_of_this_description():
     assert params['fault_gpio'] in gpios
     driver = gpios[params['fault_gpio']]
     assert params['fault_interface'] in [s.get('name') for s in driver.findall('state_interface')]
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_camera_link_hangs_under_joint_6(backend):
+    """Check the frame_id of the real camera images is under joint 6, by fixed joints only."""
+    robot = expand(backend=backend)
+    assert 'camera_link' in [link.get('name') for link in robot.findall('link')]
+    # joint6_flange is the child of joint 6 (joint6output_to_joint6): the camera turns with it.
+    joint6 = [joint for joint in robot.findall('joint')
+              if joint.get('name') == 'joint6output_to_joint6']
+    assert len(joint6) == 1
+    flange = joint6[0].find('child').get('link')
+    chain = chain_to(robot, 'camera_link', flange)
+    assert chain  # at least one joint between the flange and the camera
+    assert all(kind == 'fixed' for _, kind in chain), chain
