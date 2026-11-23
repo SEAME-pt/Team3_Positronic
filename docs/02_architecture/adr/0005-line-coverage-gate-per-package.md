@@ -1,6 +1,7 @@
 # 0005. Line coverage gate: 80 % per package, report-only until #46
 
 2026-11-10, proposed, Wallace Gonçalves (issue #109).
+2026-11-23: blocking since #46, every package at 80 % or more (see "Revisit when").
 
 ## Context
 
@@ -74,7 +75,9 @@ workspace lets a well-tested package hide one without tests.
 
 ## Revisit when
 
-- #46 is done and every package is at 80 %: remove `continue-on-error`.
+- #46 is done and every package is at 80 %: remove `continue-on-error`. **Done 2026-11-23**
+  (#46): protocol 100 %, moveit_config 97.8 %, hardware 95.0 %, safety 88.3 %, mission 86.2 %,
+  bringup 82.4 %.
 - The coverage step makes CI too slow: run it only on pushes to `dev`, or reuse the Build step's
   output.
 - A package's code mostly runs only with ROS (nodes that need a live graph): decide per package

@@ -43,12 +43,19 @@ export USER_UID USER_GID
 # Let's the container's user open windows (like RViz) on your desktop.
 ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI:localuser:$$(id -un) > /dev/null; fi
 
-# The packages that talk to the arm or command it (hardware, protocol, mission). A warning here fails
-# the build (CI runs this).
+# The packages that talk to the arm or command it (hardware, protocol, mission, safety). A warning
+# here fails the build (CI runs this). Test files get only .clang-tidy's bugprone checks: the
+# command-line checks are added after .clang-tidy, so they switch every other family of it off
+# (ADR 0007). A new family in .clang-tidy goes here too (scripts/test_tidy_changed.py checks it).
 TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
+TIDY_TEST_FILES := ^/ws/src/[^/]+/test/
+TIDY_TEST_CHECKS := -cert-*,-clang-analyzer-*,-concurrency-*,-cppcoreguidelines-*,-misc-*,-modernize-*,-performance-*,-portability-*,-readability-*
+TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)'
+# What make tidy-changed compares with. CI sets it to HEAD^1 (the PR's merge commit's base).
+TIDY_BASE ?= origin/dev
 
 .DEFAULT_GOAL := help
-.PHONY: help image shell build test coverage format format-check tidy tidy-strict doctor clean fclean
+.PHONY: help image shell build test coverage format format-check tidy tidy-strict tidy-changed doctor clean fclean
 
 # Full output for make test and make format-check: "make test VERBOSE" or "make test VERBOSE=1".
 # Without =1, make reads VERBOSE as one more goal: it turns verbose on, and its rule does nothing.
@@ -74,12 +81,23 @@ build: ## colcon build
 
 # colcon's per package stderr is hidden: scripts/summarize_tests.py shows each failure once, at the end.
 # VERBOSE shows everything colcon prints, plus colcon test-result --verbose, before the summary.
+# Packages run in parallel (colcon's default) and so do the tests inside each one (ctest -j).
+# ROS_DOMAIN_ID is unset so the tests that talk over ROS (ament_add_ros_isolated_gtest) each get
+# a free domain: with it set (17, the arm's) they all share it and see each other's nodes (#144).
+# LOCALHOST: test nodes never discover anything on the network, like the arm's, whatever domain.
+# TEST_ALONE runs after the others, one test at a time: on a loaded CI runner, positronic_mission's
+# GoalSucceedsWhenIdle can miss the one feedback message the node sends (a race in the test).
+TEST_JOBS ?= 4
+TEST_ALONE := positronic_mission
+TEST_HANDLERS = $(if $(VERBOSE),,--event-handlers console_stderr-)
 test: ## colcon test, then a summary per package and each failure (VERBOSE: full output)
-	$(RUN) bash -c 'colcon test $(if $(VERBOSE),,--event-handlers console_stderr-); rc=$$?; \
+	$(RUN) bash -c 'unset ROS_DOMAIN_ID; export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; \
+	  colcon test $(TEST_HANDLERS) --packages-skip $(TEST_ALONE) --ctest-args -j$(TEST_JOBS); rc=$$?; \
+	  colcon test $(TEST_HANDLERS) --packages-select $(TEST_ALONE) || rc=$$?; \
 	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
-# CI runs it as report-only (continue-on-error) until #46.
+# CI runs it on every PR and blocks the merge below 80 % (#46).
 coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below 80 %
 	$(RUN) bash -c 'bash scripts/coverage.sh && python3 scripts/coverage_gate.py'
 
@@ -92,8 +110,12 @@ format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's ful
 tidy: ## clang-tidy on src/ (needs make build first)
 	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
 
+# scripts/tidy_changed.py: the selection, then clang-tidy in parallel, one line per file.
 tidy-strict: ## clang-tidy on the strict packages (TIDY_STRICT_FILES), any warning is an error (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build -warnings-as-errors="*" "$(TIDY_STRICT_FILES)"'
+	$(RUN) python3 scripts/tidy_changed.py --all $(TIDY_OPTIONS)
+
+tidy-changed: ## tidy-strict on only the files your branch can affect, vs TIDY_BASE=origin/dev (needs make build first)
+	$(RUN) python3 scripts/tidy_changed.py --base '$(TIDY_BASE)' $(TIDY_OPTIONS)
 
 doctor: ## Check the environment
 	$(ALLOW_X)

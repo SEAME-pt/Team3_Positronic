@@ -153,7 +153,7 @@
   </joint>
   <joint name="joint6output_to_camera_flange" type="fixed">
     <parent link="joint6_flange"/><child link="camera_flange"/>
-    <origin xyz="0 0 0.01" rpy="1.5708 0 0"/>
+    <origin xyz="0 0 0.01" rpy="1.5708 0 -1.5708"/>
   </joint>
   <link name="camera_flange">
     <visual>
@@ -172,7 +172,9 @@
   <link name="camera_link"/>
   <joint name="camera_flange_to_camera_link" type="fixed">
     <parent link="camera_flange"/><child link="camera_link"/>
-    <origin xyz="0.0415 0.0083 0.0000" rpy="0 0 1.5708"/>
+    <!-- The roll about the optical axis puts the gripper at the bottom of the image. The raw
+         image of the real camera matches it once turned 90 deg counterclockwise (#97). -->
+    <origin xyz="0.0415 0.0083 0.0000" rpy="1.5708 0 1.5708"/>
   </joint>
   <gazebo reference="camera_link">
     <sensor name="wrist_camera" type="camera">

@@ -16,6 +16,7 @@ find_package(positronic_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_msgs REQUIRED)
 
 set(dependencies
   rclcpp
@@ -27,6 +28,7 @@ set(dependencies
   geometry_msgs
   lifecycle_msgs
   moveit_ros_planning_interface
+  moveit_msgs
 )
 
 include_directories(
@@ -73,12 +75,13 @@ install(TARGETS
 )
 
 if(BUILD_TESTING)
-  # find_package(ament_lint_auto REQUIRED)
-  # ament_lint_auto_find_test_dependencies()
+  find_package(ament_lint_auto REQUIRED)
+  ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_ros REQUIRED)
 
-  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures)
+  foreach(test_name test_pose_validation test_goals test_lifecycle test_failures
+      test_moveit_backend)
     ament_add_ros_isolated_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mission_node_component)
     ament_target_dependencies(${test_name} ${dependencies})

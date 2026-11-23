@@ -34,10 +34,13 @@
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+#include "positronic_hardware/echo_timeout_report.hpp"
 #include "positronic_hardware/fake_arm.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
+#include "positronic_hardware/parameters.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
+#include "positronic_hardware/tracking_check.hpp"
 #include "positronic_hardware/velocity_estimator.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -56,7 +59,9 @@ enum class FaultCode : std::uint8_t
   /// No valid reply from the arm for LinkWatchdog::DEFAULT_TIMEOUT while active. Latched until
   /// the next activate.
   LINK_TIMEOUT = 1,
-  /// Reserved for S3, "the arm does not follow the target". Not raised yet.
+  /// A joint further than tracking_error_deg from the last target on the wire for longer than
+  /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
+  /// the next activate, targets held meanwhile, like the link timeout.
   TRACKING_ERROR = 2,
   /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
   /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
@@ -100,27 +105,9 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-  /// Where the joint angles come from.
-  enum class Backend : std::uint8_t
-  {
-    SERIAL,
-    FAKE
-  };
-
-  /// The <param> values of the <hardware> tag, checked in on_init. A parameter the URDF does
-  /// not set keeps its default.
-  struct Config
-  {
-    Backend backend{Backend::SERIAL};
-    std::string port{"/dev/ttyTHS1"};
-    int baud{1000000};
-    double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};
-    SerialArm::Timing timing{};
-    int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
-  };
-
-  /// Fills config_ from the <hardware> parameters. False, with an error logged, on an unknown
-  /// parameter or a bad value: a typo in the URDF must stop the driver, not be ignored.
+  /// Fills config_ from the <hardware> parameters through parameters.hpp, and logs the result:
+  /// the reason on a refusal, one INFO line with every value otherwise. A typo in the URDF must
+  /// stop the driver, not be ignored.
   bool read_parameters(const std::unordered_map<std::string, std::string> & parameters);
 
   /// Fills limits_ from the <limit> tags of the URDF (#34). It parses the URDF itself
@@ -147,6 +134,16 @@ private:
   /// arm for an overheat (after latching FaultCode::OVERHEAT), or when the component is active
   /// and the temperatures went stale.
   hardware_interface::return_type check_temperatures();
+  /// read()'s unfollowed-command check (#103), while active and without a fault: compares the
+  /// pose with the backend's last target and latches FaultCode::TRACKING_ERROR, with one log
+  /// line (joint, error, limits), once a joint has been off for too long.
+  void check_tracking();
+  /// read()'s report of the sends that got no sync-write (#150), while active: one warning line
+  /// with how many since the last one, at most every EchoTimeoutReport::DEFAULT_PERIOD, so turns
+  /// that got slow do not go unseen.
+  void report_echo_timeouts();
+  /// True while the component is ACTIVE: the only state in which targets go out and faults count.
+  [[nodiscard]] bool is_active() const;
 
   /// The interfaces of one joint, looked up once so read() and write() build no string: two
   /// states the plugin fills, one command the controller fills and the plugin sends.
@@ -161,19 +158,33 @@ private:
   /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
   void update_states(double dt);
 
-  Config config_{};
+  HardwareConfig config_{};
   std::unique_ptr<ArmBackend> arm_;
   VelocityEstimator velocity_estimator_;
+  TrackingCheck tracking_;
   std::array<JointHandles, NUM_JOINTS> handles_{};
   /// "driver/fault_code", looked up once like the joint handles.
   hardware_interface::StateInterface::SharedPtr fault_handle_;
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
+  /// The sum of the periods read() got, in ns: the clock of FakeArm (#122).
+  std::atomic<std::int64_t> control_time_ns_{0};
+
+  /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
+  /// whose count starts at zero.
+  EchoTimeoutReport echo_report_;
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
   PositionLimits limits_{};
+
+  bool has_gripper_{false};
+  double gripper_closed_{0.0};
+  double gripper_open_{0.0};
+  JointHandles gripper_handles_{};
+  double gripper_previous_{0.0};
+  bool gripper_previous_valid_{false};
 };
 
 }  // namespace positronic_hardware

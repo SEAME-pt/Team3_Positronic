@@ -37,7 +37,9 @@
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>python3-pytest</test_depend>
-  <!-- test_controllers_config.py reads jetson_controllers.yaml. -->
+  <!-- driver.launch.py reads update_rate from jetson_controllers.yaml (#150), and so does
+       test_controllers_config.py. -->
+  <exec_depend>python3-yaml</exec_depend>
   <test_depend>python3-yaml</test_depend>
   <!-- test_launch_files.py builds the launch descriptions. -->
   <test_depend>launch</test_depend>

@@ -103,7 +103,7 @@ The root filesystem microSD (TF) card is inside the base; replacement and re-ima
 | :--- | :--- |
 | Wi-Fi | Intel Wireless-AC 8265 (`iwlwifi`, PCIe `8086:24fd`), channel 36 (5.18 GHz) |
 | Wi-Fi network | ESSID `SEAME`, −45 dBm, 400 Mb/s, Tx 22 dBm |
-| Wi-Fi power saving | on |
+| Wi-Fi power saving | off (set on the active Wi-Fi profile by `positronic-driver.service`) |
 | Wi-Fi MAC | `58:a0:23:eb:34:2b` |
 | Bluetooth | Intel Bluetooth 4.2 (`hci0`, USB `8087:0a2b`, address `58:A0:23:EB:34:2F`) |
 | Ethernet | Realtek RTL8111/8168/8411 (`r8168`, PCIe `10ec:8168`), down |

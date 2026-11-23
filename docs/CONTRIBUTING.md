@@ -120,7 +120,7 @@ git switch 21-serial-protocol-library-in-c
 
 **3. Work.** Commit small and often (§2.4). Before every push:
 ```bash
-make format && make format-check && make build && make test     # plus make tidy for C++
+make format && make format-check && make build && make test     # plus make tidy-changed for C++
 ```
 *Why: CI runs the same checks. Catching problems locally takes seconds; in CI it costs a round trip.*
 
@@ -260,6 +260,27 @@ Date, status (proposed / accepted / superseded by NNNN), deciders.
 - **Ruleset for `main`:** the same, but the allowed merge method is **merge**.
 - **Actions:** require approval for workflows from outside contributors, and never run hardware jobs on `pull_request` events from forks. *Why: in a public repo, a stranger's fork could otherwise run code on our arm.*
 
+### 2.12 What CI runs
+
+[`ci.yml`](../.github/workflows/ci.yml) runs on every PR and every push to `dev` and `main`, as parallel jobs. The wall time is the longest job, not the sum: about 4 minutes when a PR changes a few files, up to about 7 when clang-tidy checks everything.
+
+| Job | What | Fails the PR |
+|---|---|---|
+| `lint` | `make format-check`, `make format` changes nothing, the tests of `scripts/` | yes |
+| `build-test` | `make build`, `make test` | yes |
+| `tidy` | `make build`, then `make tidy-changed` on a PR, `make tidy-strict` on a push | yes |
+| `coverage` | `make coverage` | yes, since #46 (ADR 0005) |
+| `jetson` | the Jetson image and `NANO_PACKAGES` built in it | yes |
+| `image` | pushes to `dev` only: publishes the CI image to GHCR | no |
+| `CI` | green only if every job above passed | this is the check to require |
+
+- A PR that only changes `docs/` or `.md` files skips every job but `CI`, which passes.
+- The builds use ccache, filled by the pushes to `dev`, so a PR only recompiles what it changed.
+- Each job pulls the CI image from GHCR (`ghcr.io/seame-pt/team3_positronic-ci`, tagged with a hash of the Dockerfile) when `dev` has published it, and builds it otherwise, for example on a PR that changes the Dockerfile.
+- Tests run in parallel, packages and the tests inside each one. A test that starts ROS uses `ament_add_ros_isolated_gtest` (or `_pytest`), so it gets a `ROS_DOMAIN_ID` of its own and can't see another test's nodes.
+
+*Why parallel jobs and changed files only: one job with everything in a row took 13.6 minutes per PR (#144). Feedback on a draft should take minutes. The full clang-tidy run still happens after every merge.*
+
 ---
 
 ## 3. Coding standards
@@ -275,7 +296,9 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | `make build` | `colcon build` |
 | `make test` | `colcon test`: unit tests, plus each package's linters (the same tools, plus `lint_cmake` and `xmllint`). Ends with one line per package and each failure ([`scripts/summarize_tests.py`](../scripts/summarize_tests.py)). `make test VERBOSE` (or `VERBOSE=1`) adds colcon's full output |
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
-| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); report-only in CI for now |
+| `make tidy-strict` | clang-tidy on the strict packages, every warning an error, test files with the `bugprone-*` checks only ([ADR 0007](02_architecture/adr/0007-clang-tidy-changed-files-on-prs.md)). CI runs it after each merge to `dev` |
+| `make tidy-changed` | `make tidy-strict` on only the files your branch can affect (changed `.cpp` files, and those that include a changed header). CI runs it on PRs. Compares with `origin/dev`; `TIDY_BASE=<ref>` to change it |
+| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); CI blocks the merge then |
 | Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
 
 **Why two formatters.** In `make test`, ROS checks C++ formatting with **uncrustify**, not clang-format. Our `.clang-format` is ROS's own clang-format config (`ament_clang_format`) plus a few options that make it agree with uncrustify. In a few places clang-format physically can't produce what uncrustify demands: the body of a lambda, the continuation lines of a wrapped `while`/`for` condition, and `case` blocks with braces. So `make format` runs clang-format first and uncrustify last. Uncrustify has the final word, and the result passes `make test`.
@@ -462,7 +485,7 @@ Never name a constant or enum value after a common macro (`ERROR`, `OK`, `TRUE`,
 
 **The rule:**
 - A PR adds **no new clang-tidy or cppcheck warnings** in the files it touches.
-- In `positronic_hardware`, `positronic_protocol`, `positronic_mission` and `positronic_safety` CI enforces it: `make tidy-strict` fails on any clang-tidy warning (ADR 0004).
+- In `positronic_hardware`, `positronic_protocol`, `positronic_mission` and `positronic_safety` CI enforces it: any clang-tidy warning fails, on the files a PR can affect (`make tidy-changed`) and on all of them after each merge to `dev` (`make tidy-strict`). Test files (`test/`) are checked with `bugprone-*` only ([ADR 0007](02_architecture/adr/0007-clang-tidy-changed-files-on-prs.md)).
 - If a warning is truly wrong, silence that one line with `// NOLINT(check-name)` and explain why in the PR.
 - Reviewers check this.
 
