@@ -145,6 +145,30 @@ TEST_F(MissionNodeTest, LifecycleFullClean)
   // cycle() asserts IDLE at the end
 }
 
+// MoveIt not ready: activation fails, the node stays INACTIVE, so it sends no heartbeat and the
+// safety supervisor will not enable the arm. Goals are rejected.
+TEST_F(MissionNodeTest, ActivationRefusedWhenBackendNotReady)
+{
+  ASSERT_EQ(node_->deactivate().id(), LifeState::PRIMARY_STATE_INACTIVE);
+  mock_->ready_result = false;
+
+  EXPECT_EQ(node_->activate().id(), LifeState::PRIMARY_STATE_INACTIVE);
+
+  // No heartbeat while inactive. Waiting is the only way to check that nothing arrives:
+  // 400 ms is 10 heartbeat periods (40 ms) and above the supervisor's 300 ms timeout.
+  last_state_ = 255;
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  EXPECT_EQ(last_state_, 255) << "Heartbeat sent while MoveIt is not ready";
+
+  EXPECT_EQ(send_goal(valid_pose()), nullptr);
+  EXPECT_EQ(mock_->pose_calls, 0);
+
+  // Once MoveIt is ready, activation works
+  mock_->ready_result = true;
+  ASSERT_EQ(node_->activate().id(), LifeState::PRIMARY_STATE_ACTIVE);
+  EXPECT_TRUE(wait_for_state(State::IDLE));
+}
+
 TEST_F(MissionNodeTest, Heartbeat)
 {
   heartbeat_count_ = 0;

@@ -50,6 +50,8 @@ inline constexpr std::uint8_t MIN_SPEED{1};
 /// Highest speed accepted by send_angles (percent of the firmware maximum).
 inline constexpr std::uint8_t MAX_SPEED{100};
 
+inline constexpr std::uint8_t GRIPPER_VALUE_MAX{100};
+
 /// Command ids of the Elephant serial protocol (myCobot 280).
 enum class CommandId : std::uint8_t
 {
@@ -59,7 +61,9 @@ enum class CommandId : std::uint8_t
   GET_ANGLES = 0x20,          ///< Read the six joint angles.
   SEND_ANGLES = 0x22,         ///< Move the six joints to the given angles.
   STOP = 0x29,                ///< Stop the current motion.
-  GET_SERVO_TEMPS = 0xE5,     ///< Read the six servo temperatures, degC.
+  GET_GRIPPER_VALUE = 0x65,
+  SET_GRIPPER_VALUE = 0x67,
+  GET_SERVO_TEMPS = 0xE5,  ///< Read the six servo temperatures, degC.
 };
 
 /// Joint angle in the wire unit: 0.01 deg, range +-327.67 deg.
@@ -73,6 +77,28 @@ using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 
 /// Six joint angles in radians (REP 103), as seen outside the driver.
 using JointRadians = std::array<double, NUM_JOINTS>;
+
+/// Servo-bus id of the gripper: it answers the Atom's poll too when plugged (#170), but it is
+/// not a joint.
+inline constexpr std::uint8_t GRIPPER_SERVO_ID{7};
+
+/// One servo's status frame, as the Atom's poll puts it on the line after a send_angles
+/// (`FF FF id 11 err` + 15 data bytes + checksum, #170). Raw register values, decoded from
+/// the little-endian bytes; the units are the servo's: position in steps of 360/4096 deg,
+/// speed in steps/s, load in 0.1 % of the drive (sign-magnitude on the wire, signed here),
+/// voltage in 0.1 V, temperature in degC.
+struct ServoStatus
+{
+  std::uint8_t id{0};
+  /// The servo's own error byte: 0 is fine, bits for voltage, overheat, overload.
+  std::uint8_t error{0};
+  std::uint16_t position{0};
+  std::int16_t speed{0};
+  std::int16_t load{0};
+  std::uint8_t voltage{0};
+  std::uint8_t temperature{0};
+  bool moving{false};
+};
 
 /// A complete frame ready to be written to the serial port.
 struct Frame

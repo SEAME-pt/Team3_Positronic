@@ -36,6 +36,13 @@
 //   frame cut at every position, a bad checksum, the other servo-bus frames, and our own replies.
 //   Then: an empty buffer, and a frame with a bad checksum followed by a good one, which is found
 //   with the bad start counted as rejected.
+// Follow-up prompt (#170, the servo status frames):
+//   decode_servo_status finds one servo status frame (FF FF id 11 err + 15 bytes + checksum):
+//   the recorded frame of servo 1 with its fields, the six frames of the recorded burst in order
+//   and nothing else in it, a frame cut at every position, a bad checksum alone and before a good
+//   one, the gripper (id 7), the error byte and the sign-magnitude speed and load, the sync-write
+//   and our replies are not it, an empty buffer. angle_from_steps against values pymycobot
+//   reported.
 
 #include <gtest/gtest.h>
 
@@ -578,4 +585,199 @@ TEST(DecodeSyncWrite, AGoodFrameAfterABadChecksumIsFound)
   ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
   EXPECT_EQ(result.consumed, rx.size());
   EXPECT_EQ(result.rejected, 1U);
+}
+
+// ---------------------------------------------------------------------------
+// #170: decode_servo_status, the frames of the Atom's poll
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+/// The servo-bus checksum: the inverted low byte of the sum from the id to the last data byte.
+Bytes with_servo_checksum(Bytes frame)
+{
+  unsigned int sum{0};
+  for (std::size_t i{2}; i + 1 < frame.size(); ++i) {
+    sum += frame.at(i);
+  }
+  frame.back() = static_cast<std::uint8_t>(~sum);
+  return frame;
+}
+
+/// The status frame of servo 1 in RECORDED_AFTER_SEND: position 2024, 12.1 V, 35 degC.
+const Bytes STATUS_FRAME_1{
+  parse_hex("ff ff 01 11 00 e8 07 00 00 00 00 79 23 00 00 00 e8 07 00 00 73")};
+
+}  // namespace
+
+TEST(DecodeServoStatus, RecordedFrameFromArm)
+{
+  const auto result{pp::decode_servo_status(view_of(STATUS_FRAME_1))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.consumed, STATUS_FRAME_1.size());
+  EXPECT_EQ(result.rejected, 0U);
+  EXPECT_EQ(result.value.id, 1);
+  EXPECT_EQ(result.value.error, 0);
+  EXPECT_EQ(result.value.position, 2024);
+  EXPECT_EQ(result.value.speed, 0);
+  EXPECT_EQ(result.value.load, 0);
+  EXPECT_EQ(result.value.voltage, 121);
+  EXPECT_EQ(result.value.temperature, 35);
+  EXPECT_FALSE(result.value.moving);
+}
+
+TEST(DecodeServoStatus, TheSixFramesOfTheRecordedBurstInOrderAndNothingElse)
+{
+  // The ack, the ping of servo 7, the sync-read and the sync-write in the burst are not status
+  // frames: six frames come out, ids 1 to 6, then NOT_FOUND with the rest consumed.
+  constexpr std::array<std::uint16_t, 6> POSITIONS{2024, 2050, 2123, 2112, 2068, 2271};
+  Bytes rx{RECORDED_AFTER_SEND};
+  for (std::size_t joint{0}; joint < 6; ++joint) {
+    const auto result{pp::decode_servo_status(view_of(rx))};
+    ASSERT_EQ(result.status, pp::DecodeStatus::FOUND) << joint;
+    EXPECT_EQ(result.value.id, joint + 1);
+    EXPECT_EQ(result.value.position, POSITIONS.at(joint));
+    EXPECT_EQ(result.value.error, 0);
+    rx.erase(rx.begin(), rx.begin() + static_cast<std::ptrdiff_t>(result.consumed));
+  }
+  const auto rest{pp::decode_servo_status(view_of(rx))};
+  EXPECT_EQ(rest.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(rest.consumed, rx.size());
+}
+
+TEST(DecodeServoStatus, EveryCutPosition)
+{
+  for (std::size_t cut{1}; cut < STATUS_FRAME_1.size(); ++cut) {
+    const auto result{pp::decode_servo_status(prefix_of(STATUS_FRAME_1, cut))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NEED_MORE_DATA) << "cut " << cut;
+    EXPECT_EQ(result.consumed, 0U) << "cut " << cut;
+  }
+}
+
+TEST(DecodeServoStatus, BadChecksumIsRejectedAndTheNextGoodFrameIsFound)
+{
+  Bytes bad{STATUS_FRAME_1};
+  bad.back() = static_cast<std::uint8_t>(bad.back() + 1);
+  const auto alone{pp::decode_servo_status(view_of(bad))};
+  EXPECT_EQ(alone.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(alone.consumed, bad.size());
+  EXPECT_EQ(alone.rejected, 1U);
+
+  const Bytes both{concat({bad, STATUS_FRAME_1})};
+  const auto result{pp::decode_servo_status(view_of(both))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.consumed, both.size());
+  EXPECT_EQ(result.rejected, 1U);
+  EXPECT_EQ(result.value.position, 2024);
+}
+
+TEST(DecodeServoStatus, TheGripperAnswersToo)
+{
+  Bytes frame{STATUS_FRAME_1};
+  frame.at(2) = pp::GRIPPER_SERVO_ID;
+  frame = with_servo_checksum(frame);
+  const auto result{pp::decode_servo_status(view_of(frame))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value.id, pp::GRIPPER_SERVO_ID);
+}
+
+TEST(DecodeServoStatus, ErrorByteSpeedLoadAndMovingAreDecoded)
+{
+  // Servo 5 pushing backwards: error byte 0x20, speed -100 steps/s (0x8064), load -5.6 %
+  // (0x0438: sign bit 10), moving.
+  Bytes frame{parse_hex("ff ff 05 11 20 0c 08 64 80 38 04 4b 30 00 00 80 0c 08 00 00 00")};
+  frame = with_servo_checksum(frame);
+  const auto result{pp::decode_servo_status(view_of(frame))};
+  ASSERT_EQ(result.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(result.value.id, 5);
+  EXPECT_EQ(result.value.error, 0x20);
+  EXPECT_EQ(result.value.position, 2060);
+  EXPECT_EQ(result.value.speed, -100);
+  EXPECT_EQ(result.value.load, -56);
+  EXPECT_EQ(result.value.voltage, 75);
+  EXPECT_EQ(result.value.temperature, 48);
+  EXPECT_TRUE(result.value.moving);
+}
+
+TEST(DecodeServoStatus, AnIdOutsideOneToSevenOrAWrongLengthIsRejected)
+{
+  // A good checksum each time, so the id or the LEN is the only fault.
+  for (const std::uint8_t id : {std::uint8_t{0}, std::uint8_t{8}}) {
+    Bytes frame{STATUS_FRAME_1};
+    frame.at(2) = id;
+    frame = with_servo_checksum(frame);
+    const auto result{pp::decode_servo_status(view_of(frame))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND) << static_cast<int>(id);
+    EXPECT_EQ(result.rejected, 1U) << static_cast<int>(id);
+  }
+  Bytes frame{STATUS_FRAME_1};
+  frame.at(3) = 0x12;
+  frame = with_servo_checksum(frame);
+  const auto result{pp::decode_servo_status(view_of(frame))};
+  EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(result.rejected, 1U);
+}
+
+TEST(DecodeServoStatus, APositionPastOneTurnIsRejected)
+{
+  // 4095 steps is the last of a turn. Past it no servo reports: a corrupt frame whose checksum
+  // happened to match, which would otherwise wrap into a plausible angle (8000 steps: 132 deg).
+  const auto with_position{[](std::uint16_t position) {
+      Bytes frame{STATUS_FRAME_1};
+      frame.at(5) = static_cast<std::uint8_t>(position & 0xFFU);
+      frame.at(6) = static_cast<std::uint8_t>(position >> 8U);
+      return with_servo_checksum(frame);
+    }};
+  const auto last{pp::decode_servo_status(view_of(with_position(4095)))};
+  ASSERT_EQ(last.status, pp::DecodeStatus::FOUND);
+  EXPECT_EQ(last.value.position, 4095);
+  // 32767, not 65535: FF FF inside the frame would be a second candidate, rejected too.
+  for (const std::uint16_t position :
+    {std::uint16_t{4096}, std::uint16_t{8000}, std::uint16_t{32767}})
+  {
+    const auto result{pp::decode_servo_status(view_of(with_position(position)))};
+    EXPECT_EQ(result.status, pp::DecodeStatus::NOT_FOUND) << position;
+    EXPECT_EQ(result.rejected, 1U) << position;
+  }
+}
+
+TEST(DecodeServoStatus, OtherFramesAreNotIt)
+{
+  EXPECT_EQ(
+    pp::decode_servo_status(view_of(RECORDED_SYNC_WRITE)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(pp::decode_servo_status(view_of(ANGLES_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(pp::decode_servo_status(view_of(TEMPS_FRAME)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(
+    pp::decode_sync_write_echo(view_of(STATUS_FRAME_1)).status, pp::DecodeStatus::NOT_FOUND);
+  EXPECT_EQ(pp::decode_servo_status(pp::ByteView{}).status, pp::DecodeStatus::NOT_FOUND);
+}
+
+// The Atom's conversion truncates toward zero. Pairs read on the arm, a status frame and the
+// get_angles reply of the same poll: J1 at 1994 steps was 474 (tap_final_33, 20 Nov 2026), J2 at
+// 2053 was -43 (tap_final3_33, 20 Nov). Rounding would give 475 and -44.
+TEST(DecodeServoStatus, AngleFromSteps)
+{
+  EXPECT_EQ(pp::angle_from_steps(2048, 0), 0);
+  EXPECT_EQ(pp::angle_from_steps(1994, 0), 474);
+  EXPECT_EQ(pp::angle_from_steps(2053, 1), -43);
+  EXPECT_EQ(pp::angle_from_steps(2060, 4), -105);
+  EXPECT_EQ(pp::angle_from_steps(3758, 2), 15029);
+  EXPECT_EQ(pp::angle_from_steps(1623, 3), 3735);
+  // The ends of the servo range: inside int16, and J3 mirrored.
+  EXPECT_EQ(pp::angle_from_steps(0, 0), 18000);
+  EXPECT_EQ(pp::angle_from_steps(4095, 0), -17991);
+  EXPECT_EQ(pp::angle_from_steps(0, 2), -18000);
+}
+
+TEST(DecodeServoStatus, AngleFromStepsEqualsTheAtomsReplyToTheSamePoll)
+{
+  // get_angles_19 of frames_20261016_124447.txt: the six status frames of one poll and the
+  // get_angles reply built from it. Rounding would be wrong on five of the six (-9, -18, -62,
+  // 44, 62).
+  constexpr std::array<std::uint16_t, 6> STEPS{2049, 2050, 2041, 2062, 2043, 2041};
+  constexpr std::array<pp::CentiDegrees, 6> REPLY{-8, -17, -61, -123, 43, 61};
+  for (std::size_t joint{0}; joint < STEPS.size(); ++joint) {
+    EXPECT_EQ(pp::angle_from_steps(STEPS.at(joint), joint), REPLY.at(joint)) << joint;
+  }
 }

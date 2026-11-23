@@ -25,6 +25,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -40,18 +41,30 @@ public:
   // Knobs a test can change between goals
   std::atomic<int> duration_ms{1000};
   std::atomic<MotionOutcome> outcome{MotionOutcome::OK};
+  std::atomic<bool> ready_result{true};
 
   // Counters a test can check
   std::atomic<int> pose_calls{0};
   std::atomic<int> cartesian_calls{0};
   std::atomic<int> stops{0};
 
-  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & /* pose */) override
+  // The pose of the last plan_and_execute call
+  geometry_msgs::msg::PoseStamped last_pose()
   {
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    return last_pose_;
+  }
+
+  MotionOutcome plan_and_execute(
+    const geometry_msgs::msg::PoseStamped & pose) override
+  {
+    {
+      std::lock_guard<std::mutex> lock(pose_mutex_);
+      last_pose_ = pose;
+    }
     ++pose_calls;
     return mock_execute();
   }
-
   MotionOutcome plan_and_execute_cartesian(
     const std::vector<geometry_msgs::msg::Pose> & /* waypoints */) override
   {
@@ -72,10 +85,12 @@ public:
 
   bool ready() override
   {
-    return true;
+    return ready_result.load();
   }
 
 private:
+  std::mutex pose_mutex_;
+  geometry_msgs::msg::PoseStamped last_pose_;
   std::atomic<bool> stop_requested_{false};
 
   MotionOutcome mock_execute()

@@ -102,8 +102,8 @@ test registered with `ament_add_ros_isolated_gtest` gets a free domain: a new te
 everything a second time with coverage on, in `build_cov/` and `install_cov/`, so your normal build
 is untouched; expect it to take about as long as `make build` plus `make test`. It prints one line per
 package and fails if any package is below 80 % (the total is only for information). The data goes to
-`coverage/`. CI runs it on every PR in report-only mode: the table is in the job summary and a
-failure doesn't block the merge yet (ADR 0005, #46).
+`coverage/`. CI runs it on every PR: the table is in the job summary, and a package below 80 % blocks the
+merge (ADR 0005, #46).
 
 **`make format`**: rewrites C++ files in `src/` with clang-format (`.clang-format`), then ROS's uncrustify. It changes files, so check
 `git diff` afterwards. **`make format-check`** only reports problems, without changing anything; use

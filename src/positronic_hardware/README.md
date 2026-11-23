@@ -44,12 +44,22 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
   for a target it refuses, such as one outside its own joint limits (J4 below about −129° on
   19 Nov 2026), and every such turn then lasts about 68 ms. A turn lasts 10 ms while the arm
   stands still and `moving_period_ms` after a send, about 27 ms of it busy. The arm drops a
-  frame that arrives while it is still answering, so nothing is sent before the reply.
+  frame that arrives while it is still answering, so nothing is sent before the reply. With
+  `pose_from_poll` (#170, on by default) the controller's `write()` wakes the thread and the
+  send goes out at once; the servo status frames read before the sync-write are the pose, so
+  no `get_angles` follows a send while they are whole (numbers in
+  `docs/03_verification/write_sweep`).
 - `read()` copies the newest pose out of the buffer and runs the velocity filter. `write()`
   checks the six commands against the joint limits and copies them into the buffer. Neither
   does serial I/O, allocates or throws; the only log is the one line of a refused command.
-- A target equal to the last one sent is not sent again. A target with a NaN or an angle out
-  of the protocol range is skipped and the previous one stays.
+  Two short locks sit on the path of `write()`: the command buffer's (`RealtimeBuffer`, as before
+  #170) and, with `pose_from_poll`, `wake_mutex_`, which `write()` and a halt take for one store
+  before they wake the serial thread. The serial thread holds it as briefly, never while it reads
+  the line.
+- Without the pose from the poll, a target equal to the last one sent is not sent again. With
+  it, a write that wakes the thread sends even an unchanged target, so the pose keeps coming
+  from the poll, unless the last send got no sync-write or the gripper is due. A target with a
+  NaN or an angle out of the protocol range is skipped and the previous one stays.
 
 ## Use it in a URDF
 
@@ -155,6 +165,64 @@ work around it. It stops the arm and cuts its power.
   few degrees above the current reading cuts the arm after a few minutes of motion, without
   heating anything.
 
+## Gripper (#123)
+
+The adaptive gripper is an optional seventh joint, `gripper_controller`, after J6 in the
+`<ros2_control>` block, with the same interfaces as the others (`position` and `velocity`
+states, one `position` command, `<limits enable="false"/>`). `on_init` accepts six or seven
+joints; with seven, the gripper joint needs a revolute `<limit>` with `lower < upper`, or the
+driver refuses to start. `positronic_real.urdf.xacro` uses
+`mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf`, the same arm as Gazebo and MoveIt, so
+the gripper goes through the same `GripperCommand` action (`gripper_action_controller`,
+`position_controllers/GripperActionController`, in `jetson_controllers.yaml`).
+
+**Mapping.** Linear between the URDF limits and the firmware value (`0x67` / `0x65`, see
+`positronic_protocol`):
+
+| URDF (rad) | Firmware value | Gripper |
+|---|---|---|
+| `lower` = -0.74 | 0 | closed |
+| `upper` = 0.15 | 100 | open |
+
+`value = round((rad - lower) / (upper - lower) * 100)`, and back `rad = lower + value / 100 *
+(upper - lower)`, kept inside `[lower, upper]`. One firmware step is 0.0089 rad. The velocity
+state is the difference of two positions over the control period.
+
+**Tolerance.** `gripper_action_controller` uses its `goal_tolerance` (0.01 rad by default,
+just over one firmware step) and `allow_stalling: true`: an adaptive gripper that closes on an
+object stops short of the target, and that is a success, not an error. Measured on the arm, 15
+goals (open, closed, half): all reached, largest error 0.0089 rad, one firmware step
+(`docs/03_verification/gripper_on_the_arm/README.md`).
+
+**Commands.** `write()` checks the gripper command like a joint (#34): NaN, infinity or a value
+outside the URDF limits is refused, the arm halts and `write()` returns ERROR. A valid command is
+converted to the firmware value and handed to the serial thread through a buffer.
+
+**The idle turn.** The serial thread serves the gripper only in a turn where the arm answered
+`get_angles`, no arm target is sent, no temperature was asked and no stop or power on is
+pending. A new gripper value goes out as one `set_gripper_value` at speed 20, followed by the
+30 ms settle (`SerialTiming::send_settle`); otherwise, every 100 ms, a `get_gripper_value` waits up to 50 ms for
+its reply. So a gripper frame never waits behind an arm command and a turn never adds the
+gripper to a temperature request: the link timeout of 200 ms (#35) is never tripped by the
+gripper. While halted no gripper value is sent; `power_on()` drops the value held during the
+halt, so after a resume the gripper only moves on a new command. With the pose from the poll
+(#170) every write of the controller is sent, even an unchanged one, so at rest no turn would
+be left for the gripper: there the repeated send gives way to a gripper that is due (a new
+value, or the 100 ms read). The turn after it asks `get_angles`, as above, and the thread
+polls `get_angles` until a write wakes it again, as it did before #170. While the command
+changes, the gripper waits, as above.
+
+**Activation.** `on_activate` also waits for a first gripper reading and refuses to activate
+("The gripper did not answer within ... ms") if none comes. `FakeArm` starts open (100) and is at
+every gripper target at once.
+
+**Tests.** `test_serial_arm` (`SerialArmGripper.*`: reads while idle, one send after a
+`get_angles` reply, waits while the arm has targets, halt and power on, no gripper frame without
+a gripper, the link never times out while the gripper is served, with the replay transport) and
+`test_load_robot_system` (the seventh joint, its limits, mapping at the limits, refused targets,
+velocity, activation without a gripper reply). The recorded frames are checked in
+`positronic_protocol` (`test_recorded_gripper.cpp`).
+
 ## Parameters
 
 All optional. An unknown name (a typo) or a bad value makes `on_init` fail with a message that
@@ -167,6 +235,7 @@ says which one.
 | `baud`                  | `1000000`      | `115200`, `1000000`  | Baud rate                        |
 | `velocity_filter_alpha` | `0.3`          | (0, 1]               | Low-pass weight of the velocity: closer to 1 follows faster but is noisier |
 | `moving_period_ms`      | `33`           | 20 to 100            | One serial turn after a `send_angles`: a `get_angles`, the send and the wait for the Atom's sync-write (#150), about 27 ms. 33 is one control period at 30 Hz: 10 minutes on the arm with no stall (`docs/03_verification/write_sweep`). At most half the 200 ms link timeout (#35), so one lost reply never trips it |
+| `pose_from_poll`        | `true`         | `true`, `false`      | The pose from the Atom's own poll of the servos, published when its sync-write closes, and the send right after the controller's `write()` (#170). 10 min at 33 ms on 20 Nov 2026: 18007 sends, 9 `get_angles`, 0 lost, 0 stalls, send intervals p50 33.3 / p99 41.7 ms, 1.3 % over 40 ms. `false` is the #150 turn: a `get_angles` every turn, the period from the thread's clock |
 | `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 80, two lost replies after it fill the 200 ms link timeout (#35). The wait of the overheat cut between its stop and its power off, 30 ms, is a constant now (`SerialTiming::send_settle`): until #150 it was `send_settle_ms`, the wait after every send |
 | `servo_temp_limit_c`    | `60`           | 30 to 60             | A servo at or above this temperature, two readings in a row, stops the arm and powers it off. Only lower, to test the cut |
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |

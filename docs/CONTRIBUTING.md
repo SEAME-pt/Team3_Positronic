@@ -269,7 +269,7 @@ Date, status (proposed / accepted / superseded by NNNN), deciders.
 | `lint` | `make format-check`, `make format` changes nothing, the tests of `scripts/` | yes |
 | `build-test` | `make build`, `make test` | yes |
 | `tidy` | `make build`, then `make tidy-changed` on a PR, `make tidy-strict` on a push | yes |
-| `coverage` | `make coverage` | not yet: report-only until #46 (ADR 0005) |
+| `coverage` | `make coverage` | yes, since #46 (ADR 0005) |
 | `jetson` | the Jetson image and `NANO_PACKAGES` built in it | yes |
 | `image` | pushes to `dev` only: publishes the CI image to GHCR | no |
 | `CI` | green only if every job above passed | this is the check to require |
@@ -298,7 +298,7 @@ Our style is the **ROS 2 code style, as enforced by the ROS 2 Jazzy lint tools**
 | `make tidy` | clang-tidy with our `.clang-tidy`. Run `make build` first |
 | `make tidy-strict` | clang-tidy on the strict packages, every warning an error, test files with the `bugprone-*` checks only ([ADR 0007](02_architecture/adr/0007-clang-tidy-changed-files-on-prs.md)). CI runs it after each merge to `dev` |
 | `make tidy-changed` | `make tidy-strict` on only the files your branch can affect (changed `.cpp` files, and those that include a changed header). CI runs it on PRs. Compares with `origin/dev`; `TIDY_BASE=<ref>` to change it |
-| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); report-only in CI for now |
+| `make coverage` | Line coverage of `src/` per package, in a separate build (`build_cov/`). Fails if a package is below 80 % ([ADR 0005](02_architecture/adr/0005-line-coverage-gate-per-package.md)); CI blocks the merge then |
 | Dev container | Not a command: open the repo in the dev container (README, "Errors and warnings in your editor") and clangd shows compiler errors and clang-tidy warnings as you type |
 
 **Why two formatters.** In `make test`, ROS checks C++ formatting with **uncrustify**, not clang-format. Our `.clang-format` is ROS's own clang-format config (`ament_clang_format`) plus a few options that make it agree with uncrustify. In a few places clang-format physically can't produce what uncrustify demands: the body of a lambda, the continuation lines of a wrapped `while`/`for` condition, and `case` blocks with braces. So `make format` runs clang-format first and uncrustify last. Uncrustify has the final word, and the result passes `make test`.

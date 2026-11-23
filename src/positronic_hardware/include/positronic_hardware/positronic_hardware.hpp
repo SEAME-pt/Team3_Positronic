@@ -176,6 +176,13 @@ private:
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
   PositionLimits limits_{};
+
+  bool has_gripper_{false};
+  double gripper_closed_{0.0};
+  double gripper_open_{0.0};
+  JointHandles gripper_handles_{};
+  double gripper_previous_{0.0};
+  bool gripper_previous_valid_{false};
 };
 
 }  // namespace positronic_hardware

@@ -98,6 +98,8 @@
 // Follow-up prompt (#150):
 //   echo_timeout_ms replaces send_settle_ms as the parameter: the old name is refused, a value
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
+// Follow-up prompt (#170):
+//   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -114,6 +116,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -771,7 +774,7 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -796,6 +799,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"echo_timeout_ms", "100"},         // two lost replies after it would pass the #35 timeout
     {"echo_timeout_ms", "slow"},        // not a number
     {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
+    {"pose_from_poll", "maybe"},        // true or false only (#170)
     {"servo_temp_limit_c", "61"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
@@ -1272,6 +1276,36 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
   ::close(controller_);
 }
 
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review H1: on a clean exit the controller manager takes the component from ACTIVE
+//   straight to FINALIZED; check that a stop reaches the arm on the way.
+
+TEST_F(LoadRobotSystem, ShutdownFromActiveSendsAStop)
+{
+  // A clean exit (Ctrl+C, launch stopped): the controller manager's pre-shutdown callback takes
+  // every component to FINALIZED. From ACTIVE, ros2_control runs on_deactivate (which sends the
+  // stop and waits for its ack) and then on_shutdown (which closes the port). Our safety on exit
+  // depends on that order in code we do not own: this test locks it in.
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  const std::size_t stops_before{arm->received_requests(0x29)};
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED,
+      hardware_interface::lifecycle_state_names::FINALIZED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED);
+  // halt() returns only once the arm acknowledged the stop, so it has already arrived.
+  EXPECT_GT(arm->received_requests(0x29), stops_before) << "No stop reached the arm on shutdown";
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
 TEST_F(LoadRobotSystem, InitRejectsAMissingOrWrongFaultInterface)
 {
   // #35: without its fault interface the supervisor would read nothing, so the driver refuses
@@ -1553,4 +1587,141 @@ TEST_F(LoadRobotSystem, InitRejectsABadTrackingParameter)
     EXPECT_FALSE(loaded_) << name << "=" << value;
     EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) << name;
   }
+}
+
+namespace
+{
+
+constexpr char GRIPPER[]{"gripper_controller"};
+constexpr double GRIPPER_CLOSED{-0.74};
+constexpr double GRIPPER_OPEN{0.15};
+constexpr std::string_view GRIPPER_LIMIT{
+  R"(<limit effort="10.0" lower="-0.74" upper="0.15" velocity="1.0"/>)"};
+
+std::string read_gripper_description()
+{
+  const std::string path{
+    ament_index_cpp::get_package_share_directory("positronic_description") +
+    "/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"};
+  const std::ifstream file{path};
+  std::stringstream content;
+  content << file.rdbuf();
+  return content.str();
+}
+
+std::string urdf_with_gripper(const std::string & description = read_gripper_description())
+{
+  return urdf_with(all_good_joints() + good_joint(GRIPPER), FAKE_BACKEND, description);
+}
+
+}  // namespace
+
+TEST_F(LoadRobotSystem, GripperDescriptionHasTheGripperLimit)
+{
+  EXPECT_NE(read_gripper_description().find(GRIPPER_LIMIT), std::string::npos);
+}
+
+TEST_F(LoadRobotSystem, InitAcceptsTheGripperAsASeventhJoint)
+{
+  auto & resource_manager{load(urdf_with_gripper())};
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  const std::string gripper{GRIPPER};
+  const auto states{resource_manager.state_interface_keys()};
+  EXPECT_NE(std::find(states.begin(), states.end(), gripper + "/position"), states.end());
+  EXPECT_NE(std::find(states.begin(), states.end(), gripper + "/velocity"), states.end());
+  const auto commands{resource_manager.command_interface_keys()};
+  EXPECT_NE(std::find(commands.begin(), commands.end(), gripper + "/position"), commands.end());
+}
+
+TEST_F(LoadRobotSystem, InitRejectsAGripperWithSwappedLimits)
+{
+  load(urdf_with_gripper(replaced(
+    read_gripper_description(), GRIPPER_LIMIT,
+    R"(<limit effort="10.0" lower="0.15" upper="-0.74" velocity="1.0"/>)")));
+  EXPECT_FALSE(loaded_);
+}
+
+TEST_F(LoadRobotSystem, GripperStartsAtItsMeasuredValue)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(state(GRIPPER, "position").value_or(std::nan("")), GRIPPER_OPEN);
+  EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(state(GRIPPER, "position").value_or(std::nan("")), GRIPPER_OPEN);
+  EXPECT_EQ(state(GRIPPER, "velocity").value_or(std::nan("")), 0.0);
+}
+
+TEST_F(LoadRobotSystem, GripperTargetsReachTheFakeArm)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  for (const double target : {GRIPPER_CLOSED, (GRIPPER_CLOSED + GRIPPER_OPEN) / 2.0,
+      GRIPPER_OPEN})
+  {
+    ASSERT_TRUE(command(GRIPPER, target));
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK) << target;
+    ASSERT_EQ(read_once(), hardware_interface::return_type::OK) << target;
+    EXPECT_NEAR(state(GRIPPER, "position").value_or(std::nan("")), target, 1e-9) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, GripperVelocityFollowsThePosition)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  ASSERT_TRUE(command(GRIPPER, GRIPPER_CLOSED));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(GRIPPER, "velocity").value_or(std::nan("")), (GRIPPER_CLOSED - GRIPPER_OPEN) / 0.01,
+    1e-6);
+}
+
+TEST_F(LoadRobotSystem, WriteRefusesAGripperTargetPastItsLimits)
+{
+  for (const double target :
+    {GRIPPER_OPEN + 5.0 * DEG, GRIPPER_CLOSED - 5.0 * DEG, std::nan(""),
+      std::numeric_limits<double>::infinity()})
+  {
+    load(urdf_with_gripper());
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+    ASSERT_TRUE(command(GRIPPER, target));
+    EXPECT_EQ(write_once(), hardware_interface::return_type::ERROR) << target;
+    EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, WriteSendsAGripperTargetExactlyAtItsLimits)
+{
+  for (const double target : {GRIPPER_CLOSED, GRIPPER_OPEN}) {
+    load(urdf_with_gripper());
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+    ASSERT_TRUE(command(GRIPPER, target));
+    EXPECT_EQ(write_once(), hardware_interface::return_type::OK) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
+{
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_LT(find_request(arm->received(), 0x65), arm->received().size());
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
 }

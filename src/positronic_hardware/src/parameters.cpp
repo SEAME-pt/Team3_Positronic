@@ -109,7 +109,7 @@ constexpr std::array NUMERIC_PARAMETERS{
 /// The <param> names that are not a number in a range, each with its own rule in read_special().
 constexpr std::array SPECIAL_NAMES{
   std::string_view{"backend"}, std::string_view{"port"}, std::string_view{"baud"},
-  std::string_view{"velocity_filter_alpha"}};
+  std::string_view{"velocity_filter_alpha"}, std::string_view{"pose_from_poll"}};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(const Parameters & parameters, std::string_view key)
@@ -162,7 +162,7 @@ std::string read_numeric(
          std::to_string(std::lround(parameter.max)) + "].";
 }
 
-/// The four SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
+/// The five SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
 std::string read_special(const Parameters & parameters, HardwareConfig & config)
 {
   if (const std::string * backend{find_parameter(parameters, "backend")}) {
@@ -195,6 +195,13 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
       return "Parameter 'velocity_filter_alpha' is '" + *alpha + "'; use a number in (0, 1].";
     }
     config.velocity_filter_alpha = value;
+  }
+  if (const std::string * poll{find_parameter(parameters, "pose_from_poll")}) {
+    // #170: the pose from the Atom's poll and the write-triggered turn, or the #150 turn.
+    if (*poll != "true" && *poll != "false") {
+      return "Parameter 'pose_from_poll' is '" + *poll + "'; use 'true' or 'false'.";
+    }
+    config.timing.pose_from_poll = (*poll == "true");
   }
   return {};
 }
@@ -270,13 +277,18 @@ std::string describe(const HardwareConfig & config)
   if (config.backend == Backend::SERIAL) {
     backend = "serial";
   }
+  std::string poll{"off"};
+  if (config.timing.pose_from_poll) {
+    poll = "on";
+  }
   std::ostringstream line;
   line << std::fixed << "Backend '" << backend << "', port " << config.port << " at " << config.baud
        << " baud, velocity filter alpha " << std::setprecision(3) << config.velocity_filter_alpha
        << ", moving period " << config.timing.moving_period.count() << " ms, echo timeout "
-       << config.timing.echo_timeout.count() << " ms, servo temperature limit "
-       << config.servo_temp_limit_c << " degC, tracking error " << std::setprecision(1)
-       << config.tracking_error_deg << " deg for " << config.tracking_error_ms << " ms.";
+       << config.timing.echo_timeout.count() << " ms, pose from poll " << poll
+       << ", servo temperature limit " << config.servo_temp_limit_c << " degC, tracking error "
+       << std::setprecision(1) << config.tracking_error_deg << " deg for "
+       << config.tracking_error_ms << " ms.";
   return line.str();
 }
 

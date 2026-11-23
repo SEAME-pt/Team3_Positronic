@@ -27,6 +27,8 @@ FE FE LEN CMD [DATA...] FA        LEN = N + 2 for N data bytes; the frame has LE
 | get_angles  | `0x20` | `FE FE 02 20 FA`                            | `FE FE 0E 20` + 6 x int16 + `FA` (17 B)|
 | send_angles | `0x22` | `FE FE 0F 22` + 6 x int16 + speed + `FA`    | `FE FE 03 22 01 FA`                    |
 | stop        | `0x29` | `FE FE 02 29 FA`                            | `FE FE 03 29 01 FA`                    |
+| get_gripper_value | `0x65` | `FE FE 02 65 FA`                      | `FE FE 03 65` + value 0 to 100 + `FA`  |
+| set_gripper_value | `0x67` | `FE FE 04 67` + value 0 to 100 + speed + `FA` | none read                    |
 | get_servo_temps | `0xE5` | `FE FE 02 E5 FA`                        | `FE FE 08 E5` + 6 x uint8 degC + `FA` (11 B) |
 
 `release_all_servos` turns the torque off but keeps the servos powered: the arm goes limp
@@ -37,6 +39,10 @@ hand. `power_off` also cuts the torque, but then get_angles gets no reply at all
 2026-11-13 and matched pymycobot 4.0.4 (one unsigned byte per servo, degC, J1 first). The
 decoder rejects any other length rather than misread it. To check an arm, with the driver
 stopped, on the Jetson host: `python3 -c "from pymycobot import MyCobot280; print(MyCobot280('/dev/ttyTHS1', 1000000).get_servo_temps())"` must print six temperatures, not `-1`.
+
+The gripper value is 0 (closed) to 100 (open), the scale pymycobot uses. `encode_set_gripper_value`
+returns `nullopt` for a value above 100 or a speed outside 1 to 100. The `get_gripper_value` reply
+has the shape of an ack, so `decode_ack(..., CommandId::GET_GRIPPER_VALUE)` reads it.
 
 The servo bus (Feetech style, `FF FF id len ...`) shares the UART. Up to ~150 bytes of it
 arrive before a get_angles reply, and it keeps flowing while the arm moves. It contains
@@ -58,6 +64,10 @@ pp::Decoded<pp::JointAngles> reply{pp::decode_get_angles_reply(rx)};
 pp::Decoded<std::uint8_t> ack{pp::decode_ack(rx, pp::CommandId::STOP)};
 pp::Decoded<pp::ServoTemperatures> temps{pp::decode_servo_temps_reply(rx)};  // degC, J1 first
 pp::Decoded<std::uint8_t> echo{pp::decode_sync_write_echo(rx)};  // the Atom's sync-write (#150)
+pp::Decoded<pp::ServoStatus> servo{pp::decode_servo_status(rx)};  // one servo's status frame (#170)
+if (servo.value.id < pp::GRIPPER_SERVO_ID) {  // joints only: the gripper (id 7) has no angle
+  pp::CentiDegrees angle{pp::angle_from_steps(servo.value.position, servo.value.id - 1U)};
+}
 
 std::optional<pp::JointAngles> wire{pp::to_centidegrees(radians)};  // ROS side -> wire
 pp::JointRadians state{pp::to_radians(reply.value)};                // wire -> ROS side
@@ -90,6 +100,18 @@ footer, the echo of a request). It is for logs and debugging, not for control fl
 before it reads the port again. `FOUND` means that frame is whole with a good checksum (`value` is
 the number of servos, 6); `rejected` counts the `FF FF` starts that were not it (the other servo
 frames, a bad checksum). The serial thread waits for it after every `send_angles` (#150).
+
+`decode_servo_status` is the other servo-bus decoder (#170): before that sync-write the Atom reads
+the six servos (a SYNC READ of 15 bytes at register 56), and each answers `FF FF id 11 err` + 15
+bytes + checksum, 21 bytes: position in steps (2048 is 0 deg, 360/4096 deg per step), speed,
+load (0.1 %, sign-magnitude), voltage (0.1 V), temperature (degC), the moving flag, and the
+servo's own error byte. The gripper, id 7, answers too when plugged. `FOUND` is one frame with a
+good checksum, `value` its fields; a bad checksum is `rejected`, and a hot servo produces many
+(69 % at 53 degC on 19 Nov 2026). A position above 4095 steps, which no servo reports, is
+`rejected` too: a corrupt frame whose checksum happened to match. `angle_from_steps` is the Atom's conversion to the wire angle,
+truncated toward zero like the Atom's, J3 the other way round: equal to `get_angles` in 10345
+of 10350 joint values on the taps of 16, 19 and 20 Nov. The serial
+thread builds the pose from the six frames and asks no `get_angles` while they are whole (#170).
 
 ### How #22 uses `consumed`
 
@@ -237,6 +259,7 @@ make tidy                   # clang-tidy, must stay clean
 | `test_units.cpp`            | Rounding, round trips, NaN/inf/out of range                        |
 | `test_decode.cpp`           | Acks and angles, servo noise, echoes, bad footers, every cut point; the sync-write recorded on the arm, alone and behind the poll, cut at every position, a bad checksum, other servo frames and our own replies (#150) |
 | `test_recorded_frames.cpp`  | The "judge": the library against the capture of 2026-10-16         |
+| `test_recorded_gripper.cpp` | The gripper judge: the newest `frames_gripper_*.txt` (`capture_gripper.py`); skipped while there is none |
 
 The judge reads `test/data/frames_*.txt` (written by `scripts/capture_frames/`). Each frame
 we sent must equal our encoder's output, and our decoder must find in the raw RX the value

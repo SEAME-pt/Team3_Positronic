@@ -2,17 +2,17 @@
 <!--
   Arm model for the real myCobot 280 on the Jetson (#23).
     Includes the gripper and camera model (#97) URDF of this package
-    and adds a <ros2_control> for the arm joints and another one for the gripper.
+    and adds a <ros2_control> for the arm joints and the gripper.
 
   Differs from positronic_gazebo.urdf.xacro on purpose:
   - the plugin is positronic_hardware/RobotSystem, not the Gazebo one;
   - each arm joint has position AND velocity state interfaces, which the plugin requires;
   - each arm joint has exactly one command interface, position, which the plugin requires (#32);
   - ros2_control's joint limiter is off on every joint (#34), see the macro below.
-  - the gripper is a fixed-value mock, while Gazebo commands it. Until #123.
 
   The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
-  moving_period_ms, echo_timeout_ms, servo_temp_limit_c, tracking_error_deg, tracking_error_ms.
+  moving_period_ms, echo_timeout_ms, pose_from_poll, servo_temp_limit_c, tracking_error_deg,
+  tracking_error_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
 
   The defaults are the driver's, in one place: HardwareConfig and SerialTiming in
@@ -34,6 +34,9 @@
        the longest wait for the Atom's sync-write after a send. -->
   <xacro:arg name="moving_period_ms" default=""/>
   <xacro:arg name="echo_timeout_ms" default=""/>
+  <!-- "true": the pose comes from the Atom's own poll of the servos and the turn follows the
+       controller's write (#170); "false": a get_angles every turn, as #150. -->
+  <xacro:arg name="pose_from_poll" default=""/>
   <!-- A servo at or above this temperature (degC) stops the arm and powers its servos off.
        Lower only, to test the cut without heating anything. -->
   <xacro:arg name="servo_temp_limit_c" default=""/>
@@ -71,6 +74,7 @@
       <xacro:driver_param name="baud"/>
       <xacro:driver_param name="moving_period_ms"/>
       <xacro:driver_param name="echo_timeout_ms"/>
+      <xacro:driver_param name="pose_from_poll"/>
       <xacro:driver_param name="servo_temp_limit_c"/>
       <xacro:driver_param name="tracking_error_deg"/>
       <xacro:driver_param name="tracking_error_ms"/>
@@ -81,26 +85,11 @@
     <xacro:real_arm_joint name="joint5_to_joint4"/>
     <xacro:real_arm_joint name="joint6_to_joint5"/>
     <xacro:real_arm_joint name="joint6output_to_joint6"/>
+    <xacro:real_arm_joint name="gripper_controller"/>
     <!-- #35: what the driver reports to the supervisor (#45), as driver/fault_code. 0 = no
          fault; any other value is a latched fault, see FaultCode in positronic_hardware.hpp. -->
     <gpio name="driver">
       <state_interface name="fault_code"/>
     </gpio>
-  </ros2_control>
-
-  <!-- Ros2 control for the gripper. Only needs one joint since the fingers mimic it.
-        It is a mock until #123 adds the real gripper interface -->
-  <ros2_control name="positronic_gripper_mock" type="system">
-    <hardware>
-      <plugin>mock_components/GenericSystem</plugin>
-    </hardware>
-    <joint name="gripper_controller">
-      <state_interface name="position">
-        <!-- The value 0.15 comes from the named state "open".
-            It is specified in positronic_moveit_config/config/positronic.srdf.
-            Keep the real gripper open during runs, so the model matches. Until #123.-->
-        <param name="initial_value">0.15</param>
-      </state_interface>
-    </joint>
   </ros2_control>
 </robot>
