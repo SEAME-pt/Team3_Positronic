@@ -260,7 +260,10 @@ logs once and returns ERROR.
 - **Timing.** 500 ms is 25 heartbeats, both nodes on the Jetson (ADR 0006), no Wi-Fi in between.
   The stop leaves within the timeout, plus one control period (33 ms), plus the turn the serial
   thread is in: about 27 ms usually, up to ~160 ms at worst (a lost reply, 50 ms, an overdue
-  temperature request, 50 ms, and a late sync-write, 60 ms). Expect about 560-600 ms.
+  temperature request, 50 ms, and a late sync-write, 60 ms). On the arm: fault 4 509-528 ms after
+  the last heartbeat (`docs/03_verification/safety_supervisor/`, test 8). Stalls of ~350 ms were
+  seen on the Nano when a ros2 CLI starts, so 500 ms leaves ~150 ms: raise it if false fault 4s
+  show up.
 - **Off.** `supervisor_timeout_ms` = 0, for a run without the supervisor: `driver.launch.py`
   alone (bench, `sweep.sh`, the HIL tests). `on_init` logs a warning saying so. Gazebo runs
   `gz_ros2_control`, not this plugin, so the check does not apply there.
@@ -409,6 +412,10 @@ does not move and the log names the joint.
 
 ## Known limits
 
+- The dead-man check (#136) proves that some process publishes on
+  `/safety_supervisor/heartbeat`, not which one or that it is monitoring: an inactive supervisor,
+  or one on another machine in the same ROS domain, keeps it satisfied. ROS domain isolation is
+  assumed.
 - The velocity uses the control loop `period` as dt, not the time between two serial samples.
   When the controller runs faster than the arm answers (about every 16 ms), some `read()` calls
   see the same pose twice and the velocity is underestimated.

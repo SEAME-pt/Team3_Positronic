@@ -55,7 +55,9 @@ pose at the resume minus the last pose before the fault; in test 9 it is the mot
 halt.
 
 CSV columns: `goal_to_trigger_s` goal accepted to the signal; `trigger_to_event_ms` signal to the
-fault 4 line (test 8) or to "hardware component is inactive" (test 9); `heartbeat_to_fault4_ms`
+fault 4 line (test 8) or to "hardware component is inactive" (test 9), from the script's
+timestamp just before it ran `kill`, so up to ~15 ms early (starting a process on the Nano takes
+that long): in test 8 `heartbeat_to_fault4_ms` is the measure to use; `heartbeat_to_fault4_ms`
 last supervisor heartbeat to fault 4; `halt_to_inactive_ms` the supervisor's `HALT` line to
 "inactive"; `j1_speed_deg_s` J1 over the 0.6 s before the event; `travel_deg` as above.
 

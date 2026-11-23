@@ -41,7 +41,7 @@ of `SupervisorLogic`.
   it left ACTIVE: cut the power.
 - `~/stop` (`std_srvs/Trigger`): starts a halt and answers at once.
 - `~/heartbeat` (`positronic_interfaces/Heartbeat`, best effort): published at every check
-  (20 ms) from configure to cleanup, in every mode. The driver's dead-man check (#136) halts the
+  (20 ms) from configure to cleanup or shutdown, in every mode. The driver's dead-man check (#136) halts the
   arm when it stops while the arm may move. Published from the check timer itself, so a stuck
   executor goes silent too. The driver listens on `/safety_supervisor/heartbeat`: renaming the
   node breaks it, and the driver then refuses to activate.
@@ -67,8 +67,12 @@ and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`
 - **The supervisor dying** (`kill -9`, a crash, a hang): the driver stops the arm by itself
   once the heartbeat has been missing for `supervisor_timeout_ms` (500 ms), with fault 4, and
   takes the component out of ACTIVE (#136). Until then the arm keeps moving: 500 ms plus a
-  control period and the serial turn, about 0.6 s. Start the supervisor again and activate it to resume: one activate, the driver's fault
-  clears when its component activates.
+  control period and the serial turn: 509-528 ms after the last heartbeat on the arm. Start
+  the supervisor again and activate it to resume: one activate, the driver's fault clears when
+  its component activates.
+- **Any heartbeat counts:** the driver's check proves that some process publishes on
+  `~/heartbeat`, not which one or that it is monitoring: this supervisor while inactive, or one
+  on another machine in the same ROS domain, keeps it satisfied. ROS domain isolation is assumed.
 - **The heartbeat crosses the Wi-Fi:** the 300 ms limit holds only with the mission node at
   **25 Hz** and the Jetson's **Wi-Fi power saving off**
   (`docs/03_verification/heartbeat_link`). Detection takes up to 320 ms.

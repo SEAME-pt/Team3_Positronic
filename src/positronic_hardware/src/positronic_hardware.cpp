@@ -365,14 +365,14 @@ CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & previous
 
 CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // "Allow motion": every command starts at the measured position, so the first thing a
-  // controller sees is "stay where you are" and write() sends nothing new until a controller
-  // writes.
   // #136: no motion without someone watching it. Otherwise read() would raise the fault again
   // at once.
   if (!supervisor_allows_activation()) {
     return CallbackReturn::ERROR;
   }
+  // "Allow motion": every command starts at the measured position, so the first thing a
+  // controller sees is "stay where you are" and write() sends nothing new until a controller
+  // writes.
   // Never activate on a placeholder pose: wait for the arm to answer. Sleeping is fine here,
   // outside the control loop.
   const auto deadline{std::chrono::steady_clock::now() + FIRST_SAMPLE_TIMEOUT};
@@ -492,9 +492,9 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
     raise_fault(FaultCode::SUPERVISOR_LOST);
     RCLCPP_ERROR(
       get_logger(),
-      "Fault %d: no heartbeat from the safety supervisor for over %d ms. Arm halted, targets "
-      "held. Start the supervisor again and activate it to resume.",
-      static_cast<int>(FaultCode::SUPERVISOR_LOST), config_.supervisor_timeout_ms);
+      "No heartbeat from the safety supervisor for over %d ms (fault %d latched). Arm halted, "
+      "targets held. Start the supervisor again and activate it to resume.",
+      config_.supervisor_timeout_ms, static_cast<int>(fault_.load()));
   }
   // #103: a target the arm did not follow. After the link check: a silent arm has a stale
   // pose, and the silence is the cause to report, not the lag that follows it.

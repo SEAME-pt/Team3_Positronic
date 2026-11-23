@@ -280,6 +280,9 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_shutdown(
   if (logic_.mode() == Mode::RESUMING || logic_.mode() == Mode::MONITORING) {
     begin_halt(Reason::DEACTIVATED);
   }
+  // #136: a finalized supervisor never watches again, so the driver's dead-man must see it gone,
+  // even if the process keeps spinning. A driver halt during this one only stops the arm too.
+  heartbeat_publisher_.reset();
   return CallbackReturn::SUCCESS;
 }
 
@@ -355,7 +358,9 @@ void SafetySupervisor::check()
   heartbeat.node_name = get_name();
   heartbeat.state =
     logic_.mode() == Mode::MONITORING ? Heartbeat::STATE_MOVING : Heartbeat::STATE_STOPPED;
-  heartbeat_publisher_->publish(heartbeat);
+  if (heartbeat_publisher_ != nullptr) {
+    heartbeat_publisher_->publish(heartbeat);
+  }
 
   if (exit_requested_.load()) {
     serve_exit();

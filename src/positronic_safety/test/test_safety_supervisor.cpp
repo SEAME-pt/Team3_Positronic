@@ -41,6 +41,9 @@
 //   and while MONITORING; that the hook, called from another thread while the test spins,
 //   sends "hardware inactive" while MONITORING and returns; and that it sends nothing while
 //   STOPPED.
+// Follow-up prompt (#136 review):
+//   Test that the hook returns after halt_step_timeout_ms when the controller manager never
+//   answers, and that a supervisor shut down while monitoring stops its heartbeat.
 
 #include <gtest/gtest.h>
 
@@ -603,15 +606,6 @@ TEST_F(SafetySupervisorTest, DeactivatingTheSupervisorHalts)
   EXPECT_TRUE(fake_->statuses.back().hardware_stopped);
 }
 
-int main(int argc, char ** argv)
-{
-  testing::InitGoogleTest(&argc, argv);
-  rclcpp::init(argc, argv);
-  const int result = RUN_ALL_TESTS();
-  rclcpp::shutdown();
-  return result;
-}
-
 TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileStoppedAndWhileMonitoring)
 {
   // #136: from configure on, so a resume finds the driver already hearing it.
@@ -663,4 +657,54 @@ TEST_F(SafetySupervisorTest, ExitWhileStoppedSendsNothing)
   supervisor_->halt_before_exit();
   spin_for(milliseconds{100});
   EXPECT_TRUE(fake_->calls.empty());
+}
+
+TEST_F(SafetySupervisorTest, ExitReturnsAfterTheStepTimeoutWhenNobodyAnswers)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+  fake_->answer_hardware = false;
+
+  std::atomic<bool> returned{false};
+  const auto start = std::chrono::steady_clock::now();
+  std::thread hook{[this, &returned]() {
+      supervisor_->halt_before_exit();
+      returned = true;
+    }};
+  const bool done = spin_until([&returned]() {
+        return returned.load();
+  });
+  const auto waited = std::chrono::steady_clock::now() - start;
+  hook.join();
+
+  ASSERT_TRUE(done);
+  // halt_step_timeout_ms is 200 in this fixture. The hook never returns before it: the request
+  // was not answered. 500 ms over it is the margin for a loaded runner, not a requirement.
+  EXPECT_GE(waited, milliseconds{200});
+  EXPECT_LT(waited, milliseconds{700});
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
+}
+
+TEST_F(SafetySupervisorTest, ShutDownSupervisorStopsItsHeartbeat)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // From ACTIVE straight to FINALIZED: it halts the arm, then must go silent for the driver,
+  // even though the process (here the executor) keeps spinning it.
+  EXPECT_EQ(supervisor_->shutdown().id(), State::PRIMARY_STATE_FINALIZED);
+  spin_for(milliseconds{100});  // heartbeats already sent arrive
+  const std::size_t after_shutdown = fake_->supervisor_heartbeats;
+  spin_for(milliseconds{300});  // 15 periods of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, after_shutdown);
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
+}
+
+int main(int argc, char ** argv)
+{
+  testing::InitGoogleTest(&argc, argv);
+  rclcpp::init(argc, argv);
+  const int result = RUN_ALL_TESTS();
+  rclcpp::shutdown();
+  return result;
 }
