@@ -168,6 +168,8 @@ private:
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
+  /// The sum of the periods read() got, in ns: the clock of FakeArm (#122).
+  std::atomic<std::int64_t> control_time_ns_{0};
 
   /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
   /// whose count starts at zero.

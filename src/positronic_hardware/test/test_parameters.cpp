@@ -74,6 +74,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   const HardwareConfig defaults{};
   EXPECT_EQ(config.backend, defaults.backend);
+  EXPECT_EQ(config.fake_mode, positronic_hardware::FakeMode::INSTANT);
   EXPECT_EQ(config.port, defaults.port);
   EXPECT_EQ(config.baud, defaults.baud);
   EXPECT_DOUBLE_EQ(config.velocity_filter_alpha, defaults.velocity_filter_alpha);
@@ -89,6 +90,7 @@ TEST(Parameters, EveryParameterReachesItsField)
 {
   const ParsedParameters parsed{parse_hardware_parameters(Parameters{
       {"backend", "fake"},
+      {"fake_mode", "measured"},
       {"port", "/dev/null"},
       {"baud", "115200"},
       {"velocity_filter_alpha", "0.5"},
@@ -100,6 +102,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   EXPECT_EQ(config.backend, Backend::FAKE);
+  EXPECT_EQ(config.fake_mode, positronic_hardware::FakeMode::MEASURED);
   EXPECT_EQ(config.port, "/dev/null");
   EXPECT_EQ(config.baud, 115200);
   EXPECT_DOUBLE_EQ(config.velocity_filter_alpha, 0.5);
@@ -115,7 +118,7 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
 {
   EXPECT_EQ(
     refusal("moving_period", "40"),
-    "Unknown hardware parameter 'moving_period'. Known: backend, port, baud, "
+    "Unknown hardware parameter 'moving_period'. Known: backend, fake_mode, port, baud, "
     "velocity_filter_alpha, moving_period_ms, echo_timeout_ms, servo_temp_limit_c, "
     "tracking_error_deg, tracking_error_ms.");
 }
@@ -213,6 +216,10 @@ TEST(Parameters, TheEchoTimeoutMayBeLongerThanThePeriod)
 TEST(Parameters, TheSpecialParametersKeepTheirRules)
 {
   EXPECT_EQ(refusal("backend", "real"), "Parameter 'backend' is 'real'; use 'serial' or 'fake'.");
+  EXPECT_EQ(
+    refusal("fake_mode", "slow"), "Parameter 'fake_mode' is 'slow'; use 'instant' or 'measured'.");
+  EXPECT_EQ(refusal("fake_mode", ""), "Parameter 'fake_mode' is ''; use 'instant' or 'measured'.");
+  EXPECT_TRUE(accepted(Parameters{{"fake_mode", "instant"}}));
   EXPECT_EQ(refusal("port", ""), "Parameter 'port' is empty.");
   EXPECT_EQ(refusal("baud", "9600"), "Parameter 'baud' is '9600'; use 115200 or 1000000.");
   EXPECT_EQ(
@@ -230,4 +237,14 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
     "period 33 ms, echo timeout 60 ms, servo temperature limit 60 degC, tracking error 8.0 deg "
     "for 300 ms.");
+}
+
+// #122: the fake backend says which mode it moves in; the instant one keeps the old line.
+TEST(Parameters, TheInfoLineHasTheFakeMode)
+{
+  HardwareConfig config{};
+  config.backend = Backend::FAKE;
+  EXPECT_EQ(describe(config).substr(0, 16), "Backend 'fake', ");
+  config.fake_mode = positronic_hardware::FakeMode::MEASURED;
+  EXPECT_EQ(describe(config).substr(0, 39), "Backend 'fake' in mode 'measured', port");
 }
