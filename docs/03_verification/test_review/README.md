@@ -54,7 +54,7 @@ Questions a review raised that belong to another package's review.
 | positronic_protocol | Done 2026-11-17 | – | F1 test, F2 README note, F3 (with the acks issue), F4 cleanup | – |
 | positronic_hardware | Done 2026-11-17, rechecked on `dev` 2026-11-19 | H1 shutdown test (H4 already covered by #146) | H5 (top), H1 crash note, H4 `write()` while inactive | H2 reading plausibility (H3 done in #146) |
 | positronic_safety | Done 2026-11-18 | S1 shutdown test, S2 stale fault code test, S3 controller manager gone test | S4 locking test + README sentence, S5 four refusal tests, RESUMING README note | S1 `main()` Ctrl+C halt (or #136), S4 heartbeat ADR |
-| positronic_mission | Done 2026-11-19 | M1 `MoveitBackend` tests (gate), M2 MoveIt not ready, M3 pose reaches the backend, M6 flaky feedback check | M4 heartbeat timing margins, M5 small gaps | Linters off in `CMakeLists.txt` |
+| positronic_mission | Done 2026-11-19 | M1 `MoveitBackend` tests (gate), M2 MoveIt not ready, M3 pose reaches the backend, M6 flaky feedback check | M4 heartbeat timing margins, M5 small gaps | ~~Linters off in `CMakeLists.txt`~~ fixed in #168 |
 | positronic_moveit_config | Done 2026-11-19 | C1 `apply()`/`main()` tests (gate) | C2 bad scene files, C3 joint limits config test | C1 a failed scene load must stop the system |
 | positronic_bringup | Done 2026-11-19 | – | B1 delay tool `main()`, B2 heartbeat timeout vs measured gap | – |
 
@@ -106,6 +106,6 @@ merge. ADR 0005, `CONTRIBUTING.md`, `build.md` and the `Makefile` comment update
 The text of each issue, ready to paste into GitHub: [issues.md](issues.md).
 
 - **New issues:** reading plausibility in `SerialArm` (H2, F1); supervisor `main()` halts on Ctrl+C (S1, or add to #136); what must the heartbeat
-  prove, with an ADR (S4); a failed planning scene load must stop the system (C1); linters off in
-  `positronic_mission` (side note).
+  prove, with an ADR (S4); a failed planning scene load must stop the system (C1). Linters off in `positronic_mission`
+  (side note) was fixed in #168, no issue needed.
 - **One follow-up issue** with every "later" item in the Status table.

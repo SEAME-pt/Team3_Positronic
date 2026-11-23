@@ -173,12 +173,13 @@ running at the same time.
 | Fix now (#46) | M1 `test_moveit_backend.cpp`: stop before planning, reset_stop, not connected, `ready()` false (~1 h, also lifts the gate to ~84 %); M2 activation refused when MoveIt not ready (~20 min); M3 the pose reaches the backend (~15 min) |
 | Fixed in #46 | M6 flaky feedback check removed |
 | Later (follow-up issue) | M4 timing margins in the heartbeat tests; M5 reset while inactive, cleanup join |
-| New issue | Linters switched off in `CMakeLists.txt` (side note) |
+| New issue | Linters switched off in `CMakeLists.txt` (side note). **Fixed in #168** |
 
 ## Side notes
 
 - `CMakeLists.txt` has the linters switched off (`ament_lint_auto_find_test_dependencies()` is
   commented out), though `package.xml` lists them. So cpplint, cppcheck, uncrustify and
   copyright never run on this package in `make test`. A question for the team, not a test gap.
+  **Fixed in #168 (2026-11-23):** the lines are back and the linters pass.
 - Lines 349–351 ("should not be reachable") and 302–303 (ROS shut down during a goal) are fine
   untested.

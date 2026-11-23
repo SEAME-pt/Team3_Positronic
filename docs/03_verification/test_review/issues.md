@@ -1,7 +1,7 @@
 # Issues from the #46 test review
 
-Five new issues (missing behaviour) and one follow-up issue (the "later" items), ready to paste
-into GitHub. The details of each finding are in the package files next to this one.
+Four new issues (missing behaviour) and one follow-up issue (the "later" items), ready to paste
+into GitHub. Issue 5 is kept for the record only: #168 fixed it, don't open it. The details of each finding are in the package files next to this one.
 
 Not here on purpose: the three `MoveitBackend` bugs (destructor hang, `ready()` true without
 `move_group`, crash without a robot description) were sent to the mission owner, who opened
@@ -156,6 +156,10 @@ Found in: #46 (`positronic_moveit_config.md`, C1).
 ---
 
 ## 5. bug: the linters never run on positronic_mission
+
+**Fixed in #168 (merged 2026-11-23), do not open.** The two lint lines are back in
+`CMakeLists.txt`; on the #46 branch after the merge, `make test` runs copyright, cppcheck,
+cpplint, lint_cmake, uncrustify and xmllint on the package, all passing.
 
 **Template:** Bug. **Labels:** bug
 
