@@ -77,8 +77,9 @@ namespace positronic_protocol
 [[nodiscard]] Decoded<ServoStatus> decode_servo_status(ByteView rx) noexcept;
 
 /// The joint angle, in 0.01 deg, of a servo at `position` steps: the Atom's own conversion,
-/// checked against get_angles on the taps of 16 and 19 Nov 2026. 2048 steps is 0 deg, one step
-/// is 360/4096 deg, and J3 (`joint` 2) turns the other way. `position` is 0 to 4095, as
+/// truncated toward zero as the Atom does. It equals get_angles in 10345 of 10350 joint values
+/// on the taps of 16, 19 and 20 Nov 2026 (rounding would in 5309). 2048 steps is 0 deg, one
+/// step is 360/4096 deg, and J3 (`joint` 2) turns the other way. `position` is 0 to 4095, as
 /// decode_servo_status() guarantees, and `joint` 0 to 5: the gripper (id 7) is not a joint.
 [[nodiscard]] CentiDegrees angle_from_steps(std::uint16_t position, std::size_t joint) noexcept;
 

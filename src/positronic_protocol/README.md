@@ -109,7 +109,8 @@ servo's own error byte. The gripper, id 7, answers too when plugged. `FOUND` is 
 good checksum, `value` its fields; a bad checksum is `rejected`, and a hot servo produces many
 (69 % at 53 degC on 19 Nov 2026). A position above 4095 steps, which no servo reports, is
 `rejected` too: a corrupt frame whose checksum happened to match. `angle_from_steps` is the Atom's conversion to the wire angle,
-J3 the other way round, checked against `get_angles` on the taps of 16 and 19 Nov. The serial
+truncated toward zero like the Atom's, J3 the other way round: equal to `get_angles` in 10345
+of 10350 joint values on the taps of 16, 19 and 20 Nov. The serial
 thread builds the pose from the six frames and asks no `get_angles` while they are whole (#170).
 
 ### How #22 uses `consumed`

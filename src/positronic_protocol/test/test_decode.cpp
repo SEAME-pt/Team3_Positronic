@@ -753,19 +753,31 @@ TEST(DecodeServoStatus, OtherFramesAreNotIt)
   EXPECT_EQ(pp::decode_servo_status(pp::ByteView{}).status, pp::DecodeStatus::NOT_FOUND);
 }
 
-// The Atom's conversion, against the angles reported for the same servo positions on the taps
-// of 16 and 19 Nov 2026: 1994 steps was 4.75 deg on J1 and 2060 was -1.05 on J5. 3758 steps on
-// J3, the joint that turns the other way, gives 150.29.
+// The Atom's conversion truncates toward zero. Pairs read on the arm, a status frame and the
+// get_angles reply of the same poll: J1 at 1994 steps was 474 (tap_final_33, 20 Nov 2026), J2 at
+// 2053 was -43 (tap_final3_33, 20 Nov). Rounding would give 475 and -44.
 TEST(DecodeServoStatus, AngleFromSteps)
 {
   EXPECT_EQ(pp::angle_from_steps(2048, 0), 0);
-  EXPECT_EQ(pp::angle_from_steps(1994, 0), 475);
+  EXPECT_EQ(pp::angle_from_steps(1994, 0), 474);
+  EXPECT_EQ(pp::angle_from_steps(2053, 1), -43);
   EXPECT_EQ(pp::angle_from_steps(2060, 4), -105);
-  EXPECT_EQ(pp::angle_from_steps(2053, 1), -44);
   EXPECT_EQ(pp::angle_from_steps(3758, 2), 15029);
   EXPECT_EQ(pp::angle_from_steps(1623, 3), 3735);
   // The ends of the servo range: inside int16, and J3 mirrored.
   EXPECT_EQ(pp::angle_from_steps(0, 0), 18000);
   EXPECT_EQ(pp::angle_from_steps(4095, 0), -17991);
   EXPECT_EQ(pp::angle_from_steps(0, 2), -18000);
+}
+
+TEST(DecodeServoStatus, AngleFromStepsEqualsTheAtomsReplyToTheSamePoll)
+{
+  // get_angles_19 of frames_20261016_124447.txt: the six status frames of one poll and the
+  // get_angles reply built from it. Rounding would be wrong on five of the six (-9, -18, -62,
+  // 44, 62).
+  constexpr std::array<std::uint16_t, 6> STEPS{2049, 2050, 2041, 2062, 2043, 2041};
+  constexpr std::array<pp::CentiDegrees, 6> REPLY{-8, -17, -61, -123, 43, 61};
+  for (std::size_t joint{0}; joint < STEPS.size(); ++joint) {
+    EXPECT_EQ(pp::angle_from_steps(STEPS.at(joint), joint), REPLY.at(joint)) << joint;
+  }
 }
