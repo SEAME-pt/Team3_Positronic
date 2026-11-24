@@ -10,9 +10,9 @@
   - each arm joint has exactly one command interface, position, which the plugin requires (#32);
   - ros2_control's joint limiter is off on every joint (#34), see the macro below.
 
-  The <param> names are the ones the plugin reads in on_init (#22): backend, port, baud,
-  moving_period_ms, echo_timeout_ms, pose_from_poll, servo_temp_limit_c, tracking_error_deg,
-  tracking_error_ms.
+  The <param> names are the ones the plugin reads in on_init (#22): backend, fake_mode, port,
+  baud, moving_period_ms, echo_timeout_ms, pose_from_poll, servo_temp_limit_c,
+  tracking_error_deg, tracking_error_ms.
   It rejects any other name, so a typo here stops the driver instead of being ignored.
 
   The defaults are the driver's, in one place: HardwareConfig and SerialTiming in
@@ -27,6 +27,9 @@
 
   <!-- "serial" talks to the arm; "fake" stands still, to try the launch without the arm. -->
   <xacro:arg name="backend" default=""/>
+  <!-- How the fake backend moves (#122): "instant", at every target at once, or "measured",
+       with the lag, the late wrist and the rest error of the real arm. -->
+  <xacro:arg name="fake_mode" default=""/>
   <!-- The arm's UART and its rate (115200 or 1000000 baud). -->
   <xacro:arg name="port" default=""/>
   <xacro:arg name="baud" default=""/>
@@ -53,7 +56,10 @@
     </xacro:if>
   </xacro:macro>
 
-  <!-- Links, joints and meshes of the arm. -->
+  <!-- Links, joints and meshes of the arm, with the gripper and the wrist camera: camera_flange
+       and the camera_link frame under joint 6, mounted as on the real arm (#97). camera_link is
+       the frame_id of the real camera images (camera.launch.py) and the link the Gazebo camera
+       sits on. The <gazebo> tags of that file are ignored outside Gazebo. -->
   <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
@@ -70,6 +76,7 @@
     <hardware>
       <plugin>positronic_hardware/RobotSystem</plugin>
       <xacro:driver_param name="backend"/>
+      <xacro:driver_param name="fake_mode"/>
       <xacro:driver_param name="port"/>
       <xacro:driver_param name="baud"/>
       <xacro:driver_param name="moving_period_ms"/>

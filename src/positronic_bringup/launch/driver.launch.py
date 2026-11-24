@@ -42,6 +42,7 @@ the driver keeps its own (HardwareConfig and SerialTiming in positronic_hardware
 its README), and the INFO line of on_init prints the values in use. A default here would win
 over the driver's and hide a change made there.
   backend:=serial|fake        fake stands still, to try the launch without the arm
+  fake_mode:=instant|measured how the fake arm moves: at once, or like the real arm (#122)
   port:=                      the arm's UART
   baud:=                      the arm's firmware rate (115200 or 1000000)
   moving_period_ms:=          ms of a serial-thread turn that sends a command
@@ -56,13 +57,19 @@ over the driver's and hide a change made there.
   start_inactive:=false       true: the hardware component and arm_controller come up
                               inactive, and only the safety supervisor makes them active
                               (#45). supervised.launch.py sets it.
+  camera:=false               true: also start the wrist camera (camera.launch.py). Off
+                              unless asked: the camera costs CPU on the Jetson and the
+                              container needs /dev/video0 (make nano-shell maps it when it is
+                              there). Its arguments (device:=, width:=, height:=, fps:=, ...)
+                              pass through, as this launch's reach it from supervised.launch.py.
 """
 
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -86,6 +93,10 @@ def generate_launch_description():
     backend = DeclareLaunchArgument(
         'backend', default_value='',
         description='serial: the real arm. fake: a standing arm, no serial port.')
+    fake_mode = DeclareLaunchArgument(
+        'fake_mode', default_value='',
+        description='instant: the fake arm is at every target at once. measured: it lags like '
+                    'the real arm (#122).')
     port = DeclareLaunchArgument(
         'port', default_value='',
         description="The arm's serial port.")
@@ -126,6 +137,10 @@ def generate_launch_description():
         'start_inactive', default_value='false',
         description='true: the hardware component and arm_controller come up inactive.')
     inactive = LaunchConfiguration('start_inactive')
+    # The wrist camera is off by default: started only with camera:=true.
+    camera = DeclareLaunchArgument(
+        'camera', default_value='false',
+        description='true: also start the wrist camera (camera.launch.py).')
 
     controllers_yaml = PathJoinSubstitution(
         [FindPackageShare('positronic_bringup'), 'config', 'jetson_controllers.yaml'])
@@ -138,6 +153,7 @@ def generate_launch_description():
                 FindPackageShare('positronic_description'), 'urdf', 'positronic_real.urdf.xacro',
             ]),
             ' backend:=', LaunchConfiguration('backend'),
+            ' fake_mode:=', LaunchConfiguration('fake_mode'),
             ' port:=', LaunchConfiguration('port'),
             ' baud:=', LaunchConfiguration('baud'),
             ' moving_period_ms:=', LaunchConfiguration('moving_period_ms'),
@@ -202,8 +218,15 @@ def generate_launch_description():
                    controllers_yaml, '--inactive'],
         condition=IfCondition(inactive))
 
+    # The camera launch. Its arguments given to this launch reach it by themselves.
+    wrist_camera = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(PathJoinSubstitution(
+            [FindPackageShare('positronic_bringup'), 'launch', 'camera.launch.py'])),
+        condition=IfCondition(LaunchConfiguration('camera')))
+
     return LaunchDescription([
         backend,
+        fake_mode,
         port,
         baud,
         moving_period_ms,
@@ -214,10 +237,12 @@ def generate_launch_description():
         tracking_error_ms,
         update_rate,
         start_inactive,
+        camera,
         robot_state_publisher,
         control_node,
         control_node_inactive,
         joint_state_broadcaster,
         arm_controller,
         arm_controller_inactive,
+        wrist_camera,
     ])

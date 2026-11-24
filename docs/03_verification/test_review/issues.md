@@ -19,7 +19,9 @@ checksum, so a frame with the right shape but wrong bytes (line noise, a cut and
 accepted, and controllers and the supervisor act on it. Add a plausibility check where readings
 arrive (`SerialArm::poll_loop`): reject a reading outside the joint range, or too far from the
 last one (`max_jump = max_velocity × dt × margin`). Found in the #46 test review (protocol F1,
-hardware H2).
+hardware H2). Since #170 the pose comes mostly from the poll's status frames, which are checked
+(checksum, plausible voltage and temperature, a 0.52 rad jump limit): what is left is the
+`get_angles` fallback and the joint range.
 
 ### Acceptance criteria
 - [ ] A reading outside a joint's URDF range (plus a tolerance) is rejected and not published.

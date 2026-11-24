@@ -302,7 +302,14 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       arm_ = std::make_unique<SerialArm>(
         config_.port, config_.baud, config_.timing, guard, has_gripper_);
     } else {
-      arm_ = std::make_unique<FakeArm>();
+      // The fake arm's time is the sum of the periods read() got: on the control loop that is
+      // the time that passed, and a test that passes the periods in moves the arm without
+      // sleeping (#122). Not the `time` argument: the resource manager replaces it with its own
+      // clock.
+      arm_ = std::make_unique<FakeArm>(config_.fake_mode, [this]() {
+            return FakeArm::Clock::time_point{std::chrono::duration_cast<FakeArm::Clock::duration>(
+          std::chrono::nanoseconds{control_time_ns_.load()})};
+      });
     }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot start the serial backend: %s", error.what());
@@ -481,6 +488,10 @@ CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_
 
 return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
+  // A period that is not positive is no time passing: the fake arm's clock never goes back.
+  if (period.nanoseconds() > 0) {
+    control_time_ns_.fetch_add(period.nanoseconds());
+  }
   update_states(period.seconds());
   // First, before the link check: the power off of an overheat cut silences the arm, so a link
   // timeout can follow the cut, and only the first fault is kept. The cause must win. Also
@@ -517,7 +528,8 @@ void RobotSystem::report_echo_timeouts()
     get_logger(),
     "%" PRIu64
     " send_angles got no sync-write from the arm since the last report: each of their "
-    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
+    "and so does a send that reached the arm while it was still answering a request.",
     fresh.value());
 }
 

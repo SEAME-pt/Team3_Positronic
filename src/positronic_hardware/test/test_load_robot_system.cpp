@@ -100,6 +100,16 @@
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
 // Follow-up prompt (#170):
 //   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
+// Follow-up prompt (#122 part 1):
+//   fake_mode=measured reaches the fake arm and its time is the sum of the periods read() gets:
+//   a J1 step reported unmoved by a read of period 0 and 1 - 1/e of the way after a read of one
+//   lag time constant, without a sleep. A fake_mode that is neither instant nor measured is
+//   refused.
+// Follow-up prompt (#122 part 2):
+//   One test feeds the plugin, at the 30 Hz control rate, the points of a 3-point trajectory
+//   (hold, +10 deg, +20 deg) on J1 and the wrist J5 with fake_mode=measured, and checks the
+//   largest error between command and state: under the controller's 0.087 rad trajectory
+//   tolerance at 10 deg/s, over it at 30 deg/s.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -306,18 +316,18 @@ std::vector<std::uint8_t> parse_hex(std::string_view hex)
   return bytes;
 }
 
-/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until
-/// stopped: a stand-in for the arm with the real traffic. A get_angles gets the recorded poll
-/// of the servos and then RECORDED_REPLY, a stop or power_on gets the arm's ack
-/// (FE FE 03 <id> 01 FA) after `ack_delay` (1.8 ms on the bench, 58 ms seen once for a
-/// power_on), a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later,
-/// as the arm does it, a get_servo_temps gets the temperatures set with set_temperature() (all
-/// six servos alike) unless set_answer_temperatures(false), anything else nothing. With
-/// ack_requests off the stop and power_on frames are taken and never answered. With
-/// set_silent_after_power_off(true) it answers nothing once a power_off has arrived, like the
-/// real arm with its servos off. Frames are cut like the arm does it: FE FE <len> ..., len + 3
-/// bytes, resynchronised on FE FE, with a carry across reads. It keeps every byte it receives,
-/// so a test can check what the driver put on the wire.
+/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until stopped: a
+/// stand-in for the arm with the real traffic. A get_angles gets the recorded poll of the servos
+/// and then RECORDED_REPLY, a stop or power_on gets the arm's ack (FE FE 03 <id> 01 FA) after
+/// `ack_delay` (1.8 ms on the bench, 58 ms seen once for a power_on), a power_off its ack at once,
+/// a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later, as the arm does
+/// it, a get_servo_temps gets the temperatures set with set_temperature() (all six servos alike)
+/// unless set_answer_temperatures(false), anything else nothing. With ack_requests off the stop and
+/// power_on frames are taken and never answered. With set_silent_after_power_off(true) it acks the
+/// first power_off and answers nothing after it, like the real arm with its servos off. Frames are
+/// cut like the arm does it: FE FE <len> ..., len + 3 bytes, resynchronised on FE FE, with a carry
+/// across reads. It keeps every byte it receives, so a test can check what the driver put on the
+/// wire.
 class ReplyingArm
 {
 public:
@@ -472,10 +482,13 @@ private:
     static const std::vector<std::uint8_t> poll{parse_hex(RECORDED_POLL)};
     static const std::vector<std::uint8_t> sync_write{parse_hex(RECORDED_SYNC_WRITE)};
     const std::uint8_t id{frame[3]};
-    if (id == 0x11 && silent_after_power_off_.load()) {
-      powered_off_.store(true);
-    }
     if (powered_off_.load()) {
+      return;
+    }
+    if (id == 0x11) {
+      // The arm acks a power off (62 ms after it on 24 Nov 2026), then answers nothing more.
+      put(controller, {0xFE, 0xFE, 0x03, 0x11, 0x01, 0xFA});
+      powered_off_.store(silent_after_power_off_.load());
       return;
     }
     if (id == 0xE5) {
@@ -804,6 +817,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
+    {"fake_mode", "slow"},              // only instant or measured (#122)
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -896,6 +910,98 @@ TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
   EXPECT_DOUBLE_EQ(
     state(JOINTS.at(1), "position").value_or(std::nan("")),
     positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+// #122: the measured fake arm lags, and its clock is the sum of the periods read() gets, so
+// the test moves it without sleeping.
+TEST_F(LoadRobotSystem, MeasuredFakeModeLagsOnThePeriodsOfRead)
+{
+  using positronic_hardware::FakeArm;
+  load(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+
+  const double step{0.1};
+  const double rest_error{FakeArm::REST_ERROR_DEG.at(0) * 3.14159265358979323846 / 180.0};
+  const auto read_after{[this](double seconds) {
+      return resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(seconds)).result;
+    }};
+  ASSERT_TRUE(command(JOINTS.at(0), FakeArm::START_POSE.at(0) + step));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_after(0.0), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")), FakeArm::START_POSE.at(0) - rest_error,
+    1e-12);
+
+  ASSERT_EQ(read_after(FakeArm::LAG_TIME_CONSTANT_S), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")),
+    FakeArm::START_POSE.at(0) + step * (1.0 - std::exp(-1.0)) - rest_error, 1e-9);
+}
+
+// #122: what the measured fake arm is for. The controller's trajectory tolerance
+// (jetson_controllers.yaml, 0.087 rad) holds at 10 deg/s on the arm and fails at 30 (#33); the
+// instant fake arm would pass both. J1 and the wrist J5 move together through three points,
+// fed at the 30 Hz control rate; the time is the periods passed to read(), so no sleep.
+TEST_F(LoadRobotSystem, MeasuredFakeArmKeepsTheToleranceAt10DegPerSecondNotAt30)
+{
+  using positronic_hardware::FakeArm;
+  constexpr double DEG{3.14159265358979323846 / 180.0};
+  constexpr double TOLERANCE_RAD{0.087};
+  constexpr double PERIOD_S{1.0 / 30.0};
+  static constexpr std::array<std::size_t, 2> MOVING{0, 4};
+
+  const auto largest_error_rad{[this](double deg_per_s) {
+      load(urdf_with(all_good_joints(),
+        std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+      EXPECT_EQ(
+      go_to(
+        lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+        hardware_interface::lifecycle_state_names::ACTIVE),
+      hardware_interface::return_type::OK);
+      const auto cycle{[this]() {
+          EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+          EXPECT_EQ(
+        resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(PERIOD_S)).result,
+        hardware_interface::return_type::OK);
+        }};
+    // on_activate commands the pose it read, START_POSE less the rest error. Two seconds
+    // holding it, so the arm has settled one rest error below before the trajectory starts.
+      for (int i{0}; i < 60; ++i) {
+        cycle();
+      }
+    // Points 0, 1 and 2 at hold, hold + 10 deg and hold + 20 deg, at `deg_per_s` between them,
+    // then one second holding point 2.
+      const double span{20.0 * DEG};
+      const double duration{span / (deg_per_s * DEG)};
+      double largest{0.0};
+      for (int i{1}; i * PERIOD_S <= duration + 1.0; ++i) {
+        const double travelled{std::min(deg_per_s * DEG * i * PERIOD_S, span)};
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          EXPECT_TRUE(command(JOINTS.at(joint), hold + travelled));
+        }
+        cycle();
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          const double error{hold + travelled - state(JOINTS.at(joint), "position").value_or(0.0)};
+          largest = std::max(largest, std::abs(error));
+        }
+      }
+      return largest;
+    }};
+
+  const double slow{largest_error_rad(10.0)};
+  EXPECT_LT(slow, TOLERANCE_RAD);
+  const double fast{largest_error_rad(30.0)};
+  EXPECT_GT(fast, TOLERANCE_RAD);
+  RecordProperty("largest_error_10_deg_per_s_rad", std::to_string(slow));
+  RecordProperty("largest_error_30_deg_per_s_rad", std::to_string(fast));
 }
 
 TEST_F(LoadRobotSystem, WriteSendsACommandExactlyAtTheLimit)
@@ -1252,7 +1358,7 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
 
   // No read() while the arm heats: wait for the power off on the wire, then let the silence run
   // past the 200 ms link timeout. 400 ms is twice that, a margin for a loaded test machine; the
-  // cut is recorded right after the power off is written, well inside it.
+  // cut is recorded once the stop is acknowledged, before the power off, well inside it.
   // One copy of the bytes per look: two calls to received() can see different lengths.
   const auto powered_off{[&arm]() {
       const std::vector<std::uint8_t> sent{arm->received()};
