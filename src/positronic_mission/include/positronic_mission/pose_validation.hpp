@@ -21,9 +21,9 @@
 #ifndef POSITRONIC_MISSION__POSE_VALIDATION_HPP_
 #define POSITRONIC_MISSION__POSE_VALIDATION_HPP_
 
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"

@@ -51,7 +51,12 @@ public:
   std::atomic<int> stops{0};
 
   // How the backend fails, for testing the node's catch blocks
-  enum class ThrowMode { NONE, STD_EXCEPTION, UNKNOWN };
+  enum class ThrowMode
+  {
+    NONE,
+    STD_EXCEPTION,
+    UNKNOWN
+  };
   std::atomic<ThrowMode> throw_mode{ThrowMode::NONE};
 
   // Throw check
@@ -70,8 +75,7 @@ public:
     return last_waypoint_;
   }
 
-  MotionOutcome plan_and_execute(
-    const geometry_msgs::msg::PoseStamped & pose) override
+  MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) override
   {
     {
       const std::lock_guard<std::mutex> lock(pose_mutex_);

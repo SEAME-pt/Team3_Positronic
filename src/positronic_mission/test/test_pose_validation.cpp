@@ -138,7 +138,8 @@ TEST(PoseValidation, WaypointValidation)
   q[i].orientation.w = 0;
 
   EXPECT_EQ(positronic_mission::validate_waypoints(p), "");
-  EXPECT_EQ(positronic_mission::validate_waypoints(q),
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(q),
     "invalid quaternion on waypoint: " + std::to_string(i));
 }
 
@@ -153,11 +154,14 @@ TEST(PoseValidation, NonFiniteValues)
   q[i].position.x = INFINITY;
   r[i].position.z = NAN;
 
-  EXPECT_EQ(positronic_mission::validate_waypoints(p),
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(p),
     "non numeric pose value on waypoint: " + std::to_string(i));
-  EXPECT_EQ(positronic_mission::validate_waypoints(q),
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(q),
     "non numeric pose value on waypoint: " + std::to_string(i));
-  EXPECT_EQ(positronic_mission::validate_waypoints(r),
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(r),
     "non numeric pose value on waypoint: " + std::to_string(i));
 }
 

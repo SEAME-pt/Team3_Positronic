@@ -127,7 +127,8 @@ MotionOutcome MoveitBackend::plan_and_execute_cartesian(
   moveit_msgs::msg::RobotTrajectory trajectory;
   const bool avoid_collisions = true;
 
-  if (move_group_->computeCartesianPath(
+  if (
+    move_group_->computeCartesianPath(
       waypoints, EEF_STEP, trajectory, avoid_collisions, &error_code) < MIN_PLAN_FRACTION)
   {
     return MotionOutcome::PLANNING_FAILED;
@@ -195,7 +196,8 @@ bool MoveitBackend::ready()
 
     // A Cartesian Path has no frame, so set here a default one.
     temp_group->setPoseReferenceFrame(BASE_FRAME);
-    RCLCPP_INFO(node_->get_logger(), "Planning frame: %s, Reference frame: %s",
+    RCLCPP_INFO(
+      node_->get_logger(), "Planning frame: %s, Reference frame: %s",
       temp_group->getPlanningFrame().c_str(), temp_group->getPoseReferenceFrame().c_str());
     // Only assign move_group once every setup is fine
     move_group_ = std::move(temp_group);

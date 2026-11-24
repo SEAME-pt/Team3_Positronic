@@ -21,8 +21,8 @@
 #include <rclcpp/logging.hpp>
 #include <rclcpp_action/server.hpp>
 
-#include "positronic_mission/mission_node.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
+#include "positronic_mission/mission_node.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "positronic_mission/moveit_backend.hpp"
 

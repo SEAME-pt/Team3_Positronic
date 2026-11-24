@@ -20,8 +20,8 @@
 
 #include <cmath>
 
-#include "positronic_mission/pose_validation.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission
 {
@@ -32,8 +32,7 @@ static std::string check_values(const geometry_msgs::msg::Pose & p)
   const auto & qt = p.orientation;
 
   if (!(std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
-    std::isfinite(qt.x) && std::isfinite(qt.y) &&
-    std::isfinite(qt.z) && std::isfinite(qt.w)))
+    std::isfinite(qt.x) && std::isfinite(qt.y) && std::isfinite(qt.z) && std::isfinite(qt.w)))
   {
     return "non numeric pose value";
   }
@@ -73,7 +72,7 @@ std::string validate_waypoints(const std::vector<geometry_msgs::msg::Pose> & way
 
 std::string validate_input(const std::shared_ptr<const GoToPose::Goal> & goal)
 {
-  switch(goal->mode) {
+  switch (goal->mode) {
     case (GoToPose::Goal::MODE_POSE):
       return validate_pose(goal->target_pose);
     case (GoToPose::Goal::MODE_CARTESIAN):
