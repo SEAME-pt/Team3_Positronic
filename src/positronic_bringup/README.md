@@ -6,7 +6,7 @@ Launch files and the controllers config:
 - `launch/mirror.launch.py`: the real arm mirrored in RViz on a laptop (#24).
 - `launch/driver.launch.py`: the real arm driver on the Jetson (#23).
 - `launch/supervised.launch.py`: the driver under the safety supervisor (#45).
-- `launch/camera.launch.py`: the real wrist camera on the Jetson, on the Gazebo topics (#<issue>).
+- `launch/camera.launch.py`: the real wrist camera on the Jetson, on the Gazebo topics (#138).
 
 Files:
 

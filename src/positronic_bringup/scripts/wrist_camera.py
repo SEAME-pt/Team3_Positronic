@@ -108,6 +108,16 @@ def rotated_size(width, height, rotation):
     return width, height
 
 
+def check_parameters(**values):
+    """Raise ValueError for a parameter out of range: sizes, rates and counts > 0, jpeg 1-100."""
+    for name, value in values.items():
+        if name == 'jpeg_quality':
+            if not 1 <= value <= 100:
+                raise ValueError(f'jpeg_quality must be 1 to 100, not {value}')
+        elif value <= 0:
+            raise ValueError(f'{name} must be positive, not {value}')
+
+
 def rotate(frame, rotation):
     """Return `frame` turned by `rotation`; the same array when the rotation is none."""
     code = ROTATIONS[rotation]
@@ -231,6 +241,9 @@ class WristCamera(Node):
         self.jpeg_quality = self.declare_parameter('jpeg_quality', 80).value
         self.buffer_size = self.declare_parameter('buffer_size', 4).value
         report_period = self.declare_parameter('report_period', 10.0).value
+        check_parameters(width=self.width, height=self.height, fps=self.fps,
+                         buffer_size=self.buffer_size, report_period=report_period,
+                         jpeg_quality=self.jpeg_quality)
 
         self.open_capture = open_capture
         self.capture = None

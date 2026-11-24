@@ -28,6 +28,10 @@
 #   is encoded only with a subscriber and decodes to the published image; a failed read
 #   releases the camera and the next step reopens it; a camera that cannot open, or that gives
 #   another size than asked, or a calibration of another size; the report and the run loop.
+# Follow-up prompt (PR review):
+#   Cover the drop path of publish_frame (a frame of another size than the published one: no
+#   image, no camera_info, the camera kept), and the start-up check of width, height, fps,
+#   buffer_size, report_period (> 0) and jpeg_quality (1 to 100).
 
 """Check wrist_camera.py without a camera: the maths, the calibration, and the node."""
 
@@ -371,6 +375,49 @@ def test_unknown_rotation_stops_the_node(ros):
     """Check a typo in rotation fails at start, not frame after frame."""
     with pytest.raises(ValueError):
         make_node(FakeOpener(), rotation='90')
+
+
+@pytest.mark.parametrize('name, value', [
+    ('width', 0), ('height', -1), ('fps', 0), ('buffer_size', 0), ('report_period', 0.0),
+    ('jpeg_quality', 0), ('jpeg_quality', 101),
+])
+def test_parameter_out_of_range_stops_the_node(ros, name, value):
+    """Check a bad launch argument fails at start, with the parameter's name."""
+    with pytest.raises(ValueError, match=name):
+        make_node(FakeOpener(), **{name: value})
+
+
+def test_check_parameters_accepts_the_defaults():
+    """Check the defaults of the node pass, jpeg_quality at both ends included."""
+    camera.check_parameters(width=640, height=480, fps=30, buffer_size=4, report_period=10.0,
+                            jpeg_quality=80)
+    camera.check_parameters(jpeg_quality=1)
+    camera.check_parameters(jpeg_quality=100)
+
+
+class ShortFrameCapture(FakeCapture):
+    """Reports 640 x 480 when opened, then delivers 320 x 240 frames."""
+
+    def read(self):
+        """Return a frame smaller than the size reported at open."""
+        self.reads += 1
+        return True, numpy.zeros((240, 320, 3), dtype=numpy.uint8)
+
+
+def test_frame_of_another_size_is_dropped(ros):
+    """Check a frame that does not match the published size publishes nothing, camera kept."""
+    capture = ShortFrameCapture()
+    node = make_node(FakeOpener(capture))
+    try:
+        assert not node.step()
+        assert node.image_pub.sent == []
+        assert node.info_pub.sent == []
+        assert node.compressed_pub.sent == []
+        assert node.frames == 0
+        assert node.capture is capture  # not a camera failure: no reopen
+        assert not capture.released
+    finally:
+        node.destroy_node()
 
 
 def test_calibration_file_reaches_camera_info(ros, tmp_path):
