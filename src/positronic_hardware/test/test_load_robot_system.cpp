@@ -105,6 +105,11 @@
 //   a J1 step reported unmoved by a read of period 0 and 1 - 1/e of the way after a read of one
 //   lag time constant, without a sleep. A fake_mode that is neither instant nor measured is
 //   refused.
+// Follow-up prompt (#122 part 2):
+//   One test feeds the plugin, at the 30 Hz control rate, the points of a 3-point trajectory
+//   (hold, +10 deg, +20 deg) on J1 and the wrist J5 with fake_mode=measured, and checks the
+//   largest error between command and state: under the controller's 0.087 rad trajectory
+//   tolerance at 10 deg/s, over it at 30 deg/s.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -932,6 +937,68 @@ TEST_F(LoadRobotSystem, MeasuredFakeModeLagsOnThePeriodsOfRead)
   EXPECT_NEAR(
     state(JOINTS.at(0), "position").value_or(std::nan("")),
     FakeArm::START_POSE.at(0) + step * (1.0 - std::exp(-1.0)) - rest_error, 1e-9);
+}
+
+// #122: what the measured fake arm is for. The controller's trajectory tolerance
+// (jetson_controllers.yaml, 0.087 rad) holds at 10 deg/s on the arm and fails at 30 (#33); the
+// instant fake arm would pass both. J1 and the wrist J5 move together through three points,
+// fed at the 30 Hz control rate; the time is the periods passed to read(), so no sleep.
+TEST_F(LoadRobotSystem, MeasuredFakeArmKeepsTheToleranceAt10DegPerSecondNotAt30)
+{
+  using positronic_hardware::FakeArm;
+  constexpr double DEG{3.14159265358979323846 / 180.0};
+  constexpr double TOLERANCE_RAD{0.087};
+  constexpr double PERIOD_S{1.0 / 30.0};
+  static constexpr std::array<std::size_t, 2> MOVING{0, 4};
+
+  const auto largest_error_rad{[this](double deg_per_s) {
+      load(urdf_with(all_good_joints(),
+        std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+      EXPECT_EQ(
+      go_to(
+        lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+        hardware_interface::lifecycle_state_names::ACTIVE),
+      hardware_interface::return_type::OK);
+      const auto cycle{[this]() {
+          EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+          EXPECT_EQ(
+        resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(PERIOD_S)).result,
+        hardware_interface::return_type::OK);
+        }};
+    // on_activate commands the pose it read, START_POSE less the rest error. Two seconds
+    // holding it, so the arm has settled one rest error below before the trajectory starts.
+      for (int i{0}; i < 60; ++i) {
+        cycle();
+      }
+    // Points 0, 1 and 2 at hold, hold + 10 deg and hold + 20 deg, at `deg_per_s` between them,
+    // then one second holding point 2.
+      const double span{20.0 * DEG};
+      const double duration{span / (deg_per_s * DEG)};
+      double largest{0.0};
+      for (int i{1}; i * PERIOD_S <= duration + 1.0; ++i) {
+        const double travelled{std::min(deg_per_s * DEG * i * PERIOD_S, span)};
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          EXPECT_TRUE(command(JOINTS.at(joint), hold + travelled));
+        }
+        cycle();
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          const double error{hold + travelled - state(JOINTS.at(joint), "position").value_or(0.0)};
+          largest = std::max(largest, std::abs(error));
+        }
+      }
+      return largest;
+    }};
+
+  const double slow{largest_error_rad(10.0)};
+  EXPECT_LT(slow, TOLERANCE_RAD);
+  const double fast{largest_error_rad(30.0)};
+  EXPECT_GT(fast, TOLERANCE_RAD);
+  RecordProperty("largest_error_10_deg_per_s_rad", std::to_string(slow));
+  RecordProperty("largest_error_30_deg_per_s_rad", std::to_string(fast));
 }
 
 TEST_F(LoadRobotSystem, WriteSendsACommandExactlyAtTheLimit)

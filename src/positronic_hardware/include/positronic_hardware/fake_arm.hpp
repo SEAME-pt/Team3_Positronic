@@ -31,6 +31,7 @@
 #include <utility>
 
 #include "positronic_hardware/arm_backend.hpp"
+#include "positronic_hardware/link_watchdog.hpp"
 
 namespace positronic_hardware
 {
@@ -58,6 +59,8 @@ enum class FakeMode : std::uint8_t
 /// - Rest error: the pose it reports is REST_ERROR_DEG below where the joint really is, always.
 ///   So at rest every joint reads that far off its command, even one never commanded to move.
 /// It only reads the time through `now`, so a test sets the time and never sleeps.
+///
+/// cut_link() is a test hook for a link that goes silent (#122), in either mode: see there.
 class FakeArm : public ArmBackend
 {
 public:
@@ -103,9 +106,36 @@ public:
     }
   }
 
-  /// Where the joints are now, as the arm reports them.
+  /// Test hook: the link goes silent now, as when the serial cable came off in #20. The arm
+  /// stops answering: read_angles() keeps the last pose it reported, and link_timed_out() turns
+  /// true once the silence is longer than LinkWatchdog::DEFAULT_TIMEOUT (200 ms), the serial
+  /// backend's rule. Nothing reaches the arm any more: targets, the gripper, the stop and the
+  /// power on are lost, and halt() and power_on() report false, as they get no ack. The firmware
+  /// itself goes on: it finishes the last target it got and holds there. A second cut changes
+  /// nothing.
+  void cut_link()
+  {
+    if (cut_) {
+      return;
+    }
+    pose_at_cut_ = read_angles();
+    cut_ = true;
+    silence_.reset(now_());
+  }
+
+  /// Test hook: the link answers again, with the pose the arm is at by now.
+  void restore_link()
+  {
+    cut_ = false;
+  }
+
+  /// Where the joints are now, as the arm reports them. After cut_link(), the last pose
+  /// reported before the cut.
   [[nodiscard]] JointPositions read_angles() const override
   {
+    if (cut_) {
+      return pose_at_cut_;
+    }
     if (mode_ == FakeMode::INSTANT) {
       return angles_;
     }
@@ -122,6 +152,9 @@ public:
   /// a pose that turned NaN would never recover.
   void write_angles(const JointPositions & angles) override
   {
+    if (cut_) {
+      return;
+    }
     target_ = angles;
     if (mode_ == FakeMode::INSTANT) {
       angles_ = angles;
@@ -152,6 +185,9 @@ public:
 
   void write_gripper(std::uint8_t value) override
   {
+    if (cut_) {
+      return;
+    }
     gripper_ = value;
   }
 
@@ -160,16 +196,20 @@ public:
     return gripper_;
   }
 
-  /// INSTANT has nothing to interrupt. MEASURED stops every joint where it is.
+  /// INSTANT has nothing to interrupt. MEASURED stops every joint where it is. False after
+  /// cut_link(): the stop never reaches the arm.
   [[nodiscard]] bool halt() override
   {
     request_halt();
-    return true;
+    return !cut_;
   }
 
   /// The same stop as halt().
   void request_halt() override
   {
+    if (cut_) {
+      return;
+    }
     target_.reset();
     if (mode_ == FakeMode::INSTANT) {
       return;
@@ -181,10 +221,10 @@ public:
     }
   }
 
-  /// The fake arm has no servos to power.
+  /// The fake arm has no servos to power. False after cut_link(): no ack comes back.
   [[nodiscard]] bool power_on() override
   {
-    return true;
+    return !cut_;
   }
 
   /// The fake pose is known from the start.
@@ -193,10 +233,11 @@ public:
     return true;
   }
 
-  /// There is no serial line to go silent, so the fake link never times out.
+  /// False until cut_link(); then true once the silence passes 200 ms. False again after
+  /// restore_link().
   [[nodiscard]] bool link_timed_out() const override
   {
-    return false;
+    return cut_ && silence_.timed_out(now_());
   }
 
   /// The fake servos never warm up.
@@ -223,7 +264,8 @@ public:
     return 0;
   }
 
-  /// The last write_angles(), gone with a halt, as the serial backend's last target.
+  /// The last write_angles(), gone with a halt, as the serial backend's last target. A cut link
+  /// keeps it: that target is the one the arm finishes.
   [[nodiscard]] std::optional<JointPositions> last_target() const override
   {
     return target_;
@@ -268,6 +310,9 @@ private:
   std::array<Motion, NUM_JOINTS> motion_{standing_at_start()};
   std::optional<JointPositions> target_;
   std::uint8_t gripper_{GRIPPER_OPEN_VALUE};
+  bool cut_{false};
+  JointPositions pose_at_cut_{START_POSE};
+  LinkWatchdog silence_;
 };
 
 }  // namespace positronic_hardware
