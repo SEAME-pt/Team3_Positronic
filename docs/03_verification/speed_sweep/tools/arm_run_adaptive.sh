@@ -299,7 +299,7 @@ PY
     ;;
   stops)
     need_mode
-    for run in 1 2 3 4 5; do
+    for run in ${STOP_RUNS:-1 2 3 4 5}; do  # STOP_RUNS="5": redo one stop only
       cool_wait
       countdown "MOVES: start pose, then stop $run of 5: J1 40 deg at 15 deg/s, stopped about 1 s in"
       to_start "stop$run" || exit 1
@@ -348,7 +348,12 @@ PY
       ros2 control set_hardware_component_state positronic_arm active
       ros2 control set_controller_state arm_controller active
       sleep 1
-      if ! timeout 5 ros2 control list_controllers 2> /dev/null | grep -E "^arm_controller .* active"; then
+      # The ros2 CLI takes several seconds here: 20 s, 3 tries (5 s gave a false failure).
+      resumed=""
+      for _ in 1 2 3; do
+        timeout 20 ros2 control list_controllers 2> /dev/null | grep -E "^arm_controller .* active" && { resumed=1; break; }
+      done
+      if [ -z "$resumed" ]; then
         echo "!!! resume after stop $run failed (temperature gate? see launch.log): ending the stops" >&2
         exit 1
       fi
