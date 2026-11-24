@@ -138,6 +138,11 @@
 //   write): a poll published without a frame, a poll read with pose_from_poll off, a bridge past
 //   its age all passed. Check before that: the get_angles within two periods of the send, the
 //   pose 10 ms after the sync-write.
+// Follow-up prompt (#170, the repeat after a lost sync-write):
+//   On the arm, 24 Nov 2026, one send got no sync-write (a hot J4 garbles the bytes) and the
+//   repeat at rest stopped for good: 4 min of get_angles, no poll. Let an unanswered send go out
+//   again one second later instead of never, and check both sides: nothing before the second,
+//   the repeat on every write after it.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1858,6 +1863,16 @@ TEST(SerialArmPollPose, AStopThatStaysPendingDoesNotSpinTheThread)
   EXPECT_LE(get_angles_between(port, from, std::chrono::steady_clock::now()), 45U);
 }
 
+/// Writes `target` every 33 ms, as the controller at 30 Hz, until `end`.
+void write_until(
+  SerialArm & arm, const JointPositions & target, std::chrono::steady_clock::time_point end)
+{
+  while (std::chrono::steady_clock::now() < end) {
+    arm.write_angles(target);
+    std::this_thread::sleep_for(std::chrono::milliseconds{33});
+  }
+}
+
 TEST(SerialArmPollPose, ATargetWithoutItsSyncWriteIsNotSentOnEveryWrite)
 {
   // An arm that never sync-writes a send (a target it refuses). With the pose from the poll an
@@ -1870,16 +1885,35 @@ TEST(SerialArmPollPose, ATargetWithoutItsSyncWriteIsNotSentOnEveryWrite)
   SerialArm arm{std::move(transport), POLL_TIMING};
   static_cast<void>(wait_for_reply(arm));
   const JointPositions refused{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
-  const auto end{std::chrono::steady_clock::now() + std::chrono::milliseconds{400}};
-  while (std::chrono::steady_clock::now() < end) {
-    arm.write_angles(refused);
-    std::this_thread::sleep_for(std::chrono::milliseconds{33});
-  }
+  write_until(arm, refused, std::chrono::steady_clock::now() + std::chrono::milliseconds{400});
   EXPECT_EQ(send_angles_frames(port.written()).size(), 1U);
   EXPECT_EQ(arm.echo_timeouts(), 1U);
   EXPECT_FALSE(arm.link_timed_out());
   arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
   EXPECT_EQ(wait_for_sends(port, 2).size(), 2U);
+}
+
+TEST(SerialArmPollPose, ARepeatStoppedByOneLostSyncWriteComesBackAfterTheRetry)
+{
+  // One sync-write lost (garbled bytes from a hot servo, 24 Nov 2026), then the arm answers
+  // again, while the controller writes the same target at rest. Nothing goes out again before
+  // REPEAT_RETRY after the unanswered send; after it the repeat is back on every write. The
+  // first count is 300 ms before the retry is due, the second 700 ms after it: ~20 writes then.
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_sync_write(false);
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  const JointPositions held{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  arm.write_angles(held);
+  ASSERT_EQ(wait_for_sends(port, 1).size(), 1U);
+  port.set_sync_write(true);
+  const auto sent{std::chrono::steady_clock::now()};
+
+  write_until(arm, held, sent + SerialArm::REPEAT_RETRY - std::chrono::milliseconds{300});
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 1U);
+  write_until(arm, held, sent + SerialArm::REPEAT_RETRY + std::chrono::milliseconds{700});
+  EXPECT_GE(send_angles_frames(port.written()).size(), 5U);
 }
 
 TEST(SerialArmPollPose, AMissingFrameBringsTheGetAnglesBack)

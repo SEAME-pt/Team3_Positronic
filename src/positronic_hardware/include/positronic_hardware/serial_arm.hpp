@@ -176,6 +176,12 @@ public:
   // temperature request is written while a stop or power_on is pending. ACK_TIMEOUT itself
   // lives in requests.hpp.
 
+  // After a send that got no sync-write, an unchanged target goes out again after this long,
+  // not on every write: a target the Atom refuses costs one echo_timeout a second, and one
+  // sync-write lost in garbled bytes (a hot servo, 24 Nov 2026) stops the repeat at rest for a
+  // second instead of until the target changes.
+  static constexpr std::chrono::milliseconds REPEAT_RETRY{1000};
+
   static constexpr std::uint8_t GRIPPER_SPEED{20};
   static constexpr std::chrono::milliseconds GRIPPER_READ_PERIOD{100};
   static constexpr std::chrono::milliseconds GRIPPER_REPLY_TIMEOUT{50};
@@ -434,10 +440,12 @@ private:
   // that had a target to send. Never from an ack: the Atom acks first and still works on the
   // servo bus after it (set_gripper_value: ack at ~2 ms, its write to the gripper until ~12 ms).
   bool input_free_{false};
-  // #170, serial thread only: whether the last send_angles got its sync-write. An unchanged
-  // target is sent again at rest only when it did: a target the Atom refuses would otherwise go
-  // out on every write, each one waiting the echo_timeout.
+  // #170, serial thread only: whether the last send_angles got its sync-write, and when it went
+  // out. An unchanged target is sent again on a write when it did, or REPEAT_RETRY after it:
+  // a target the Atom refuses would otherwise go out on every write, each one waiting the
+  // echo_timeout.
   bool last_send_answered_{true};
+  Clock::time_point last_send_at_{};
   // #170: write_angles() wakes the thread (command_ready_, set by wake_thread()), so the send
   // goes out right after the controller's write; a new halt or power on wakes it too
   // (request_ready_). Each turn clears both before it looks at what they

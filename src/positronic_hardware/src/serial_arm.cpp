@@ -833,10 +833,12 @@ void SerialArm::poll_loop()
     // thread's view of last_target_, the one memory of what went out. A turn with a write since
     // the last sends even the same command (#170): the stream follows the controller's cadence
     // and the pose keeps coming from the poll. The repeat needs the last send to have got its
-    // sync-write, so a target the Atom refuses is not sent on every write, and it gives way to
-    // a gripper that is due, which is served only in a turn that sends nothing (#174).
+    // sync-write, or REPEAT_RETRY to have passed since it, so a target the Atom refuses is not
+    // sent on every write and one lost sync-write does not end the repeat; it gives way to a
+    // gripper that is due, which is served only in a turn that sends nothing (#174).
     const bool changed{target.has_value() && target != last_sent()};
-    const bool repeat{wrote && last_send_answered_ && !gripper_due()};
+    const bool may_repeat{last_send_answered_ || Clock::now() - last_send_at_ >= REPEAT_RETRY};
+    const bool repeat{wrote && may_repeat && !gripper_due()};
     const bool new_target{replied && !halted_.load() && target.has_value() && (changed || repeat)};
 
     // The guard only runs after a reply: the arm's input is free then.
@@ -851,6 +853,7 @@ void SerialArm::poll_loop()
       const std::optional<positronic_protocol::Frame> frame{encode_command(*target)};
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
         last_target_.writeFromNonRT(target);
+        last_send_at_ = Clock::now();
         sent = true;
         // The arm passes the command to the servos and ignores the port meanwhile: a
         // get_angles inside this window stalls, so the next turn must not start before it.
