@@ -66,8 +66,9 @@ namespace positronic_safety
 /// few members halt_before_exit() shares with that thread. Every request is asynchronous: no
 /// callback ever waits for an answer.
 ///
-/// It publishes ~/heartbeat at every check, from configure on and in every mode (#136): the
-/// driver halts the arm by itself when the heartbeat stops while the arm may move.
+/// It publishes ~/heartbeat at every check while it answers for the arm, resuming, monitoring
+/// or halting, and never while STOPPED (#136): the driver halts the arm by itself when the
+/// heartbeat stops while the arm may move, and refuses to activate without it.
 ///
 /// Limits: it stops the arm through the controller manager and the driver, so it cannot stop
 /// an arm whose serial line is dead (see "Link timeout" in the positronic_hardware README). If
@@ -214,8 +215,9 @@ private:
   rclcpp::Subscription<DynamicJointState>::SharedPtr fault_subscription_;
   /// A plain publisher, not a lifecycle one: the status must also go out while INACTIVE.
   rclcpp::Publisher<SafetyStatus>::SharedPtr status_publisher_;
-  /// The driver's dead-man check listens to it (#136). Plain too, for the same reason: a
-  /// restarted supervisor's resume must find the driver hearing it.
+  /// The driver's dead-man check listens to it (#136). Plain too, and created at configure
+  /// although check() publishes nothing while STOPPED: discovery is done before a resume needs
+  /// the driver to hear it.
   rclcpp::Publisher<Heartbeat>::SharedPtr heartbeat_publisher_;
   rclcpp::Service<Trigger>::SharedPtr stop_service_;
   HardwareClient::SharedPtr hardware_client_;

@@ -44,6 +44,13 @@
 // Follow-up prompt (#136 review):
 //   Test that the hook returns after halt_step_timeout_ms when the controller manager never
 //   answers, and that a supervisor shut down while monitoring stops its heartbeat.
+// Follow-up prompt (#136, PR review):
+//   The heartbeat now goes out only while the supervisor answers for the arm: RESUMING,
+//   MONITORING and HALTING, never STOPPED. Change the heartbeat test: none after configure
+//   (once the fake hears the publisher), at least 5 in 500 ms while monitoring, state MOVING.
+//   Add: it goes out while RESUMING, before the hardware request is answered; and while
+//   HALTING after a deactivate with an unanswered hardware request (lifecycle INACTIVE, still
+//   beating), then stops once STOPPED.
 
 #include <gtest/gtest.h>
 
@@ -150,6 +157,13 @@ public:
   /// How many heartbeats of the supervisor arrived (#136), and the state of the last one.
   std::size_t supervisor_heartbeats{0};
   std::uint8_t supervisor_heartbeat_state{Heartbeat::STATE_IDLE};
+
+  /// True once the supervisor's ~/heartbeat publisher is matched: before that, no heartbeat
+  /// proves nothing.
+  bool hears_supervisor() const
+  {
+    return supervisor_heartbeat_subscription_->get_publisher_count() > 0;
+  }
 
   bool publish_heartbeat{true};
   bool publish_fault_data{true};
@@ -722,14 +736,16 @@ TEST_F(SafetySupervisorTest, HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNo
   EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
 }
 
-TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileStoppedAndWhileMonitoring)
+TEST_F(SafetySupervisorTest, HeartbeatIsSilentWhileStoppedAndGoesOutWhileMonitoring)
 {
-  // #136: from configure on, so a resume finds the driver already hearing it.
+  // #136: STOPPED after configure. Silent, so an activate the supervisor did not ask for finds
+  // no heartbeat at the driver. Checked once the fake is matched to the publisher.
   ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
   ASSERT_TRUE(spin_until([this]() {
-      return fake_->supervisor_heartbeats > 0;
+      return fake_->hears_supervisor();
   }));
-  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_STOPPED);
+  spin_for(milliseconds{300});  // 15 checks of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, 0U);
 
   ASSERT_TRUE(spin_until([this]() {
       return try_activate();
@@ -742,6 +758,57 @@ TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileStoppedAndWhileMonitoring)
   spin_for(milliseconds{500});
   EXPECT_GE(fake_->supervisor_heartbeats, before + 5);
   EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_MOVING);
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileResuming)
+{
+  // The driver's on_activate waits for a heartbeat, so the resume must beat before its
+  // hardware request is answered. Here it never is: RESUMING for resume_step_timeout_ms (500).
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->hears_supervisor();
+  }));
+  fake_->answer_hardware = false;
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_RESUMING);
+  }));
+
+  const std::size_t before = fake_->supervisor_heartbeats;
+  // 200 ms holds about 10; 3 leaves room for a slow runner, and 200 ms is far inside the 500.
+  spin_for(milliseconds{200});
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_RESUMING));
+  EXPECT_GE(fake_->supervisor_heartbeats, before + 3);
+  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_STOPPED);
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileHaltingAndStopsOnceStopped)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // A person deactivates the supervisor: INACTIVE at once, while the halt waits for its first
+  // step, never answered here, for halt_step_timeout_ms (200). It must still beat: the driver
+  // is active until that step lands.
+  fake_->answer_hardware = false;
+  EXPECT_EQ(supervisor_->deactivate().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_HALTING);
+  }));
+  const std::size_t at_deactivate = fake_->supervisor_heartbeats;
+  // 120 ms holds about 6; 2 leaves room for a slow runner, and 120 ms is inside the 200.
+  spin_for(milliseconds{120});
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_HALTING));
+  EXPECT_GE(fake_->supervisor_heartbeats, at_deactivate + 2);
+
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DEACTIVATED);
+  }));
+  spin_for(milliseconds{100});  // heartbeats already sent arrive
+  const std::size_t once_stopped = fake_->supervisor_heartbeats;
+  spin_for(milliseconds{300});  // 15 checks of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, once_stopped);
 }
 
 TEST_F(SafetySupervisorTest, ExitWhileMonitoringSendsHardwareInactiveFirst)

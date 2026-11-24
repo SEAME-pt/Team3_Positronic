@@ -584,15 +584,19 @@ bool RobotSystem::supervisor_allows_activation()
   if (!supervisor_watchdog_.has_value()) {
     return true;
   }
-  // The supervisor publishes from its configure on, so the heartbeat is normally there already;
-  // the wait only covers a late one. Sleeping is fine here, outside the control loop.
+  // The supervisor only beats while it answers for the arm: it starts at its resume, just
+  // before it asks for this activate, so the first heartbeat normally comes within one of its
+  // 20 ms checks. The subscription runs on another thread of the executor meanwhile. With the
+  // supervisor STOPPED nothing comes, so an activate it did not ask for is refused. Sleeping is
+  // fine here, outside the control loop.
   const auto deadline{LinkWatchdog::Clock::now() + supervisor_watchdog_->timeout()};
   while (supervisor_silent()) {
     if (LinkWatchdog::Clock::now() >= deadline) {
       RCLCPP_ERROR(
         get_logger(),
-        "No heartbeat from the safety supervisor on %s for %d ms; not activating. Start "
-        "supervised.launch.py, or set supervisor_timeout_ms:=0 for a run without the supervisor.",
+        "No heartbeat from the safety supervisor on %s for %d ms; not activating. Activate the "
+        "supervisor, which asks for this activate, or set supervisor_timeout_ms:=0 for a run "
+        "without it.",
         std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str(), config_.supervisor_timeout_ms);
       return false;
     }

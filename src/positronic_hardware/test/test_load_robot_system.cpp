@@ -119,6 +119,10 @@
 //   with the heartbeat back clears it and targets go out again; activate is refused without a
 //   heartbeat; nothing happens at 0; on_init refuses the check without a node; and a link
 //   timeout that came first keeps fault 1.
+// Follow-up prompt (#136, PR review):
+//   The supervisor now beats only from its resume on, so the first heartbeat reaches the driver
+//   while on_activate already waits. Test that a heartbeat that starts after activate() was
+//   called still activates.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1995,6 +1999,26 @@ TEST_F(LoadRobotSystem, ActivateWaitsForTheSupervisorHeartbeat)
 
   beating_ = true;
   EXPECT_EQ(activate(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, ActivateHearsAHeartbeatThatStartsWhileItWaits)
+{
+  // As the supervisor's resume does: silent while STOPPED, it starts beating just before it
+  // asks for the activate. 1000 ms of wait for a heartbeat that starts after 100 ms: the 900 ms
+  // left is the margin for a loaded runner, not a requirement.
+  load_with_node(urdf_with(
+    all_good_joints(), std::string{FAKE_BACKEND} + param("supervisor_timeout_ms", "1000")));
+  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(driver_listens());
+
+  std::thread resume{[this]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+      beating_ = true;
+    }};
+  const hardware_interface::return_type result{activate()};
+  resume.join();
+  EXPECT_EQ(result, hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 }
 
 TEST_F(LoadRobotSystem, NoSupervisorCheckAtZero)

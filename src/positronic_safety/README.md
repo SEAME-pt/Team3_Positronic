@@ -41,9 +41,11 @@ of `SupervisorLogic`.
   it left ACTIVE: cut the power.
 - `~/stop` (`std_srvs/Trigger`): starts a halt and answers at once.
 - `~/heartbeat` (`positronic_interfaces/Heartbeat`, best effort): published at every check
-  (20 ms) from configure to cleanup or shutdown, in every mode. The driver's dead-man check (#136) halts the
-  arm when it stops while the arm may move. Published from the check timer itself, so a stuck
-  executor goes silent too. The driver listens on `/safety_supervisor/heartbeat`: renaming the
+  (20 ms) while resuming, monitoring or halting; silent when stopped. The driver's dead-man
+  check (#136) halts the arm when it stops while the arm may move, and refuses an activate
+  without it, so a `set_hardware_component_state active` by hand while the supervisor is stopped
+  fails. The mode, not the lifecycle state: a deactivate is INACTIVE at once while its halt
+  still runs. Published from the check timer itself, so a stuck executor goes silent too. The driver listens on `/safety_supervisor/heartbeat`: renaming the
   node breaks it, and the driver then refuses to activate.
 - **Ctrl+C** on the supervisor alone runs no lifecycle transition, so `on_shutdown` never comes.
   A pre-shutdown hook in `main()` (`halt_before_exit()`) starts the halt while the supervisor is
@@ -71,8 +73,8 @@ and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`
   the supervisor again and activate it to resume: one activate, the driver's fault clears when
   its component activates.
 - **Any heartbeat counts:** the driver's check proves that some process publishes on
-  `~/heartbeat`, not which one or that it is monitoring: this supervisor while inactive, or one
-  on another machine in the same ROS domain, keeps it satisfied. ROS domain isolation is assumed.
+  `~/heartbeat`, not which one: a supervisor on another machine in the same ROS domain, or a
+  `ros2 topic pub`, keeps it satisfied. ROS domain isolation is assumed.
 - **The heartbeat crosses the Wi-Fi:** the 300 ms limit holds only with the mission node at
   **25 Hz** and the Jetson's **Wi-Fi power saving off**
   (`docs/03_verification/heartbeat_link`). Detection takes up to 320 ms.

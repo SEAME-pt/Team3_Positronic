@@ -352,13 +352,17 @@ void SafetySupervisor::check()
   const Clock::time_point now = Clock::now();
 
   // #136: from this callback, not a timer of its own, so a supervisor whose executor is stuck
-  // goes silent as well. In every mode: the driver only checks it while the arm may move.
+  // goes silent as well. Only while the supervisor answers for the arm: resuming, monitoring or
+  // halting. Silent when STOPPED, so an activate the supervisor did not ask for (a person's
+  // set_hardware_component_state) finds no heartbeat and the driver refuses it. The mode, not
+  // the lifecycle state: a deactivate is INACTIVE at once while its halt still runs, and the
+  // resume is RESUMING before its request leaves, so the driver's activation wait hears it.
   Heartbeat heartbeat;
   heartbeat.stamp = this->now();  // the node's clock; `now` above is the steady one
   heartbeat.node_name = get_name();
   heartbeat.state =
     logic_.mode() == Mode::MONITORING ? Heartbeat::STATE_MOVING : Heartbeat::STATE_STOPPED;
-  if (heartbeat_publisher_ != nullptr) {
+  if (heartbeat_publisher_ != nullptr && logic_.mode() != Mode::STOPPED) {
     heartbeat_publisher_->publish(heartbeat);
   }
 

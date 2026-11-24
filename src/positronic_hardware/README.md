@@ -377,7 +377,8 @@ reused.
 The supervisor (#45) stops the arm by asking for it. If the supervisor dies (`kill -9`, a crash,
 a hang), nobody asks, and the arm finished its move in the #45 campaign (test 7). So the driver
 checks that the supervisor is there: the supervisor publishes `positronic_interfaces/Heartbeat`
-on `/safety_supervisor/heartbeat` every 20 ms, and with no heartbeat for `supervisor_timeout_ms`
+on `/safety_supervisor/heartbeat` every 20 ms while it resumes, monitors or halts (not when
+stopped), and with no heartbeat for `supervisor_timeout_ms`
 while active, `read()` latches `driver/fault_code` = 4, calls `request_halt()` (every target
 held, the stop left for the serial thread: the servos keep torque and the arm holds its pose),
 logs once and returns ERROR.
@@ -392,7 +393,9 @@ logs once and returns ERROR.
   effort; its callback only stores the arrival time, on this machine's steady clock, in the same
   lock-free `LinkWatchdog` as the link timeout. `read()` adds one atomic load and one clock read.
 - **When.** Only while active. `on_activate` waits up to `supervisor_timeout_ms` for a heartbeat
-  and refuses without one. A link timeout that came first keeps its code, 1, but `read()` still
+  and refuses without one: the supervisor starts beating at its resume, just before it asks for
+  the activate, so an activate it did not ask for (by hand, with the supervisor stopped) is
+  refused. A link timeout that came first keeps its code, 1, but `read()` still
   returns ERROR.
 - **Timing.** 500 ms is 25 heartbeats, both nodes on the Jetson (ADR 0006), no Wi-Fi in between.
   The stop leaves within the timeout, plus one control period (33 ms), plus the turn the serial
@@ -552,9 +555,8 @@ does not move and the log names the joint.
 ## Known limits
 
 - The dead-man check (#136) proves that some process publishes on
-  `/safety_supervisor/heartbeat`, not which one or that it is monitoring: an inactive supervisor,
-  or one on another machine in the same ROS domain, keeps it satisfied. ROS domain isolation is
-  assumed.
+  `/safety_supervisor/heartbeat`, not which one: a supervisor on another machine in the same ROS
+  domain, or a `ros2 topic pub`, keeps it satisfied. ROS domain isolation is assumed.
 - The velocity uses the control loop `period` as dt, not the time between two serial samples.
   When the controller runs faster than the arm answers (about every 16 ms), some `read()` calls
   see the same pose twice and the velocity is underestimated.
