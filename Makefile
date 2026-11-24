@@ -107,8 +107,11 @@ format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's full output)
 	$(RUN) env VERBOSE=$(VERBOSE) bash scripts/lint.sh
 
-tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
+# Every file in src/, with the same test-file rule as CI (ADR 0007), but warnings never fail
+# (ADR 0004): --soft. It fails only when clang-tidy can't check a file (it doesn't compile).
+tidy: ## clang-tidy on src/, warnings only, bugprone only on test files (needs make build first)
+	$(RUN) python3 scripts/tidy_changed.py --all --soft --strict='^/ws/src/' \
+	  --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)'
 
 # scripts/tidy_changed.py: the selection, then clang-tidy in parallel, one line per file.
 tidy-strict: ## clang-tidy on the strict packages (TIDY_STRICT_FILES), any warning is an error (needs make build first)

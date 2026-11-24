@@ -31,6 +31,9 @@
 #   output is printed; main() exits 2 without a build. And: every family .clang-tidy enables,
 #   except bugprone, is switched off in the Makefile's TIDY_TEST_CHECKS, so tests stay bugprone
 #   only when someone adds a family.
+#   Later: --soft (make tidy) drops --warnings-as-errors but keeps the test checks; a warning is
+#   printed as 'warn' and exits 0, a file clang-tidy can't check still exits 1; make tidy runs
+#   the script with --soft and the same TIDY_TEST_* variables as CI.
 """Unit tests for the clang-tidy selection and runner of #144 (no ROS 2, no git)."""
 
 import io
@@ -163,13 +166,30 @@ def test_test_files_get_the_test_checks_and_sources_do_not():
     assert not TESTS.search('/ws/src/pkg_a/src/test_x.cpp')
 
 
-def fake_runner(failing):
+def test_soft_drops_warnings_as_errors_and_keeps_the_test_checks():
+    assert tc.tidy_command(A_TEST, 'build', TESTS, '-misc-*', soft=True) == [
+        'clang-tidy', '-p', 'build', '--quiet', '--checks=-misc-*', A_TEST]
+    assert tc.tidy_command(A_CPP, 'build', TESTS, '-misc-*', soft=True) == [
+        'clang-tidy', '-p', 'build', '--quiet', A_CPP]
+
+
+def test_verdict():
+    assert tc.verdict(0, '') == 'ok'
+    assert tc.verdict(0, ' \n') == 'ok'
+    assert tc.verdict(0, 'a.cpp:1:1: warning: x [misc-x]\n') == 'warn'
+    assert tc.verdict(1, '') == 'FAIL'
+    assert tc.verdict(1, 'a.cpp:1:1: error: x\n') == 'FAIL'
+
+
+def fake_runner(failing, warning=()):
     calls = []
 
     def runner(command):
         calls.append(command)
         if command[-1] in failing:
             return 1, 2.5, command[-1] + ':1:1: error: planted [x,-warnings-as-errors]\n'
+        if command[-1] in warning:
+            return 0, 1.5, command[-1] + ':1:1: warning: planted [x]\n'
         return 0, 1.0, ''
     return runner, calls
 
@@ -212,6 +232,11 @@ def test_report_full_changed_and_failed():
     assert 'Strict TUs they can affect: **1**' in text and '(a.hpp)' in text
 
 
+def write_database(tmp_path):
+    (tmp_path / 'compile_commands.json').write_text(
+        '[' + ','.join('{"file": "%s"}' % tu for tu in sorted(COMPILED)) + ']')
+
+
 def test_main_without_a_build_exits_2(tmp_path, capsys):
     code = tc.main(['--all', '--strict', 'x', '--test-files', 'y', '--test-checks=-z',
                     '--build-dir', str(tmp_path)])
@@ -220,8 +245,7 @@ def test_main_without_a_build_exits_2(tmp_path, capsys):
 
 
 def test_main_all_runs_every_strict_tu_and_fails_on_a_warning(tmp_path, monkeypatch):
-    (tmp_path / 'compile_commands.json').write_text(
-        '[' + ','.join('{"file": "%s"}' % tu for tu in sorted(COMPILED)) + ']')
+    write_database(tmp_path)
     runner, calls = fake_runner({B_CPP})
     monkeypatch.setattr(tc, 'run_one', runner)
     summary = tmp_path / 'log' / 'summary.md'
@@ -232,6 +256,40 @@ def test_main_all_runs_every_strict_tu_and_fails_on_a_warning(tmp_path, monkeypa
     assert sorted(c[-1] for c in calls) == sorted([A_CPP, A_TEST, B_CPP])
     assert '1 failed' in summary.read_text()
     assert tc.main(argv + ['--dry-run']) == 0
+
+
+def test_main_soft_prints_warnings_and_exits_0(tmp_path, monkeypatch, capsys):
+    write_database(tmp_path)
+    runner, calls = fake_runner(set(), warning={A_TEST, C_CPP})
+    monkeypatch.setattr(tc, 'run_one', runner)
+    monkeypatch.delenv('GITHUB_STEP_SUMMARY', raising=False)
+    argv = ['--all', '--soft', '--strict', '^/ws/src/', '--test-files', TESTS.pattern,
+            '--test-checks=-misc-*', '--build-dir', str(tmp_path)]
+    assert tc.main(argv) == 0
+    assert sorted(c[-1] for c in calls) == sorted(COMPILED)  # every package, not only strict
+    assert not any('--warnings-as-errors=*' in c for c in calls)
+    assert [c[-1] for c in calls if '--checks=-misc-*' in c] == [A_TEST]
+    out = capsys.readouterr().out
+    assert 'planted' in out and ' warn ' in out
+    assert '4 files, 0 failed, 2 with warnings' in out
+
+
+def test_main_soft_fails_when_clang_tidy_cannot_check_a_file(tmp_path, monkeypatch):
+    write_database(tmp_path)
+    runner, _ = fake_runner({C_CPP}, warning={A_CPP})
+    monkeypatch.setattr(tc, 'run_one', runner)
+    monkeypatch.delenv('GITHUB_STEP_SUMMARY', raising=False)
+    assert tc.main(['--all', '--soft', '--strict', '^/ws/src/', '--test-files', TESTS.pattern,
+                    '--test-checks=-misc-*', '--build-dir', str(tmp_path)]) == 1
+
+
+def test_make_tidy_is_soft_with_the_same_test_rule_as_ci():
+    with open(os.path.join(REPO, 'Makefile'), encoding='utf-8') as f:
+        makefile = f.read()
+    recipe = makefile.split('\ntidy:', 1)[1].split('\n\n', 1)[0]
+    assert 'scripts/tidy_changed.py --all --soft' in recipe
+    assert "--test-files='$(TIDY_TEST_FILES)'" in recipe
+    assert "--test-checks='$(TIDY_TEST_CHECKS)'" in recipe
 
 
 def test_tests_get_only_bugprone_whatever_clang_tidy_enables():
