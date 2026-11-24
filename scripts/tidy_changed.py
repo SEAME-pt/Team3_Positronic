@@ -32,15 +32,24 @@
 #   every warning an error; test files (TIDY_TEST_FILES) get only the bugprone checks
 #   (TIDY_TEST_CHECKS, ADR 0007). Log each file's time, and write a Markdown report to
 #   $GITHUB_STEP_SUMMARY when it is set. Pure functions where possible, stdlib only, unit-tested.
+#   Later: a --soft mode for make tidy, on all of src/ with the same test-file rule: warnings are
+#   printed, not errors (ADR 0004), so only a file clang-tidy can't check fails the run.
+#   And a summary at the end of every run, like make test's (#148, reuse its Style): one line
+#   per package with files, warnings, the checks that fired most and time, then a verdict line.
+#   Count a warning in the package of the file it points at, once, even when a header's warning
+#   shows up in every file that includes it. Like make test, print only the files with warnings or
+#   failures unless --verbose (make tidy VERBOSE), which prints one line for every file.
 """clang-tidy, warnings as errors, on the strict TUs a change can affect (issue #144)."""
 
 #   make tidy-strict    python3 scripts/tidy_changed.py --all <TIDY_* options>
 #   make tidy-changed   python3 scripts/tidy_changed.py --base origin/dev <TIDY_* options>
+#   make tidy           python3 scripts/tidy_changed.py --all --soft --strict '^/ws/src/' ...
 # --dry-run prints the selection without running clang-tidy.
 # git runs inside the dev container, so --base doesn't work in a git worktree (its .git file
 # points outside the mounted repo): use make tidy-strict there.
 
 import argparse
+import collections
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -49,12 +58,18 @@ import subprocess
 import sys
 import time
 
+from summarize_tests import Style, use_colour
+
 ALL = 'ALL'
 FULL_RUN_FILES = ('docker/Dockerfile', 'scripts/tidy_changed.py')
 FULL_RUN_BASENAMES = ('.clang-tidy',)
 PACKAGE_FILES = ('CMakeLists.txt', 'package.xml')
 INTERFACE_SUFFIXES = ('.msg', '.srv', '.action', '.idl')
 MAKE_VARIABLES = ('TIDY_STRICT_FILES', 'TIDY_TEST_FILES', 'TIDY_TEST_CHECKS')
+# path:line:col: warning: text [check,check] (strict: error: ... [check,-warnings-as-errors])
+DIAGNOSTIC = re.compile(r'^(\S+?):(\d+):(\d+): (?:warning|error): .*?(?: \[([^\]]+)\])?$',
+                        re.MULTILINE)
+TOP_CHECKS = 3
 
 
 def parse_depfile(text):
@@ -154,9 +169,11 @@ def all_strict(compiled, strict):
     return {tu for tu in compiled if strict.search(tu)}
 
 
-def tidy_command(tu, build_dir, test_files, test_checks):
-    """Build the clang-tidy call for one TU: warnings are errors, fewer checks on tests."""
-    command = ['clang-tidy', '-p', build_dir, '--quiet', '--warnings-as-errors=*']
+def tidy_command(tu, build_dir, test_files, test_checks, soft=False):
+    """Build the clang-tidy call for one TU: warnings are errors unless soft, fewer on tests."""
+    command = ['clang-tidy', '-p', build_dir, '--quiet']
+    if not soft:
+        command.append('--warnings-as-errors=*')
     if test_files.search(tu):
         command.append('--checks=' + test_checks)
     return command + [tu]
@@ -172,26 +189,108 @@ def run_one(command):
     return done.returncode, time.monotonic() - start, output
 
 
-def run_all(tus, build_dir, test_files, test_checks, jobs, runner=None, out=None):
-    """Run clang-tidy on every TU, jobs at a time; print each in order. Return {TU: result}."""
+def verdict(code, output):
+    """'FAIL' when clang-tidy failed, 'warn' when it passed with output (soft), else 'ok'."""
+    if code != 0:
+        return 'FAIL'
+    return 'warn' if output.strip() else 'ok'
+
+
+def run_all(tus, build_dir, test_files, test_checks, jobs, runner=None, out=None, soft=False,
+            verbose=False):
+    """Run clang-tidy on every TU, jobs at a time. Return {TU: result}.
+
+    Print, in order, the files with warnings or failures and their output; every file if verbose.
+    """
     runner = runner or run_one
     out = out or sys.stdout
     results = {}
     ordered = sorted(tus)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = {tu: pool.submit(runner, tidy_command(tu, build_dir, test_files, test_checks))
+        futures = {tu: pool.submit(runner, tidy_command(tu, build_dir, test_files, test_checks,
+                                                        soft))
                    for tu in ordered}
         for n, tu in enumerate(ordered, start=1):
             code, seconds, output = futures[tu].result()
             results[tu] = (code, seconds, output)
             kind = 'test' if test_files.search(tu) else 'src'
-            verdict = 'ok' if code == 0 else 'FAIL'
-            line = '[%d/%d] %-4s %6.1f s  %-4s %s' % (n, len(ordered), verdict, seconds, kind, tu)
+            if not verbose and verdict(code, output) == 'ok':
+                continue
+            line = '[%d/%d] %-4s %6.1f s  %-4s %s' % (n, len(ordered), verdict(code, output),
+                                                      seconds, kind, tu)
             out.write(line + '\n')
             if output.strip():
                 out.write(output.rstrip() + '\n')
             out.flush()
     return results
+
+
+def warnings_in(output):
+    """Return {diagnostic line: (path, [checks])} for each warning or error clang-tidy printed."""
+    found = {}
+    for match in DIAGNOSTIC.finditer(output):
+        checks = [c for c in (match.group(4) or 'clang-diagnostic-error').split(',')
+                  if c != '-warnings-as-errors']
+        found[match.group(0)] = (match.group(1), checks)
+    return found
+
+
+def summarize(results, test_files, root='/ws'):
+    """Per package: {pkg: {'src', 'test', 'failed', 'seconds', 'warnings', 'checks'}}.
+
+    Files and time count in the package of the TU; a warning counts once (a header's warning
+    is printed for every TU that includes it), in the package of the file it points at.
+    """
+    def entry(pkg):
+        return packages.setdefault(pkg, {'src': 0, 'test': 0, 'failed': 0, 'seconds': 0.0,
+                                         'warnings': 0, 'checks': collections.Counter()})
+
+    packages, seen = {}, set()
+    for tu, (code, seconds, output) in sorted(results.items()):
+        pkg = entry(package_of(tu[len(root) + 1:]) or '(other)')
+        pkg['test' if test_files.search(tu) else 'src'] += 1
+        pkg['failed'] += code != 0
+        pkg['seconds'] += seconds
+        for key, (path, checks) in warnings_in(output).items():
+            if key in seen:
+                continue
+            seen.add(key)
+            where = entry(package_of(path[len(root) + 1:]) if path.startswith(root + '/')
+                          else '(other)')
+            where['warnings'] += 1
+            where['checks'].update(checks)
+    return packages
+
+
+def summary_text(packages, soft, wall, style):
+    """Build the end of the run: a line per package, then the verdict. Return (text, passed)."""
+    width = max([len(p) for p in packages] + [7])
+    lines = ['', style.bold('clang-tidy summary'), '']
+    for name, p in sorted(packages.items()):
+        files = p['src'] + p['test']
+        mark = (style.red('✘') if p['failed'] or (p['warnings'] and not soft)
+                else style.yellow('!') if p['warnings'] else style.green('✔'))
+        counts = '%3d files (%d src, %d test)' % (files, p['src'], p['test'])
+        warned = '%3d warnings' % p['warnings']
+        if p['warnings']:
+            warned = (style.yellow if soft else style.red)(warned)
+        top = ', '.join('%s ×%d' % c for c in p['checks'].most_common(TOP_CHECKS))
+        lines.append(('  %s  %-*s  %-22s  %s  %6.0f s CPU  %s' % (
+            mark, width, name, counts, warned, p['seconds'], style.dim(top))).rstrip())
+    files = sum(p['src'] + p['test'] for p in packages.values())
+    warnings = sum(p['warnings'] for p in packages.values())
+    failed = sum(p['failed'] for p in packages.values())
+    why = '%d files, %d warnings, %d failed, %.0f s wall' % (files, warnings, failed, wall)
+    lines.append('')
+    if failed or (warnings and not soft):
+        lines.append(style.bold(style.red('✘ FAILED: ' + why)))
+        return '\n'.join(lines) + '\n', False
+    if warnings:
+        why += ", warnings don't fail make tidy"
+        lines.append(style.bold(style.yellow('! WARNINGS: ' + why)))
+    else:
+        lines.append(style.bold(style.green('✔ PASSED: ' + why)))
+    return '\n'.join(lines) + '\n', True
 
 
 def report(changed, selected, reasons, results, test_files, wall=None):
@@ -211,6 +310,12 @@ def report(changed, selected, reasons, results, test_files, wall=None):
                  % (len(results), len(results) - tests, tests, len(failed),
                     '' if wall is None else ', %.0f s' % wall))
     if results:
+        lines += ['', '| Package | Files | Warnings | Most frequent | Time |',
+                  '|---|--:|--:|---|--:|']
+        for name, p in sorted(summarize(results, test_files).items()):
+            top = ', '.join('`%s` ×%d' % c for c in p['checks'].most_common(TOP_CHECKS))
+            lines.append('| %s | %d | %d | %s | %.1f s |' % (
+                name, p['src'] + p['test'], p['warnings'], top, p['seconds']))
         lines += ['', '| File | Checks | Time | Result |', '|---|---|---:|---|']
         for tu in sorted(results, key=lambda t: -results[t][1]):
             code, seconds, _ = results[tu]
@@ -248,7 +353,10 @@ def changes_since(base_ref):
 
 
 def main(argv=None):
-    """Select, run and report; 0 when every file passed, 1 on a warning, 2 on a usage error."""
+    """Select, run and report; 0 when every file passed, 1 on a warning, 2 on a usage error.
+
+    With --soft a warning doesn't fail: 1 only when clang-tidy can't check a file.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     what = parser.add_mutually_exclusive_group(required=True)
     what.add_argument('--all', action='store_true', help='every strict TU (make tidy-strict)')
@@ -260,6 +368,10 @@ def main(argv=None):
     parser.add_argument('--root', default='/ws', help='the repo path inside the depfiles')
     parser.add_argument('--jobs', type=int, default=os.cpu_count())
     parser.add_argument('--dry-run', action='store_true', help='print the selection only')
+    parser.add_argument('--verbose', action='store_true',
+                        help='a line for every file, not only those with warnings')
+    parser.add_argument('--soft', action='store_true',
+                        help='warnings are printed, not errors (make tidy, ADR 0004)')
     args = parser.parse_args(argv)
     start = time.monotonic()
 
@@ -297,15 +409,18 @@ def main(argv=None):
             print('Full run: ' + reasons[ALL][0])
         for tu in sorted(tus if selected != ALL else []):
             print('  %s <- %s' % (tu, ', '.join(sorted(set(reasons[tu])))))
-    print('%d strict TUs to check' % len(tus))
+    print('%d files to check' % len(tus))
     if args.dry_run:
         return 0
 
-    results = run_all(tus, args.build_dir, test_files, args.test_checks, args.jobs)
+    results = run_all(tus, args.build_dir, test_files, args.test_checks, args.jobs,
+                      soft=args.soft, verbose=args.verbose)
     text = report(changed, selected, reasons, results, test_files, time.monotonic() - start)
+    if results:
+        summary, _ = summary_text(summarize(results, test_files), args.soft,
+                                  time.monotonic() - start, Style(use_colour(sys.stdout)))
+        print(summary, end='')
     failed = sum(1 for result in results.values() if result[0] != 0)
-    print('clang-tidy: %d files, %d failed, %.0f s' % (len(results), failed,
-                                                       time.monotonic() - start))
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         os.makedirs(os.path.dirname(summary) or '.', exist_ok=True)
