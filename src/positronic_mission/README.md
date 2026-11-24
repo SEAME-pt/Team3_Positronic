@@ -3,8 +3,8 @@
 - Enter the docker container `docker exec -it <container_name> bash`
 - `make build` and `source install/setup.bash`
 - Source every terminal
-- Set `export ROS_DOMAIN_ID=<number>` in every terminal. So teammates nodes don't interfere.
-- Small fix on the display if RViz fail's to open. Exit with flag -6.
+- Set `export ROS_DOMAIN_ID=<number>` in every terminal, so teammates' nodes don't interfere.
+- If RViz fails to open (it crashes with exit code -6), fix the display:
 ```
 - Host machine:
     xhost +local:docker
@@ -24,6 +24,17 @@
 3 STOPPED
 4 ERROR
 ```
+
+## Goal modes
+The `GoToPose` action has a `mode` field:
+```
+0 MODE_POSE       Move to a single pose (target_pose). Default if mode is not set.
+1 MODE_CARTESIAN  Follow a straight-line path through the waypoints (cartesian_path).
+```
+- `target_pose` needs `header.frame_id: g_base`.
+- `cartesian_path` waypoints have no header: they are always in `g_base`.
+- A Cartesian path starts from where the arm is **now**. The examples below assume the arm is at pose A (run Case 1 first).
+- If less than 99.9% of the path can be planned, nothing is executed and planning fails (code 1).
 
 ## RViz Visualization
 - The grey color is the current state of the arm, read from /joint_states. Always matches gazebo.
@@ -48,17 +59,19 @@
 `ros2 topic echo /mission/heartbeat --qos-reliability best_effort --field state`
 
 ### Terminal 4
-- This is used to send pose goals to the mission_node
-- Below are some examples of poses and their expected results
+- This is used to send pose and Cartesian path goals to the mission_node
+- Below are some examples of goals and their expected results
 - The expected codes are shown in this terminal after the action ended
 
 ---
+
+## Pose goals (mode 0)
 
 #### Case 1. Send a goal to pose A and shows the feedback.
 ##### Expected code 0 and success true.
 ```
 ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
-"{target_pose: {header: {frame_id: g_base}, pose: {
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
 position: {x: 0.1683, y: -0.0428, z: 0.3764},
 orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}}}"
 ```
@@ -66,7 +79,7 @@ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}}}"
 ##### Expected result CANCELED, code 3.
 ```
 ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
-"{target_pose: {header: {frame_id: g_base}, pose: {
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
 position: {x: 0.1479, y: 0.0909, z: 0.3764},
 orientation: {x: -0.67115, y: 0.46950, z: 0.21012, w: 0.53383}}}}"
 ```
@@ -80,7 +93,7 @@ ros2 service call /mission/reset positronic_interfaces/srv/StateTrigger "{}"
 ##### Expected result ABORTED, code 4.
 ```
 ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
-"{target_pose: {header: {frame_id: g_base}, pose: {
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
 position: {x: 0.0865, y: -0.1505, z: 0.3764},
 orientation: {x: -0.13080, y: 0.80856, z: -0.23656, w: 0.52265}}}}"
 ```
@@ -109,7 +122,7 @@ Case 1 command. Terminal 5
 ##### Expected code 1. Arm stays still and in IDLE State. No reset needed.
 ```
 ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
-"{target_pose: {header: {frame_id: g_base}, pose: {
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
 position: {x: 0.1683, y: -0.0428, z: 1.0},
 orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}}}"
 ```
@@ -120,11 +133,70 @@ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}}}"
 ros2 lifecycle set /mission_node deactivate
 
 ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
-"{target_pose: {header: {frame_id: g_base}, pose: {
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
 position: {x: 0.1683, y: -0.0428, z: 0.3764},
 orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}}}"
 
 ros2 lifecycle set /mission_node activate
+```
+
+---
+
+## Cartesian goals (mode 1)
+Run Case 1 first, so the arm starts at pose A. If a valid path returns code 1, the steps are
+too big for the current position: make them smaller.
+
+#### Case 7. Short straight line from pose A, 2 cm along x. Same orientation.
+##### Expected code 0 and success true. Arm ends in IDLE State.
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: [
+{position: {x: 0.1583, y: -0.0428, z: 0.3764},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}},
+{position: {x: 0.1483, y: -0.0428, z: 0.3764},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}]}"
+```
+
+#### Case 8. Path that ends out of reach (z = 1.0 meter).
+##### Expected code 1. Nothing is executed, arm stays in IDLE State. No reset needed.
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: [
+{position: {x: 0.1483, y: -0.0428, z: 0.3764},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}},
+{position: {x: 0.1483, y: -0.0428, z: 1.0},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}]}"
+```
+
+#### Case 9. Empty path.
+##### Goal REJECTED. Arm doesn't move and stays in IDLE State.
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: []}"
+```
+
+#### Case 10. Invalid mode.
+##### Goal REJECTED. Arm doesn't move and stays in IDLE State.
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 99}"
+```
+
+#### Case 11. Longer path (10 cm down along z). From terminal 5 send a stop signal midway.
+##### Expected result ABORTED, code 4. Same as Case 3. Reset needed after.
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: [
+{position: {x: 0.1483, y: -0.0428, z: 0.3264},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}},
+{position: {x: 0.1483, y: -0.0428, z: 0.2764},
+ orientation: {x: -0.43534, y: 0.69380, z: -0.01436, w: 0.57352}}]}"
+```
+- Cancel works the same way: run the cancel command instead of stop. Expected result CANCELED, code 3.
+
+#### Reset the Arm, because it stays in STOPPED State.
+```
+ros2 service call /mission/reset positronic_interfaces/srv/StateTrigger "{}"
 ```
 
 ### Terminal 5
