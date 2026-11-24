@@ -316,18 +316,18 @@ std::vector<std::uint8_t> parse_hex(std::string_view hex)
   return bytes;
 }
 
-/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until
-/// stopped: a stand-in for the arm with the real traffic. A get_angles gets the recorded poll
-/// of the servos and then RECORDED_REPLY, a stop or power_on gets the arm's ack
-/// (FE FE 03 <id> 01 FA) after `ack_delay` (1.8 ms on the bench, 58 ms seen once for a
-/// power_on), a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later,
-/// as the arm does it, a get_servo_temps gets the temperatures set with set_temperature() (all
-/// six servos alike) unless set_answer_temperatures(false), anything else nothing. With
-/// ack_requests off the stop and power_on frames are taken and never answered. With
-/// set_silent_after_power_off(true) it answers nothing once a power_off has arrived, like the
-/// real arm with its servos off. Frames are cut like the arm does it: FE FE <len> ..., len + 3
-/// bytes, resynchronised on FE FE, with a carry across reads. It keeps every byte it receives,
-/// so a test can check what the driver put on the wire.
+/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until stopped: a
+/// stand-in for the arm with the real traffic. A get_angles gets the recorded poll of the servos
+/// and then RECORDED_REPLY, a stop or power_on gets the arm's ack (FE FE 03 <id> 01 FA) after
+/// `ack_delay` (1.8 ms on the bench, 58 ms seen once for a power_on), a power_off its ack at once,
+/// a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later, as the arm does
+/// it, a get_servo_temps gets the temperatures set with set_temperature() (all six servos alike)
+/// unless set_answer_temperatures(false), anything else nothing. With ack_requests off the stop and
+/// power_on frames are taken and never answered. With set_silent_after_power_off(true) it acks the
+/// first power_off and answers nothing after it, like the real arm with its servos off. Frames are
+/// cut like the arm does it: FE FE <len> ..., len + 3 bytes, resynchronised on FE FE, with a carry
+/// across reads. It keeps every byte it receives, so a test can check what the driver put on the
+/// wire.
 class ReplyingArm
 {
 public:
@@ -482,10 +482,13 @@ private:
     static const std::vector<std::uint8_t> poll{parse_hex(RECORDED_POLL)};
     static const std::vector<std::uint8_t> sync_write{parse_hex(RECORDED_SYNC_WRITE)};
     const std::uint8_t id{frame[3]};
-    if (id == 0x11 && silent_after_power_off_.load()) {
-      powered_off_.store(true);
-    }
     if (powered_off_.load()) {
+      return;
+    }
+    if (id == 0x11) {
+      // The arm acks a power off (62 ms after it on 24 Nov 2026), then answers nothing more.
+      put(controller, {0xFE, 0xFE, 0x03, 0x11, 0x01, 0xFA});
+      powered_off_.store(silent_after_power_off_.load());
       return;
     }
     if (id == 0xE5) {
@@ -1355,7 +1358,7 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
 
   // No read() while the arm heats: wait for the power off on the wire, then let the silence run
   // past the 200 ms link timeout. 400 ms is twice that, a margin for a loaded test machine; the
-  // cut is recorded right after the power off is written, well inside it.
+  // cut is recorded once the stop is acknowledged, before the power off, well inside it.
   // One copy of the bytes per look: two calls to received() can see different lengths.
   const auto powered_off{[&arm]() {
       const std::vector<std::uint8_t> sent{arm->received()};

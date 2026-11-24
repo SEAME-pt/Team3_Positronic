@@ -528,7 +528,8 @@ void RobotSystem::report_echo_timeouts()
     get_logger(),
     "%" PRIu64
     " send_angles got no sync-write from the arm since the last report: each of their "
-    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
+    "and so does a send that reached the arm while it was still answering a request.",
     fresh.value());
 }
 

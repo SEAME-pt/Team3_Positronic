@@ -22,6 +22,8 @@
 #define POSITRONIC_HARDWARE__SERVO_TEMPERATURE_HPP_
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -50,12 +52,20 @@ inline constexpr int ACTIVATE_COOLDOWN_C{5};
 inline constexpr int MIN_PLAUSIBLE_C{1};
 inline constexpr int MAX_PLAUSIBLE_C{99};
 
-/// Readings in a row at or above the limit before the cut, so one corrupt byte cannot cut the
-/// arm. At one reading a second that is two seconds at most, on a temperature that takes
-/// minutes to climb. Seen on the arm on 2026-11-13: idle, one reading gave J1 = 45 degC between
-/// two of 34 degC. It is inside the 1-99 plausible range, so a single reading would have cut a
-/// cool arm; two in a row would not.
-inline constexpr int READINGS_TO_TRIP{2};
+/// How long a servo must stay at or above the limit, with no reading more than LIMIT_BAND_C
+/// under it, before the cut. J1 gives false hot readings, each one alone between normal ones:
+/// up to 98 degC in the frames of the poll (#170, docs/03_verification/write_sweep), 45 between
+/// two of 34 when asked (2026-11-13). The first hot reading only starts the clock, so one alone
+/// never cuts; at rest, one request a second, the cut is two hot readings in a row. Under load
+/// J4 climbed 10 degC in about a minute (20 and 21 Nov 2026): one second is about 0.2 degC.
+inline constexpr std::chrono::milliseconds HOT_FOR{1000};
+
+/// A servo crossing a degree reads n and n + 1 in turn for seconds, so a reading this far under
+/// the limit neither starts nor stops the clock: only a lower one stops it. With every reading
+/// under the limit stopping it, J6 crossing 38 to 39 (20 Nov 2026) would have been cut 19.3 s
+/// after its first 39; with this, 1.5 s. A servo just under the limit may be cut up to this
+/// much early.
+inline constexpr int LIMIT_BAND_C{1};
 
 /// True when one reading can be a servo temperature.
 [[nodiscard]] inline bool plausible_celsius(std::uint8_t celsius)
@@ -92,29 +102,45 @@ inline constexpr int READINGS_TO_TRIP{2};
 
 /// Decides when the servo temperatures must cut the arm.
 ///
-/// Fed one reading at a time by the serial thread. It trips once READINGS_TO_TRIP plausible
-/// readings in a row have a servo at or above the limit, and stays tripped: cooling down does
-/// not undo a cut, only a new backend (configure) does. An implausible reading changes nothing,
-/// neither towards the cut nor away from it. Pure logic: no port, no clock, no thread.
+/// Fed one reading at a time by the serial thread, with the time it was taken. Each servo has
+/// its own clock: its first reading at the limit starts it, one more than LIMIT_BAND_C under the
+/// limit stops it, and a reading at the limit `hot_for` after the start trips. One clock for the
+/// hottest servo would let a servo held in the band keep alive a clock that another servo's
+/// false readings started. It stays tripped: cooling down does not undo a cut, only a new
+/// backend (configure) does. An implausible reading changes nothing, neither towards the cut nor
+/// away from it. Pure logic: no port, no clock of its own, no thread.
 class OverheatDetector
 {
 public:
-  explicit OverheatDetector(int limit_c)
-  : limit_c_{limit_c}
+  using Clock = std::chrono::steady_clock;
+
+  explicit OverheatDetector(int limit_c, std::chrono::milliseconds hot_for = HOT_FOR)
+  : limit_c_{limit_c},
+    hot_for_{hot_for}
   {
   }
 
-  /// One reading. The trip (hottest servo of the reading that completed it) once tripped,
-  /// nullopt before.
-  std::optional<Overheat> update(const ServoTemperatures & temperatures)
+  /// One reading, taken at `at`. The trip (the servo whose clock ran out, J1 side first, at its
+  /// reading then) once tripped, nullopt before.
+  std::optional<Overheat> update(const ServoTemperatures & temperatures, Clock::time_point at)
   {
     if (trip_.has_value() || !plausible(temperatures)) {
       return trip_;
     }
-    const Overheat hot{hottest(temperatures)};
-    hot_in_a_row_ = hot.celsius >= limit_c_ ? hot_in_a_row_ + 1 : 0;
-    if (hot_in_a_row_ >= READINGS_TO_TRIP) {
-      trip_ = hot;
+    for (std::size_t joint{0}; joint < temperatures.size(); ++joint) {
+      const int celsius{temperatures.at(joint)};
+      std::optional<Clock::time_point> & since{hot_since_.at(joint)};
+      // A reading in the band changes nothing: a servo on the limit toggles between the two.
+      const bool at_limit{celsius >= limit_c_};
+      if (celsius < limit_c_ - LIMIT_BAND_C) {
+        since.reset();
+      } else if (at_limit && since.has_value()) {
+        if (at - since.value() >= hot_for_ && !trip_.has_value()) {
+          trip_ = Overheat{joint, celsius};
+        }
+      } else if (at_limit) {
+        since = at;
+      }
     }
     return trip_;
   }
@@ -131,7 +157,9 @@ public:
 
 private:
   int limit_c_;
-  int hot_in_a_row_{0};
+  std::chrono::milliseconds hot_for_;
+  // Per servo, when its first reading at the limit came, since its last one under the band.
+  std::array<std::optional<Clock::time_point>, NUM_JOINTS> hot_since_{};
   std::optional<Overheat> trip_;
 };
 
