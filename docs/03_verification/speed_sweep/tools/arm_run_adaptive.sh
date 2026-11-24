@@ -61,6 +61,10 @@ RT=/ws/docs/03_verification/rt_profile/tools/run_rt_profile.sh
 STOP_AFTER_S=${STOP_AFTER_S:-3.0}
 WAIT_BETWEEN_S=${WAIT_BETWEEN_S:-4} # the arm stands still before the next goal
 COUNTDOWN_S=${COUNTDOWN_S:-5}       # one person: time to move the hand from the keys to the switch
+# The rest pose's J4: where the tip balances with J4 released, measured per tip setup. Camera +
+# gripper: +39.8 deg (24 Nov; at 0 J4 still held the camera and stayed at 56 degC, at 39.8 it went
+# 45 -> 39 degC in 5 min). The other joints rest at 0.
+REST_J4_DEG=${REST_J4_DEG:-39.8}
 mkdir -p "$ROOT"
 
 countdown() {
@@ -103,9 +107,9 @@ expected_speed_line() {
 make_trajectories() {
   local out="$ROOT/traj"
   mkdir -p "$out"
-  python3 - "$TRAJ" "$out" << 'PY'
+  python3 - "$TRAJ" "$out" "$REST_J4_DEG" << 'PY'
 import sys, re, math
-src, out = sys.argv[1], sys.argv[2]
+src, out, rest_j4_deg = sys.argv[1], sys.argv[2], float(sys.argv[3])
 def retime(name, base, seg):
     text = open(f'{src}/{base}.yaml').read()
     times = iter([2.0, 2.0 + seg, 2.0 + 2 * seg])
@@ -128,9 +132,12 @@ def pt(p, t):
 open(f'{out}/TS.yaml', 'w').write(
     f'trajectory:\n  joint_names: {names}\n  points:\n' + pt(start, 2.0)
     + pt(out_pose, 2.0 + 40 / 15) + pt(start, 2.0 + 80 / 15))
-# REST: upright, all zeros, in 6 s like T0_to_start: gravity does not load the wrist there.
+# REST: upright, J4 where the tip balances, in 6 s like T0_to_start: gravity does not load the
+# wrist there. Never past 60 deg: a typo must not swing the tip around.
+assert abs(rest_j4_deg) <= 60, rest_j4_deg
+rest = [0.0, 0.0, 0.0, math.radians(rest_j4_deg), 0.0, 0.0]
 open(f'{out}/REST.yaml', 'w').write(
-    f'trajectory:\n  joint_names: {names}\n  points:\n' + pt([0.0] * 6, 6.0))
+    f'trajectory:\n  joint_names: {names}\n  points:\n' + pt(rest, 6.0))
 PY
 }
 
@@ -167,7 +174,8 @@ case "$1" in
     [ -e "$DIR" ] && DIR="$DIR-$(date +%H%M%S)"
     mkdir -p "$DIR"
     echo "$(basename "$DIR")" > "$ROOT/current_mode"
-    make_trajectories
+    make_trajectories || { rm -f "$ROOT/current_mode"; exit 1; }
+    echo "rest pose J4 $REST_J4_DEG deg, others 0" > "$DIR/rest.txt"
     if [ "${DRY:-0}" = 1 ]; then
       echo "driver: DRY, fake backend $ARGS" | tee "$DIR/args.txt"
       # shellcheck disable=SC2086
@@ -234,7 +242,7 @@ PY
     ;;
   start)
     need_mode
-    countdown "MOVES: to the rest pose, upright, all zeros, 6 s"
+    countdown "MOVES: to the rest pose, upright, J4 at $REST_J4_DEG deg, 6 s"
     to_rest start || exit 1
     ;;
   first)
