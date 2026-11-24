@@ -56,7 +56,10 @@
     </xacro:if>
   </xacro:macro>
 
-  <!-- Links, joints and meshes of the arm. -->
+  <!-- Links, joints and meshes of the arm, with the gripper and the wrist camera: camera_flange
+       and the camera_link frame under joint 6, mounted as on the real arm (#97). camera_link is
+       the frame_id of the real camera images (camera.launch.py) and the link the Gazebo camera
+       sits on. The <gazebo> tags of that file are ignored outside Gazebo. -->
   <xacro:include filename="$(find positronic_description)/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"/>
 
   <!-- One joint as seen by ros2_control: we read position and velocity, we command position. !-->
