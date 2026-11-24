@@ -164,7 +164,7 @@ from the action client's public API. The unused `feedback_count_` and its callba
 from the fixture. Check: `test_goals` passed 10 of 10 runs with the hardware and safety tests
 running at the same time.
 
-**Decision:** **fixed in #46.** Tell #161: `TEST_ALONE` for mission can go once this is merged.
+**Decision:** **fixed in #46.** `TEST_ALONE` for mission removed on 2026-11-24 (`chore/drop-test-alone`): its tests run in parallel with the others again.
 
 ## Summary
 

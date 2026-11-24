@@ -90,7 +90,7 @@ hardware 94.4 %, safety 88.3 %, bringup 82.4 %, moveit_config 97.8 %, **mission 
 | 6 | **Done.** S1 `ShutdownWhileMonitoringSendsHardwareInactive`. Mutation found that the installed rclcpp_lifecycle runs `on_deactivate` before `on_shutdown` on a shutdown from ACTIVE: `on_shutdown`'s halt is a second guard never reached here (see safety S1). The test checks the outcome. |
 | 7 | **Done.** S2 `StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes`: new fake knob `stale_fault_after_activation` (every other message for 500 ms carries code 1 stamped before the activation; alternating because the supervisor keeps only the newest message). A fresh code 1 afterwards still halts. Mutation: removing the filter fails it. |
 | 8 | **Done.** S3 `HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNotStopped`: the fake drops its services; the halt ends STOPPED in < 200 ms with `hardware_stopped == false`. Mutation: waiting for a missing service instead of failing at once fails it. |
-| + | **Done.** Mission M6 (from #161): the flaky feedback check in `GoalSucceedsWhenIdle` removed; `test_goals` 10/10 under parallel load. `TEST_ALONE` for mission (#161) can go after this merges. |
+| + | **Done.** Mission M6 (from #161): the flaky feedback check in `GoalSucceedsWhenIdle` removed; `test_goals` 10/10 under parallel load. `TEST_ALONE` for mission (#161) removed on 2026-11-24. |
 
 `dev` was merged again on 2026-11-23 (#164, #167, #168, #169, #172, #174). After the merge and
 item 1, `make test`: 782 tests passed (3 skipped, HIL). `make coverage`: protocol 100 %,
