@@ -370,9 +370,11 @@ PY
       /ws/install/positronic_bringup/share/positronic_bringup/config/jetson_controllers.yaml
     # From the rest pose (all zeros), where the previous stage left the arm.
     countdown "MOVES: J1 5 deg step and back, 3 times, 3 s apart, from the rest pose"
-    STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps
+    STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps 2>&1 | tee "$(mode_dir)/steps.log"
     ros2 control set_controller_state forward_position_controller inactive
     ros2 control set_controller_state arm_controller active
+    # run_rt_profile.sh refuses on a failed check (stderr) without moving: say so here.
+    [ -s "$(mode_dir)/rt/steps/steps.csv" ] || { echo "!!! no steps recorded, see $(mode_dir)/steps.log" >&2; exit 1; }
     ;;
   down)
     need_mode
