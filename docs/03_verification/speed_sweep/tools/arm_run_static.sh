@@ -57,6 +57,8 @@
 #   Above 30 a byte starts only after the 5 stops of the byte before it (30 -> 50 -> 70 -> 90 ->
 #   100) in the same setup, every travel <= STOP_MAX_DEG (4); above 70 also CONFIRM_BYTE=<byte>.
 #   REST_J4_DEG: required for setup2 and setup3 (measure it per tip), 39.8 for setup1.
+#   REST_J5_DEG: J5 at rest, default 0 (measure it with J4: at a 0 target J5 sat at 1.2 deg and
+#     heated 44 -> 63 degC in 50 min with no driver up, 24 Nov). At most 10 deg.
 #   Each mode starts with `first` (stops, base, wrist, steps refuse before it), and `stops` is
 #   done before the next speed is tried.
 
@@ -81,6 +83,7 @@ COUNTDOWN_S=${COUNTDOWN_S:-5}       # one person: time to move the hand from the
 # 45 -> 39 degC in 5 min). The other joints rest at 0. Another tip moves the centre of mass, so
 # setup2 and setup3 must say it (`up` refuses without); setup1 defaults to 39.8.
 if [ -z "${REST_J4_DEG:-}" ] && [ "${SETUP:-}" = setup1 ]; then REST_J4_DEG=39.8; fi
+REST_J5_DEG=${REST_J5_DEG:-0}
 STOP_MAX_DEG=${STOP_MAX_DEG:-4} # step up: every stop at the byte before travelled at most this
 mkdir -p "$ROOT"
 
@@ -123,9 +126,9 @@ expected_speed_line() { echo "send speed ${1#fixed}\."; }
 make_trajectories() {
   local out="$ROOT/traj"
   mkdir -p "$out"
-  python3 - "$TRAJ" "$out" "$REST_J4_DEG" << 'PY'
+  python3 - "$TRAJ" "$out" "$REST_J4_DEG" "$REST_J5_DEG" << 'PY'
 import sys, re, math
-src, out, rest_j4_deg = sys.argv[1], sys.argv[2], float(sys.argv[3])
+src, out, rest_j4_deg, rest_j5_deg = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4])
 def retime(name, base, seg):
     text = open(f'{src}/{base}.yaml').read()
     times = iter([2.0, 2.0 + seg, 2.0 + 2 * seg])
@@ -151,7 +154,9 @@ open(f'{out}/TS.yaml', 'w').write(
 # REST: upright, J4 where the tip balances, in 6 s like T0_to_start: gravity does not load the
 # wrist there. Never past 60 deg: a typo must not swing the tip around.
 assert abs(rest_j4_deg) <= 60, rest_j4_deg
-rest = [0.0, 0.0, 0.0, math.radians(rest_j4_deg), 0.0, 0.0]
+# J5 only takes up the sag where it settles released (~1 deg): never more than 10.
+assert abs(rest_j5_deg) <= 10, rest_j5_deg
+rest = [0.0, 0.0, 0.0, math.radians(rest_j4_deg), math.radians(rest_j5_deg), 0.0]
 open(f'{out}/REST.yaml', 'w').write(
     f'trajectory:\n  joint_names: {names}\n  points:\n' + pt(rest, 6.0))
 PY
@@ -236,7 +241,7 @@ case "$1" in
     echo "$STEP_UP" > "$DIR/step_up.txt"
     echo "$SETUP/$(basename "$DIR")" > "$ROOT/current_mode"
     make_trajectories || { rm -f "$ROOT/current_mode"; exit 1; }
-    echo "$SETUP, rest pose J4 $REST_J4_DEG deg, others 0" > "$DIR/rest.txt"
+    echo "$SETUP, rest pose J4 $REST_J4_DEG deg, J5 $REST_J5_DEG deg, others 0" > "$DIR/rest.txt"
     if [ "${DRY:-0}" = 1 ]; then
       echo "driver: DRY, fake backend $ARGS" | tee "$DIR/args.txt"
       # shellcheck disable=SC2086
