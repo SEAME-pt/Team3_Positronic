@@ -27,6 +27,12 @@
 //   exactly 200 ms late and not again while it moves, every joint rests REST_ERROR_DEG off its
 //   command, a halt freezes the pose and cancels a late start, NaN and inf targets are ignored,
 //   a clock that stands still or goes back moves nothing.
+// Follow-up prompt (#122 part 2):
+//   The cut_link() test hook: the link times out at 201 ms and not at 200, a second cut does
+//   not restart the count, the reported pose stays the one before the cut while targets, the
+//   gripper, the stop and the power on are lost (halt and power_on report false), the arm
+//   finishes the target it had before the cut and holds there (seen after restore_link()), a
+//   wrist waiting to start still starts, and the instant mode does the same.
 
 #include <gtest/gtest.h>
 
@@ -343,4 +349,104 @@ TEST_F(MeasuredFakeArm, AClockThatGoesBackMovesNothing)
   at_ms(0);
   EXPECT_NEAR(angle(J1), reported(J1, START.at(J1)), EXACT);
   EXPECT_TRUE(std::isfinite(angle(J1)));
+}
+
+// #20: the cable comes off. 200 ms of silence is still the link, 201 is a timeout, the same
+// rule as the serial backend's (LinkWatchdog).
+TEST_F(MeasuredFakeArm, ACutLinkTimesOutAfter200Milliseconds)
+{
+  EXPECT_FALSE(arm_.link_timed_out());
+  arm_.cut_link();
+
+  at_ms(200);
+  EXPECT_FALSE(arm_.link_timed_out());
+  at_ms(201);
+  EXPECT_TRUE(arm_.link_timed_out());
+}
+
+// The silence started with the first cut: cutting again does not restart it.
+TEST_F(MeasuredFakeArm, ASecondCutKeepsTheFirstOnesTime)
+{
+  arm_.cut_link();
+  at_ms(150);
+  arm_.cut_link();
+
+  at_ms(201);
+  EXPECT_TRUE(arm_.link_timed_out());
+}
+
+TEST_F(MeasuredFakeArm, ARestoredLinkIsNoLongerTimedOut)
+{
+  arm_.cut_link();
+  at_ms(1000);
+  ASSERT_TRUE(arm_.link_timed_out());
+
+  arm_.restore_link();
+  EXPECT_FALSE(arm_.link_timed_out());
+}
+
+// #20: the arm stops answering, finishes the target it had and holds there. Nothing sent
+// during the cut reaches it, so the stop is lost too and gets no ack.
+TEST_F(MeasuredFakeArm, ACutArmFinishesItsLastTargetAndHolds)
+{
+  const JointPositions last{start_with(J1, 0.1)};
+  arm_.write_angles(last);
+  at_ms(100);
+  const double at_cut{angle(J1)};
+  arm_.cut_link();
+
+  at_ms(150);
+  arm_.write_angles(start_with(J1, -0.3));
+  arm_.write_gripper(positronic_hardware::GRIPPER_CLOSED_VALUE);
+  EXPECT_FALSE(arm_.halt());
+  arm_.request_halt();
+  EXPECT_FALSE(arm_.power_on());
+
+  at_ms(5000);
+  EXPECT_DOUBLE_EQ(angle(J1), at_cut);
+  EXPECT_EQ(arm_.last_target(), last);
+  EXPECT_EQ(arm_.read_gripper(), positronic_hardware::GRIPPER_OPEN_VALUE);
+
+  arm_.restore_link();
+  EXPECT_NEAR(angle(J1), reported(J1, START.at(J1) + 0.1), 1e-6);
+  EXPECT_TRUE(arm_.power_on());
+}
+
+// The firmware goes on without the link: a wrist that was waiting to start still starts.
+TEST_F(MeasuredFakeArm, AWaitingWristStillStartsAfterACut)
+{
+  arm_.write_angles(start_with(J4, 0.1));
+  at_ms(100);
+  arm_.cut_link();
+
+  at_ms(5000);
+  arm_.restore_link();
+  EXPECT_NEAR(angle(J4), reported(J4, START.at(J4) + 0.1), 1e-6);
+}
+
+// The hook works in the instant mode too, on the clock it is given.
+TEST(InstantFakeArm, ACutLinkLosesEverythingSentAndTimesOut)
+{
+  auto now{FakeArm::Clock::time_point{std::chrono::seconds{100}}};
+  const auto t0{now};
+  FakeArm arm{FakeMode::INSTANT, [&now]() {
+      return now;
+    }};
+  const JointPositions last{start_with(J1, 0.25)};
+  arm.write_angles(last);
+  arm.cut_link();
+
+  arm.write_angles(start_with(J1, -0.25));
+  EXPECT_FALSE(arm.halt());
+  EXPECT_EQ(arm.read_angles(), last);
+  EXPECT_EQ(arm.last_target(), last);
+
+  now = t0 + milliseconds{200};
+  EXPECT_FALSE(arm.link_timed_out());
+  now = t0 + milliseconds{201};
+  EXPECT_TRUE(arm.link_timed_out());
+
+  arm.restore_link();
+  EXPECT_EQ(arm.read_angles(), last);
+  EXPECT_FALSE(arm.link_timed_out());
 }

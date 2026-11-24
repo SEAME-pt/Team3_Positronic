@@ -30,6 +30,10 @@
 #   the limits, or NaN fail radians; the pymycobot reference passes when it matches and fails
 #   when the driver publishes degrees; and leading all-zero samples (the start pose published
 #   before the first serial reply) are counted and left out of the reference comparison.
+# Follow-up prompt (#173):
+#   /joint_states carries gripper_controller too since #151: make that the clean stream, check
+#   that a missing arm joint, a missing or renamed gripper and an unknown extra joint still fail,
+#   that a bag from before #151 passes with no extra joints, and the parsing of the option.
 
 """Unit tests for the /joint_states checks of issue #23 (no ROS 2 needed)."""
 
@@ -46,6 +50,9 @@ URDF = os.path.join(
 JOINTS = ('joint2_to_joint1', 'joint3_to_joint2', 'joint4_to_joint3',
           'joint5_to_joint4', 'joint6_to_joint5', 'joint6output_to_joint6')
 POSE = (-0.0014, -0.0030, -0.0106, -0.0215, 0.0075, 0.0106)  # a real start pose, in radians
+# What /joint_states carries since #151: the URDF joints and the gripper.
+PUBLISHED = JOINTS + ('gripper_controller',)
+PUBLISHED_POSE = POSE + (0.0349,)
 RATE = 50.0
 PERIOD_NS = int(check.NS_PER_S / RATE)
 
@@ -56,7 +63,7 @@ def limits():
         return check.urdf_joint_limits(urdf.read())
 
 
-def stream(seconds=600.0, period_ns=PERIOD_NS, names=JOINTS, positions=POSE):
+def stream(seconds=600.0, period_ns=PERIOD_NS, names=PUBLISHED, positions=PUBLISHED_POSE):
     """Return a steady stream of identical samples covering `seconds`."""
     count = int(seconds * check.NS_PER_S / period_ns) + 1
     return [check.Sample(i * period_ns, i * period_ns, names, positions) for i in range(count)]
@@ -121,9 +128,11 @@ def test_gap_of_exactly_twice_nominal_passes():
 
 
 @pytest.mark.parametrize('names', [
-    JOINTS[:5],
-    JOINTS[:5] + ('joint7',),
-    JOINTS + ('gripper',),
+    PUBLISHED[1:],                   # an arm joint missing
+    JOINTS[:5] + ('joint7', 'gripper_controller'),
+    JOINTS,                          # the gripper missing
+    JOINTS + ('gripper',),           # the gripper renamed
+    PUBLISHED + ('joint7',),         # an unknown joint besides
 ])
 def test_wrong_names_fail(names):
     """Check that a missing, renamed or extra joint fails the names criterion."""
@@ -134,9 +143,33 @@ def test_wrong_names_fail(names):
 
 def test_names_in_another_order_pass():
     """Check that the criterion is the set of names, not their order."""
-    reordered = tuple(reversed(JOINTS))
-    samples = stream(seconds=1.0, names=reordered, positions=tuple(reversed(POSE)))
+    reordered = tuple(reversed(PUBLISHED))
+    samples = stream(seconds=1.0, names=reordered, positions=tuple(reversed(PUBLISHED_POSE)))
     assert verdicts(samples, min_duration_s=0.0)['names'] is True
+
+
+def test_the_names_detail_lists_the_gripper():
+    """Check that a passing names criterion says which joints it found besides the URDF ones."""
+    result = {c.name: c for c in check.evaluate(stream(seconds=1.0), RATE, limits(),
+                                                min_duration_s=0.0)}
+    assert result['names'].detail.endswith('carry the 6 URDF joints and gripper_controller')
+
+
+def test_a_bag_from_before_151_passes_with_no_extra_joints():
+    """Check that six names pass only when no joint is expected besides the URDF ones."""
+    samples = stream(seconds=1.0, names=JOINTS, positions=POSE)
+    assert verdicts(samples, min_duration_s=0.0, extra_joints=())['names'] is True
+    assert verdicts(samples, min_duration_s=0.0)['names'] is False
+
+
+@pytest.mark.parametrize('text, joints', [
+    ('gripper_controller', ('gripper_controller',)),
+    ('a, b', ('a', 'b')),
+    ('', ()),
+])
+def test_parse_joint_list(text, joints):
+    """Check the --extra-joints list: comma-separated, spaces ignored, empty for none."""
+    assert check.parse_joint_list(text) == joints
 
 
 @pytest.mark.parametrize('positions', [

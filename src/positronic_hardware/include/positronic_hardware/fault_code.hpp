@@ -42,9 +42,9 @@ enum class FaultCode : std::uint8_t
   /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
   /// the next activate, targets held meanwhile, like the link timeout.
   TRACKING_ERROR = 2,
-  /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
-  /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
-  /// next activate.
+  /// A servo stayed at or above servo_temp_limit_c for 1 s, no reading of it more than 1 degC
+  /// under: the serial thread has already stopped the arm and powered its servos off. read()
+  /// also returns ERROR. Latched until the next activate.
   OVERHEAT = 3,
 };
 
@@ -61,8 +61,8 @@ enum class FaultCode : std::uint8_t
     case FaultCode::TRACKING_ERROR:
       return "TRACKING_ERROR: a joint did not follow its target; targets held";
     case FaultCode::OVERHEAT:
-      return "OVERHEAT: a servo reached its temperature limit; the arm was stopped and powered "
-             "off";
+      return "OVERHEAT: a servo stayed at its temperature limit for 1 s; the arm was stopped and "
+             "powered off";
   }
   return "UNKNOWN: unknown fault code";
 }

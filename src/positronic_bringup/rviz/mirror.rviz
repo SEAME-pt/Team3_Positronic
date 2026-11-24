@@ -16,6 +16,20 @@ Visualization Manager:
       Description Topic:
         Value: /robot_description
       Alpha: 1
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+      Show Names: false
+      Marker Scale: 0.2
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: WristCamera
+      Topic:
+        Value: /wrist_camera/image_raw/compressed
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
