@@ -89,7 +89,8 @@ struct SerialTiming
   /// after their send, past the old 30 ms, and the get_angles sent at 30 ms was lost both
   /// times. The 54 ms is an outlier, the only sync-write above 50 ms in normal operation that
   /// day, but the bound must cover it. With 60, 10 minutes lost no reply. The URDF sets it as
-  /// echo_timeout_ms, 20 to 80: at 80 two lost replies after it fill the 200 ms link timeout.
+  /// echo_timeout_ms, 20 to 80: at 60 two lost replies after it come to ~196 ms at worst with
+  /// their LATE_REPLY_DRAIN, under the 200 ms link timeout; at 80 they trip it (~216 ms).
   std::chrono::milliseconds echo_timeout{60};
 };
 
@@ -175,7 +176,8 @@ public:
   // with a late arm (~50 ms for get_angles, ~70 ms when its temperature request goes unanswered
   // too), its send and the wait for the sync-write (~20 ms, up to echo_timeout, 60 ms, when the
   // Atom is late, #150), then the ack (up to 80 ms), so an accepted request is acknowledged
-  // within ~170 ms, ~210 ms with a late sync-write. One lost frame still fits a retry while the
+  // within ~170 ms, ~210 ms with a late sync-write, 8 ms more after an unanswered request
+  // (LATE_REPLY_DRAIN). One lost frame still fits a retry while the
   // sync-write comes in time; with a late one as well, the retry can pass the 300 ms. No
   // temperature request is written while a stop or power_on is pending. ACK_TIMEOUT itself
   // lives in requests.hpp.
@@ -188,10 +190,13 @@ public:
   static constexpr std::chrono::milliseconds REPEAT_RETRY{1000};
 
   // After a request whose answer did not come in its window, the line is read and dropped for
-  // this long before the next request: the answer may still come. The Atom answered 1 to 2 ms
-  // past the 50 ms windows twice on 24 Nov 2026, and the late answer was taken as the answer to
-  // the next request, which then went out while the Atom was still busy and was dropped.
-  static constexpr std::chrono::milliseconds LATE_REPLY_DRAIN{20};
+  // this long before the next request: the answer may still come. The Atom answered 1.4 and
+  // 2.4 ms past the 50 ms windows on 24 Nov 2026, and the late answer was taken as the answer to
+  // the next request, which then went out while the Atom was still busy and was dropped; a stop
+  // was once acked 86 ms after it, 6 ms past ACK_TIMEOUT (16 Nov). The drain starts at the end
+  // of the window, so 8 ms covers both, and two lost replies stay inside the 200 ms link timeout
+  // (~196 ms at worst, ~184 with a typical reply).
+  static constexpr std::chrono::milliseconds LATE_REPLY_DRAIN{8};
 
   static constexpr std::uint8_t GRIPPER_SPEED{20};
   static constexpr std::chrono::milliseconds GRIPPER_READ_PERIOD{100};

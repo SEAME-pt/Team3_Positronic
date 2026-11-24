@@ -454,7 +454,6 @@ void SerialArm::wait_for_sync_write()
   // A wait cut short by the destructor is not the arm's doing.
   if (!seen && !stop_.load()) {
     echo_timeouts_.fetch_add(1);
-    late_reply_possible_ = true;
   }
   // Published now, the moment the sync-write closes, not at the start of the next turn: the
   // pose is ~13 ms fresher for the read() that comes next (#170).
@@ -674,14 +673,14 @@ bool SerialArm::cut_power(const Overheat & trip)
   // The power off only after the stop's ack (36 to 37 ms on 24 Nov 2026): the Atom drops a frame
   // that comes while it handles the stop, and a power off sent after a fixed 30 ms was dropped
   // in all three recorded cuts, the servos torqued until its repeat 1.1 s later. Without the
-  // ack it goes out at ACK_TIMEOUT.
+  // ack it goes out at ACK_TIMEOUT plus LATE_REPLY_DRAIN.
   std::ignore = perform(stop_request());
-  const bool off_written{perform(power_off_request())};
-  // Recorded after the frames, the value before the joint: the plugin that sees the cut finds
-  // the arm already told to stop and power off.
+  // Recorded once the stop is out, the value before the joint, and before the power off and its
+  // ack (up to 85 ms): the plugin that sees the cut finds the arm already told to stop, and
+  // latches the overheat before the silence after the power off can latch the link timeout.
   overheat_celsius_.store(trip.celsius);
   overheat_joint_.store(static_cast<int>(trip.joint));
-  return off_written;
+  return perform(power_off_request());
 }
 
 /// The temperatures, once a period, when the arm's input is free (it has just answered) and no
@@ -807,10 +806,10 @@ std::optional<std::uint8_t> SerialArm::ask_gripper()
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
-/// arm's input is free, and at the next turn while it has no ack. The arm can be powered on
-/// again without this port (the Atom's button, a power cycle), and once off it answers nothing,
-/// so each repeat waits its ACK_TIMEOUT. Nothing else can use the port meanwhile: it is
-/// exclusive.
+/// arm's input is free; the first repeat comes at the next turn when the cut's own power off got
+/// no ack. The arm can be powered on again without this port (the Atom's button, a power cycle),
+/// and once off it answers nothing, so each repeat waits its ACK_TIMEOUT. Nothing else can use
+/// the port meanwhile: it is exclusive.
 void SerialArm::repeat_power_off(Clock::time_point turn_start)
 {
   if (!overheated() || turn_start < next_power_off_) {

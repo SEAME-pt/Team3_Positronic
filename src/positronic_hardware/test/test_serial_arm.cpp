@@ -452,7 +452,8 @@ private:
 /// after a get_angles, on the late answer to the request before, got neither ack nor
 /// sync-write. A get_angles is answered with a recorded reply, in `first_delays` for the first
 /// ones and in 7 ms after them; a send_angles is acked at once and sync-written 20 ms later;
-/// any other request is acked at once.
+/// a stop, power on or power off is acked after set_ack_delay() (at once by default), busy
+/// until then; get_servo_temps gets cool temperatures at once.
 class BusyArm : public SerialTransport
 {
 public:
@@ -482,10 +483,20 @@ public:
       queued_.push_back({now, {0xFE, 0xFE, 0x03, 0x22, 0x01, 0xFA}});
       queued_.push_back({now + SYNC_WRITE_DELAY, parse_hex(RECORDED_SYNC_WRITE)});
       busy_until_ = now + SYNC_WRITE_DELAY;
+    } else if (count == 5 && *std::next(data, 3) == TEMPS_ID) {
+      queued_.push_back({now, {0xFE, 0xFE, 0x08, 0xE5, 31, 33, 35, 30, 29, 28, 0xFA}});
     } else if (count == 5) {
-      queued_.push_back({now, {0xFE, 0xFE, 0x03, *std::next(data, 3), 0x01, 0xFA}});
+      queued_.push_back({now + ack_delay_, {0xFE, 0xFE, 0x03, *std::next(data, 3), 0x01, 0xFA}});
+      busy_until_ = now + ack_delay_;
     }
     return true;
+  }
+
+  /// How long the arm takes to ack a stop, power on or power off, busy until then.
+  void set_ack_delay(std::chrono::milliseconds delay)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    ack_delay_ = delay;
   }
 
   std::size_t read(std::uint8_t * dst, std::size_t max) override
@@ -522,6 +533,7 @@ private:
     std::vector<std::uint8_t> bytes;
   };
   std::vector<std::chrono::milliseconds> delays_;
+  std::chrono::milliseconds ack_delay_{0};
   std::size_t answered_{0};
   std::vector<Queued> queued_;
   std::chrono::steady_clock::time_point busy_until_{};
@@ -1468,7 +1480,11 @@ TEST(SerialArmTemperature, TwoHotReadingsStopTheArmAndCutItsPower)
   EXPECT_EQ(trip.joint, 1U);
   EXPECT_EQ(trip.celsius, 61);
 
-  // On the wire: a stop, then a power off, in that order.
+  // On the wire: a stop, then a power off, in that order. The trip is recorded once the stop is
+  // out, before the power off and its ack.
+  ASSERT_TRUE(wait_until([&port]() {
+      return !frames_with_id(port.written(), POWER_OFF_ID).empty();
+  }));
   const auto frames{port.written()};
   const auto stop_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
         return request_id(frame) == STOP_ID;
@@ -2237,10 +2253,11 @@ TEST(SerialArmPollPose, TheCutsPowerOffFollowsTheStopsAck)
 {
   // The Atom acks a stop after ~37 ms and drops a frame that comes before (24 Nov 2026): a power
   // off sent 30 ms after the stop was dropped in all three recorded cuts. Here every ack comes
-  // 37 ms after its request; the power off must not go out before the stop's ack.
+  // 60 ms after its request (under ACK_TIMEOUT, and far from the old 30 ms, so a late wake of
+  // that sleep cannot pass); the power off must not go out before the stop's ack.
   auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
   ReplayTransport & port{*transport};
-  port.set_ack_delay(std::chrono::milliseconds{37});
+  port.set_ack_delay(std::chrono::milliseconds{60});
   SerialArm arm{std::move(transport), POLL_TIMING, fast_guard()};
   static_cast<void>(wait_for_reply(arm));
   stream_targets(arm, std::chrono::milliseconds{600});
@@ -2258,23 +2275,38 @@ TEST(SerialArmPollPose, TheCutsPowerOffFollowsTheStopsAck)
   ASSERT_NE(off_at, frames.end());
   const auto stop_time{times.at(static_cast<std::size_t>(stop_at - frames.begin()))};
   const auto off_time{times.at(static_cast<std::size_t>(off_at - frames.begin()))};
-  EXPECT_GE(off_time - stop_time, std::chrono::milliseconds{37});
+  EXPECT_GE(off_time - stop_time, std::chrono::milliseconds{60});
 }
 
 TEST(SerialArmPollPose, ALateAnswerIsNotTakenForTheNextRequests)
 {
   // 24 Nov 2026, tap at 113.39 s: a get_angles answered past its 50 ms window, the late answer
   // taken for the next request's, and what followed reached the Atom while it was still
-  // answering: dropped. Here the first answer comes 60 ms after its request, 10 ms past
-  // REPLY_TIMEOUT, the others in 7 ms. Nothing may reach the arm while it is busy, and the sends
-  // go on: about 15 in the 600 ms stream, 5 asked for.
+  // answering: dropped. Here the first answer comes 52 ms after its request, 2 ms past
+  // REPLY_TIMEOUT as on the arm, the others in 7 ms. Nothing may reach the arm while it is busy,
+  // and the sends go on: about 15 in the 600 ms stream, 5 asked for.
   auto transport{std::make_unique<BusyArm>(
-    std::vector<std::chrono::milliseconds>{std::chrono::milliseconds{60}})};
+    std::vector<std::chrono::milliseconds>{std::chrono::milliseconds{52}})};
   BusyArm & port{*transport};
   SerialArm arm{std::move(transport), POLL_TIMING};
   stream_targets(arm, std::chrono::milliseconds{600});
   EXPECT_EQ(port.dropped(), 0U);
   EXPECT_GE(port.sends_taken(), 5U);
+}
+
+TEST(SerialArmPollPose, ALateAckIsNotTakenForTheNextRequests)
+{
+  // A stop acked 86 ms after it, past ACK_TIMEOUT (seen once mid-move, 16 Nov 2026): the arm is
+  // busy until then, and what the thread writes next, the stop again or a get_angles, must wait
+  // for the late ack instead of reaching the busy arm. 400 ms of a halt on a writing controller.
+  auto transport{std::make_unique<BusyArm>(std::vector<std::chrono::milliseconds>{})};
+  BusyArm & port{*transport};
+  port.set_ack_delay(std::chrono::milliseconds{86});
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  stream_targets(arm, std::chrono::milliseconds{100});
+  arm.request_halt();
+  stream_targets(arm, std::chrono::milliseconds{400});
+  EXPECT_EQ(port.dropped(), 0U);
 }
 
 TEST(SerialArmPollPose, PollsWithABridgedFrameLeaveTheAsksGoing)

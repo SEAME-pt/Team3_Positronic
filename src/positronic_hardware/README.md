@@ -156,8 +156,9 @@ work around it. It stops the arm and cuts its power.
   itself, without waiting for the control loop, holds every target, sends a `stop` and, after its
   ack (~37 ms), a `power_off`: a power off sent a fixed 30 ms after the stop came while the Atom
   was still on it and was dropped in all three recorded cuts, the torque going off only at the
-  repeat 1.1 s later (24 Nov 2026). It sends the `power_off` again every second from then on, at
-  once while one has no ack, and `power_on()` is refused for the life of that backend. It works
+  repeat 1.1 s later (24 Nov 2026). It sends the `power_off` again every second from then on (the
+  first repeat at the next turn when the cut's own power off got no ack), and `power_on()` is
+  refused for the life of that backend. It works
   with the component inactive too: a halted arm still holds its pose, and holding heats the servos
   as well.
 - **The arm goes limp.** `power_off` cuts the torque: J2 and J3 drop under the arm's own weight
@@ -253,7 +254,7 @@ says which one.
 | `velocity_filter_alpha` | `0.3`          | (0, 1]               | Low-pass weight of the velocity: closer to 1 follows faster but is noisier |
 | `moving_period_ms`      | `33`           | 20 to 100            | One serial turn after a `send_angles`: a `get_angles` (with `pose_from_poll`, only when the poll gave no pose), the send and the wait for the Atom's sync-write (#150), about 27 ms. 33 is one control period at 30 Hz: 10 minutes on the arm with no stall (`docs/03_verification/write_sweep`). At most half the 200 ms link timeout (#35), so one lost reply never trips it |
 | `pose_from_poll`        | `true`         | `true`, `false`      | The pose from the Atom's own poll of the servos, published when its sync-write closes, and the send right after the controller's `write()` (#170); the runs on the arm are in `docs/03_verification/write_sweep`. `false` is the #150 turn: a `get_angles` every turn, the period from the thread's clock |
-| `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 80, two lost replies after it fill the 200 ms link timeout (#35). Until #150 every send was followed by a fixed wait, `send_settle_ms`; `SerialTiming::send_settle` (30 ms) is now only the wait after the gripper's `set_gripper_value`. The overheat cut waits for the stop's ack instead |
+| `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 60, two lost replies after it come to ~196 ms at worst with their 8 ms drains, under the 200 ms link timeout (#35); at 80 they trip it. Until #150 every send was followed by a fixed wait, `send_settle_ms`; `SerialTiming::send_settle` (30 ms) is now only the wait after the gripper's `set_gripper_value`. The overheat cut waits for the stop's ack instead |
 | `servo_temp_limit_c`    | `60`           | 30 to 60             | A servo at or above this temperature for 1 s stops the arm and powers it off. Only lower, to test the cut |
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |
 | `tracking_error_ms`     | `300`          | 50 to 5000           | Milliseconds a joint may stay over `tracking_error_deg`, while active, before fault 2: the arm did not follow the command (#103) |
@@ -409,7 +410,8 @@ driver up, 259 stops and 69 power_on sent), the numbers behind `ACK_TIMEOUT`:
 **Why 200 ms.** The port reads return at once (`VTIME = 0`), so a turn without a reply ends after
 `REPLY_TIMEOUT` (50 ms). While the arm moves, one lost reply is up to ~130 ms of silence (a
 sync-write as late as the 60 ms `echo_timeout`, the 50 ms of the lost reply, a late 20 ms reply;
-a turn without a reply sends nothing, so no wait follows it) and two are ~180 ms. 200 ms
+a turn without a reply sends nothing, so no wait follows it) and two are ~196 ms at worst, each
+request after an unanswered one waiting `LATE_REPLY_DRAIN` (8 ms) first. 200 ms
 tolerates two lost replies and faults on the third. A temperature request (8 ms, 50 ms when it
 goes unanswered) does not reset this watchdog, only a `get_angles` reply does, so the turn that
 asks sends nothing: its request never adds to the silence of a send and its sync-write. The fault is seen at the next `read()`, so the
@@ -472,7 +474,7 @@ caller knows how to decode. Nothing in the loop knows a request by name.
 |---|---|---|---|---|
 | `stop_request()` | `FE FE 02 29 FA` | ack `FE FE 03 29 01 FA` | `ACK_TIMEOUT`, 80 ms | `halt()`, `request_halt()`, the overheat cut |
 | `power_on_request()` | `FE FE 02 10 FA` | ack `FE FE 03 10 01 FA` | 80 ms | `power_on()` |
-| `power_off_request()` | `FE FE 02 11 FA` | ack `FE FE 03 11 01 FA` (62 ms) | 80 ms | the overheat cut after the stop's ack, then once a period, at once while unacknowledged |
+| `power_off_request()` | `FE FE 02 11 FA` | ack `FE FE 03 11 01 FA` (62 ms) | 80 ms | the overheat cut after the stop's ack, then once a period (the first repeat at the next turn when the cut's own got no ack) |
 | `get_servo_temps_request()` | `FE FE 02 E5 FA` | the temperature reply | `REQUEST_REPLY_TIMEOUT`, 50 ms | the temperature guard, after a get_angles reply |
 
 A new request in three steps: a factory in `requests.hpp` (command, encoder, what it expects, the
@@ -535,8 +537,10 @@ does not move and the log names the joint.
   number. A request whose answer comes past its window (the Atom answered 1 to 2 ms past the
   50 ms windows on 24 Nov 2026) could have that answer taken for the next request's, which then
   went out while the Atom was busy and was dropped. Before every request the thread drops what
-  is waiting on the line, and after an unanswered one also what comes for 20 ms
-  (`LATE_REPLY_DRAIN`). An answer later than that is still taken for the next one.
+  is waiting on the line, and after an unanswered one also what comes for 8 ms
+  (`LATE_REPLY_DRAIN`, sized to the late answers seen, 2.4 ms and 6 ms past their windows, and
+  to the link timeout's budget). An answer
+  later than that is still taken for the next one.
 - The joint limit check refuses, it never corrects (#34). With ros2_control's limiter off, a
   `joint_trajectory_controller` trajectory that crosses a URDF limit, even by 0.001 rad, makes
   `write()` return ERROR in the cycle where the command crosses it: the arm moves towards the

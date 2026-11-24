@@ -103,8 +103,9 @@ of the sync-write at 20.4 ms after the send median, 26.7 at p99 and 31.0 at most
 30 ms settle sat at the edge of the worst case and every turn paid it in full. Since #150 the
 thread reads the line until the sync-write is whole, and sends the next `get_angles` at once.
 `echo_timeout_ms` (60 ms, 20 to 80) bounds the wait when the sync-write never comes and is the
-parameter in place of the settle, which is left only for the overheat cut, between its stop and
-its power off, as a constant.
+parameter in place of the settle, which is left as a constant after the gripper's
+`set_gripper_value` only (the overheat cut waits for the stop's ack since the third part of #170:
+its power off, 30 ms after the stop, had been dropped in all three recorded cuts).
 
 Arm alone (no gripper, no camera) unless the row says otherwise, joint 1 swinging 10 deg, 19 Nov
 2026, every point tapped.
