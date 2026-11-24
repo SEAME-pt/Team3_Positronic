@@ -6,6 +6,7 @@ Launch files and the controllers config:
 - `launch/mirror.launch.py`: the real arm mirrored in RViz on a laptop (#24).
 - `launch/driver.launch.py`: the real arm driver on the Jetson (#23).
 - `launch/supervised.launch.py`: the driver under the safety supervisor (#45).
+- `launch/camera.launch.py`: the real wrist camera on the Jetson, on the Gazebo topics (#138).
 
 Files:
 
@@ -17,9 +18,14 @@ Files:
   plugin is in the xacro, not here.
 - `config/safety_supervisor.yaml`: parameters of the safety supervisor in
   `supervised.launch.py` (#45); what each one does is in the `positronic_safety` README.
-- `rviz/mirror.rviz`: RViz config of the mirror launch: grid, robot model, fixed frame `world`.
+- `rviz/mirror.rviz`: RViz config of the mirror launch: grid, robot model, TF, the wrist camera
+  image (compressed), fixed frame `world`.
 - `scripts/joint_states_delay.py`: prints every second the number of `/joint_states` messages, the
   average and the maximum delay, as laptop time minus the message stamp.
+- `scripts/wrist_camera.py`: the camera node of `camera.launch.py`: reads the USB camera with
+  OpenCV, turns the frame upright and publishes image, `camera_info` and the jpeg.
+- `config/wrist_camera.yaml`: the camera calibration (`camera_calibration`'s `ost.yaml`), read by
+  `camera.launch.py`. Without it `camera_info` carries only the image size.
 
 ## Arm in Gazebo
 
@@ -164,6 +170,57 @@ the power switch. The procedure of the fault-injection tests is in
 `driver.launch.py` alone still starts everything active, with no supervisor: for bench tests
 only.
 
+## Real wrist camera
+
+`camera.launch.py` publishes the USB camera on the wrist on the topics of the Gazebo camera,
+`/wrist_camera/image_raw`, `/wrist_camera/camera_info` and `/wrist_camera/image_raw/compressed`,
+with `frame_id` `camera_link`: the driver's `robot_state_publisher` puts that frame under joint 6
+(`positronic_real.urdf.xacro` includes the camera URDF). The raw image of this camera lies on its
+side; the node turns it 90 deg counterclockwise (#97), so 640 x 480 asked of the camera is
+published as 480 x 640, gripper at the bottom. Evidence and numbers:
+`docs/03_verification/camera_real/`.
+
+**Off by default.** Nothing starts the camera unless asked. With the driver, on the Jetson
+(`make nano-shell` maps `/dev/video0` when the camera is plugged in):
+
+```bash
+ros2 launch positronic_bringup driver.launch.py camera:=true       # or supervised.launch.py
+ros2 launch positronic_bringup driver.launch.py camera:=true width:=320 height:=240
+```
+
+The camera's arguments (`device:=`, `width:=`, `height:=`, `fps:=`, ...) pass through. Or alone,
+in its own container next to the driver's:
+
+```bash
+make nano-build
+make nano-camera                                  # /dev/video0; NANO_CAMERA=/dev/videoN otherwise
+ros2 launch positronic_bringup camera.launch.py   # width:=, height:=, fps:=, device:=
+```
+
+Every 10 s the node logs the rate it achieves (`30.0 fps over 10 s, ... ms per frame`). The jpeg
+is only encoded while someone subscribes to `image_raw/compressed`.
+
+**On the laptop**, `ROS_DOMAIN_ID=17`: over Wi-Fi use the compressed topic only (the raw one is
+~27 MB/s). `mirror.launch.py` shows it in RViz next to the model;
+`ros2 run rqt_image_view rqt_image_view /wrist_camera/image_raw/compressed` shows it alone.
+
+**Calibration** (once, and again if the camera or the size changes). Checkerboard flat on a card,
+the arm still. `camera_calibration` reads the raw image: over a cable, give it
+`/wrist_camera/image_raw` directly; over Wi-Fi, decode the jpeg on the laptop first and give it
+that topic:
+
+```bash
+ros2 run image_transport republish --ros-args -p in_transport:=compressed -p out_transport:=raw \
+  -r in/compressed:=/wrist_camera/image_raw/compressed -r out:=/wrist_camera_local/image_raw
+ros2 run camera_calibration cameracalibrator --size <COLSxROWS> --square <m> \
+  --ros-args -r image:=/wrist_camera_local/image_raw -p camera:=/wrist_camera
+```
+
+`--size` counts the inner corners. Move the board until the four bars are green, CALIBRATE,
+SAVE, then copy `ost.yaml` out of `/tmp/calibrationdata.tar.gz` to `config/wrist_camera.yaml`
+and run `make nano-build` again. The node refuses a file made for another image size, with a
+warning, rather than publish a wrong `camera_info`.
+
 ## Troubleshooting
 
 | Problem | Cause and fix |
@@ -177,3 +234,6 @@ only.
 | Model in RViz has no meshes | RViz cannot find `package://positronic_description`: `source install/setup.bash` before `rviz2` |
 | Delay in the billions of ms | The stamp is zero or in simulation time: driver not stamping, or a simulation publishing `/joint_states` (close Gazebo) |
 | Model jumps around | Two publishers on `/joint_states`: close `joint_state_publisher_gui` or the simulation |
+| Camera node: `cannot open /dev/video0` | Camera unplugged, another process has it, or another number: `v4l2-ctl --list-devices` on the Jetson, then `make nano-camera NANO_CAMERA=/dev/videoN` and `device:=/dev/videoN` |
+| Camera node: `calibration ... not used` | No `config/wrist_camera.yaml` yet, or made for another size than the published one (480 x 640 by default). Calibrate again at that size |
+| Wrist camera image black or missing in RViz on the laptop | No `compressed_image_transport` on the laptop (`ros-jazzy-image-transport-plugins`, in the dev image), or a different `ROS_DOMAIN_ID` |

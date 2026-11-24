@@ -78,6 +78,7 @@ and as they should be. Point at the file and line in the PR's head. Plain Englis
 - Commands: `make build`, `make test`, `make format`, `make format-check`, `make tidy` (all in the
   dev container, see `README.md`). Before a PR: `make format && make format-check && make build
   && make test`.
+- `make tidy` only warns, on all of `src/`, with CI's `bugprone-*`-only rule for `test/` files.
 - Branch from the issue (base `dev`), PR to `dev`, squash merge after two approvals. Never
   rebase or force-push a pushed branch.
 - Team context (programme, hardware, decisions) lives in the team's Claude Project, not here.

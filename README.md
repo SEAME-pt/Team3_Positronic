@@ -30,7 +30,7 @@ make shell           # shell in the container, repo mounted at /ws
 make build           # colcon build
 make test            # colcon test (unit tests + linters)
 make coverage        # line coverage of src/ per package, fails if one is below 80 % (report in coverage/)
-make tidy            # clang-tidy on src/ with our .clang-tidy (run make build first)
+make tidy            # clang-tidy on src/, warns only, bugprone only on test/ files as in CI (run make build first)
 make tidy-strict     # clang-tidy on hardware, protocol, mission and safety, warnings are errors (CI, on dev)
 make tidy-changed    # tidy-strict on only the files your branch can affect (CI, on PRs)
 make format-check    # ROS lint on src/ (uncrustify, cpplint, cppcheck, copyright...), changes nothing

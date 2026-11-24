@@ -7,7 +7,7 @@ backend, records 10 minutes, and checks the recording against the acceptance cri
 |---|---|
 | Rate equal to the value fixed by #20 | `check_joint_states.py --rate <#20 value>`: mean rate within 5 % |
 | 10 minutes without a period above 2x nominal | `topic_hz.log` (ros2 topic hz) and the bag: every period between two messages |
-| Joint names equal to the URDF | every message carries exactly the six revolute joints of the URDF |
+| Joint names equal to the URDF | every message carries exactly the six revolute joints of the URDF and `gripper_controller`, on `/joint_states` since #151 (`--extra-joints ""` for an older bag) |
 | Values in radians | every position is finite and inside the URDF joint limits, and the first positions match `pymycobot get_angles` (degrees) |
 
 | File | What it is |
@@ -68,7 +68,7 @@ ros2 launch positronic_bringup driver.launch.py update_rate:=<#20 rate>
 ssh -t nano docker exec -it positronic-arm bash
 ros2 control list_hardware_components        # PositronicArm, active
 ros2 control list_controllers                # joint_state_broadcaster, active
-ros2 topic echo --once /joint_states         # six URDF names, small values in radians
+ros2 topic echo --once /joint_states         # six URDF names and gripper_controller, in radians
 bash docs/03_verification/joint_states_rate/tools/record_joint_states.sh
 ```
 
