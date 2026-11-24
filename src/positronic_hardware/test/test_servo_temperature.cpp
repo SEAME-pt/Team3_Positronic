@@ -32,23 +32,12 @@
 //
 // Follow-up prompt (#170, the cut by time):
 //   With the poll's frames a reading comes every 33 ms, and J1 gives false hot ones, each one
-//   alone. The cut is now by time: a servo at or above the limit in every plausible reading for
-//   HOT_FOR (1 s), with at least two readings; a reading under the limit starts the count again.
-//   Check: two hot polls 33 ms apart do not trip, and after a normal one two more a second later
-//   do not either (the clock starts again); constantly hot polls trip at the first one 1 s after
-//   the first hot one; two requests a second apart still trip; with no wait one reading alone
-//   does not. A servo crossing a degree reads both in turn, so a reading one degree under the
-//   limit neither starts nor stops the clock: with 59 and 60 in turn, no trip on a 59, and the
-//   trip at the first 60 1 s after the first 60; a 58 stops it. Each servo has its own clock:
-//   J4 held at 59 must not keep alive a clock that J1's false readings start, and the trip names
-//   the servo whose clock ran out.
-//
-// Follow-up prompt (#170, the simplification):
-//   Drop the two hot polls 33 ms apart: one second at the poll's cadence and a cool reading
-//   between hot ones are covered, and no mutant needs it.
-// Follow-up prompt (#170, the J1 gap):
-//   No test failed with J1 left out of the loop or with the first trip overwritten by a later
-//   joint: J1 and J4 at the limit together for 1 s trip naming J1.
+//   alone. Cut by time: a servo at or above the limit for HOT_FOR (1 s). Check: constantly hot
+//   polls trip at the first one 1 s after the first hot one, and a cool reading starts the clock
+//   again; two requests a second apart still trip; with no wait one reading alone does not. A
+//   reading one degree under the limit neither starts nor stops the clock (59 and 60 in turn
+//   trip on a 60 after 1 s, a 58 stops it). One clock per servo: J4 held at 59 does not keep
+//   alive a clock J1's false readings start, the trip names J4; J1 and J4 together name J1.
 
 #include <gtest/gtest.h>
 

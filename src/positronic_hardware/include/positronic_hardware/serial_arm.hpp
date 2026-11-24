@@ -79,9 +79,7 @@ struct SerialTiming
   /// The fixed wait after the gripper's set_gripper_value (#174), a frame whose end the thread
   /// does not read. Measured on the arm as the old wait after a send_angles: 30 ms gave 0 stalls
   /// in 4464 requests, 25 ms gave 43, 20 ms gave 110 and once froze the arm for 20 s. Not a
-  /// parameter since #150. The overheat cut no longer waits it: the Atom takes ~37 ms over a
-  /// stop, and a power off sent 30 ms after it was dropped in all three recorded cuts (20, 21
-  /// and 24 Nov 2026); the cut now waits for the stop's ack.
+  /// parameter since #150.
   std::chrono::milliseconds send_settle{30};
 
   /// The longest the thread waits after a send_angles for the Atom's sync-write to the servos,
@@ -185,10 +183,8 @@ public:
   // lives in requests.hpp.
 
   // After a send that got no sync-write, an unchanged target goes out again after this long,
-  // not on every write: a target the Atom refuses costs one echo_timeout a second, and one send
-  // the Atom dropped (24 Nov 2026: it went out on a late get_angles reply, while the Atom still
-  // answered the next get_angles) stops the repeat at rest for a second instead of until the
-  // target changes.
+  // not on every write: a target the Atom refuses costs one echo_timeout a second, and a send
+  // the Atom dropped stops the repeat at rest for a second instead of until the target changes.
   static constexpr std::chrono::milliseconds REPEAT_RETRY{1000};
 
   // After a request whose answer did not come in its window, the line is read and dropped for
@@ -413,9 +409,8 @@ private:
   LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
-  // nullopt until the first pose, and has_sample() is read from the same box: a readFromRT() that
-  // meets a write in progress keeps its old box, and a separate flag could then say "a pose"
-  // while the box still held START_POSE, which on_activate would take as the first command.
+  // nullopt until the first pose. has_sample() reads this same box: a separate flag could say
+  // "a pose" while a readFromRT() still gave START_POSE, which on_activate takes as a command.
   mutable realtime_tools::RealtimeBuffer<std::optional<JointPositions>> latest_{std::nullopt};
   // The newest command from write_angles(). The control loop writes it, the poll thread reads it.
   // nullopt until the first command: a readFromRT() that meets a write in progress keeps its old

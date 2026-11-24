@@ -247,7 +247,6 @@ void SerialArm::wake_thread(bool & flag)
 
 bool SerialArm::has_sample() const
 {
-  // From the pose's own box, so a true here and the read_angles() after it agree.
   return latest_.readFromRT()->has_value();
 }
 
@@ -803,17 +802,16 @@ std::optional<std::uint8_t> SerialArm::ask_gripper()
     return std::nullopt;
   }
   std::optional<std::uint8_t> value{};
-  const bool found{
-    read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
-        const positronic_protocol::Decoded<std::uint8_t> reply{
-          positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
-        const bool got{reply.status == positronic_protocol::DecodeStatus::FOUND};
-        if (got) {
-          value = reply.value;
-        }
-        return ScanResult{got, reply.consumed};
-    })};
-  if (!found) {
+  read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
+      const positronic_protocol::Decoded<std::uint8_t> reply{
+        positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
+      const bool found{reply.status == positronic_protocol::DecodeStatus::FOUND};
+      if (found) {
+        value = reply.value;
+      }
+      return ScanResult{found, reply.consumed};
+  });
+  if (!value.has_value()) {
     late_reply_possible_ = true;
   }
   return value;
@@ -892,10 +890,9 @@ void SerialArm::poll_loop()
     // and while it stands still the port is better spent on fresh poses. last_sent() is the
     // thread's view of last_target_, the one memory of what went out. A turn with a write since
     // the last sends even the same command (#170): the stream follows the controller's cadence
-    // and the pose keeps coming from the poll. The repeat needs the last send to have got its
-    // sync-write, or REPEAT_RETRY to have passed since it, so a target the Atom refuses is not
-    // sent on every write and one lost sync-write does not end the repeat; it gives way to a
-    // gripper that is due, which is served only in a turn that sends nothing (#174).
+    // and the pose keeps coming from the poll. The repeat waits REPEAT_RETRY after a send that
+    // got no sync-write, and gives way to a gripper that is due, which is served only in a turn
+    // that sends nothing (#174).
     const bool changed{target.has_value() && target != last_sent()};
     const bool may_repeat{last_send_answered_ || Clock::now() - last_send_at_ >= REPEAT_RETRY};
     const bool repeat{wrote && may_repeat && !gripper_due()};

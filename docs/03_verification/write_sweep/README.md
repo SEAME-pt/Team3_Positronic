@@ -224,14 +224,14 @@ the first cut of #170 on 19 Nov; the last column is this branch on 20 Nov.
   the final code: 20236 sends, 33.0/s, 15 `get_angles` in the stream, sync-write p99 27.1 and
   max 42.2 ms (six past the 30 ms period in 20236, two past 33), send intervals p99 38.5 ms
   and 0.7 % over 40 (132 of the 139 are the temperature turns), 0 stalls, 0 echo timeouts,
-  0 warnings. Nothing lost up to 33 Hz; the Atom's sync-write p99 leaves 2.5 ms at 33 Hz and
-  nothing at 35. 30 stays the default; the choice is #134's, and this is its evidence.
+  0 warnings. Nothing
+  lost up to 33 Hz; the Atom's sync-write p99 leaves 2.5 ms at 33 Hz and nothing at 35. 30 stays
+  the default; the choice is #134's, and this is its evidence.
 - `/joint_states` repeats the previous pose in 42 to 50 % of its messages at 30, 32 and 33 Hz
   alike (41.6 to 46.5 at 30 Hz, 48.8 at 32, 50.1 at 33), and 8 to 11 % of the intervals between
-  new poses span two cycles; #150 had 48 % repeated poses in its 10 minutes. It is how the
-  servos' position reaches the line, not the turn or the rate: the `joint_states_rate.py` p90
-  crosses from one cycle to two with that share (62 ms at 32 Hz, 34 at 30 and 33). Not measured
-  further here.
+  new poses span two cycles; #150 had 48 % repeated poses in its 10 minutes. It is how the servos' position reaches the line, not the
+  turn or the rate: the `joint_states_rate.py` p90 crosses from one cycle to two with that share
+  (62 ms at 32 Hz, 34 at 30 and 33). Not measured further here.
 
 How the numbers were made: `python3 tools/tap_turns.py tap.csv` gives the sends per second of
 the stream, the send intervals with the share over 40 ms, the sends followed by a `get_angles`

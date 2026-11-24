@@ -41,10 +41,8 @@ SCRIPT = os.path.join(PKG, 'scripts', 'planning_scene.py')
 
 SERVICE = f'/test_{os.getpid()}/apply_planning_scene'
 REMAP = ['-r', f'/apply_planning_scene:={SERVICE}']
-# The tests that expect the fake service: wait_for_service() returns as soon as it is found, so a
-# long bound costs nothing. Under make test, with every package testing at once, finding it took
-# more than 2 s for the first test of the file (failed at 3.1 s twice on 23 Nov 2026; 1.7 s
-# alone). The tests without a service use NO_WAIT and stay fast.
+# The tests that expect the fake service: wait_for_service() returns once it is found, so a long
+# bound costs nothing (2 s failed under make test). The no-service tests use NO_WAIT.
 TIMEOUT = ['-p', 'timeout_sec:=15.0']
 NO_WAIT = ['-p', 'timeout_sec:=0.2']
 

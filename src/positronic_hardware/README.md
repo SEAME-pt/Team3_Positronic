@@ -35,20 +35,21 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
 - One turn of the serial thread: a pending stop or power on first, if any, waiting for its ack;
   then `get_angles`, up to 50 ms for the reply; then, when no send goes out or while the poll
   comes broken, `get_servo_temps` (see Servo over-temperature); then, if the arm answered and
-  there is a new target, one `send_angles`, and the thread reads the line until the Atom's
-  sync-write to the servos is whole (#150). After a send the Atom acknowledges it, polls its six
-  servos and passes the targets on with that sync-write, the last frame it puts on the line, and
-  drops a frame that comes before its end: 19.2 ms after the send median, 28.0 at p99 (10 minutes
-  on the arm, 19 Nov 2026). `echo_timeout` (60 ms, in `SerialTiming`, not a parameter: it only
-  counts when the Atom is late) bounds the wait when the sync-write never comes. Such a send is
-  counted, and while active `read()` warns at most every 5 s with how many there were: the Atom
-  sends no sync-write for a target it refuses, such as one outside its own joint limits (J4 below
-  about −129° on 19 Nov 2026), and every such turn then lasts about 68 ms. A turn lasts 10 ms
-  while the arm stands still and `moving_period_ms` after a send, about 27 ms of it busy. The arm
-  drops a frame that arrives while it is still answering, so nothing is sent before the reply.
-  With `pose_from_poll` (#170, on by default) the controller's `write()` wakes the thread and the
-  send goes out at once; the servo status frames read before the sync-write are the pose, so no
-  `get_angles` follows a send while they are whole (numbers in
+  there is a new target, one
+  `send_angles`, and the thread reads the line until the Atom's sync-write to the servos is
+  whole (#150). After a send the Atom acknowledges it, polls its six servos and passes the
+  targets on with that sync-write, the last frame it puts on the line, and drops a frame that
+  comes before its end: 19.2 ms after the send median, 28.0 at p99 (10 minutes on the arm, 19 Nov
+  2026). `echo_timeout` (60 ms, in `SerialTiming`, not a parameter: it only counts when the Atom
+  is late) bounds the wait when the sync-write never comes. Such a send is counted, and while
+  active `read()` warns at most every 5 s with how many there were: the Atom sends no sync-write
+  for a target it refuses, such as one outside its own joint limits (J4 below about −129° on
+  19 Nov 2026), and every such turn then lasts about 68 ms. A turn lasts 10 ms while the arm
+  stands still and `moving_period_ms` after a send, about 27 ms of it busy. The arm drops a
+  frame that arrives while it is still answering, so nothing is sent before the reply. With
+  `pose_from_poll` (#170, on by default) the controller's `write()` wakes the thread and the
+  send goes out at once; the servo status frames read before the sync-write are the pose, so
+  no `get_angles` follows a send while they are whole (numbers in
   `docs/03_verification/write_sweep`).
 - `read()` copies the newest pose out of the buffer and runs the velocity filter. `write()`
   checks the six commands against the joint limits and copies them into the buffer. Neither
@@ -154,13 +155,11 @@ work around it. It stops the arm and cuts its power.
   polls). A reading 1 degC under it changes nothing: a servo crossing a degree reads both in turn
   for seconds (`LIMIT_BAND_C`), so the cut may come up to 1 degC early. Then the serial thread
   itself, without waiting for the control loop, holds every target, sends a `stop` and, after its
-  ack (~37 ms), a `power_off`: a power off sent a fixed 30 ms after the stop came while the Atom
-  was still on it and was dropped in all three recorded cuts, the torque going off only at the
-  repeat 1.1 s later (24 Nov 2026). It sends the `power_off` again every second from then on (the
-  first repeat at the next turn when the cut's own power off got no ack), and `power_on()` is
-  refused for the life of that backend. It works
-  with the component inactive too: a halted arm still holds its pose, and holding heats the servos
-  as well.
+  ack (~37 ms; the Atom drops a frame that comes while it handles the stop), a `power_off`. It
+  sends the `power_off` again every second from then on (the first repeat at the next turn when
+  the cut's own power off got no ack), and `power_on()` is refused for the life of that backend.
+  It works with the component inactive too: a halted arm still holds its pose, and holding heats
+  the servos as well.
 - **The arm goes limp.** `power_off` cuts the torque: J2 and J3 drop under the arm's own weight
   if it is stretched out. Chosen on purpose: at 60 degC holding the pose would keep heating the
   servos. After the cut `get_angles` gets no reply (see `positronic_protocol`), so the link goes
@@ -254,7 +253,7 @@ says which one.
 | `velocity_filter_alpha` | `0.3`          | (0, 1]               | Low-pass weight of the velocity: closer to 1 follows faster but is noisier |
 | `moving_period_ms`      | `33`           | 20 to 100            | One serial turn after a `send_angles`: a `get_angles` (with `pose_from_poll`, only when the poll gave no pose), the send and the wait for the Atom's sync-write (#150), about 27 ms. 33 is one control period at 30 Hz: 10 minutes on the arm with no stall (`docs/03_verification/write_sweep`). At most half the 200 ms link timeout (#35), so one lost reply never trips it |
 | `pose_from_poll`        | `true`         | `true`, `false`      | The pose from the Atom's own poll of the servos, published when its sync-write closes, and the send right after the controller's `write()` (#170); the runs on the arm are in `docs/03_verification/write_sweep`. `false` is the #150 turn: a `get_angles` every turn, the period from the thread's clock |
-| `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 60, two lost replies after it come to ~196 ms at worst with their 8 ms drains, under the 200 ms link timeout (#35); at 80 they trip it. Until #150 every send was followed by a fixed wait, `send_settle_ms`; `SerialTiming::send_settle` (30 ms) is now only the wait after the gripper's `set_gripper_value`. The overheat cut waits for the stop's ack instead |
+| `echo_timeout_ms`       | `60`           | 20 to 80             | Longest wait after a `send_angles` for the Atom's sync-write to the servos, which ends the turn's wait (#150). The sync-write ends 19 ms after the send at p50, 28 at p99, once 54. At 60, two lost replies after it come to ~196 ms at worst with their 8 ms drains, under the 200 ms link timeout (#35); at 80 they trip it. Until #150 every send was followed by a fixed wait, `send_settle_ms`; `SerialTiming::send_settle` (30 ms) is now only the wait after the gripper's `set_gripper_value`. |
 | `servo_temp_limit_c`    | `60`           | 30 to 60             | A servo at or above this temperature for 1 s stops the arm and powers it off. Only lower, to test the cut |
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |
 | `tracking_error_ms`     | `300`          | 50 to 5000           | Milliseconds a joint may stay over `tracking_error_deg`, while active, before fault 2: the arm did not follow the command (#103) |
