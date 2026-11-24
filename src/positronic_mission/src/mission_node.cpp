@@ -323,7 +323,7 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
   MotionOutcome outcome{MotionOutcome::PLANNING_FAILED};
   try {
     // Blocking call made to Moveit
-    switch(goal->mode) {
+    switch (goal->mode) {
       case (GoToPose::Goal::MODE_POSE):
         outcome = backend_->plan_and_execute(goal->target_pose);
         break;
