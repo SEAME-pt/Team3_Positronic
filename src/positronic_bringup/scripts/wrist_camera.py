@@ -41,8 +41,9 @@ it with OpenCV (V4L2, MJPG), turns every frame by `rotation` (90 deg countercloc
 default: the raw image lies on its side, docs/03_verification/camera_mount) and publishes,
 relative to its namespace (camera.launch.py puts it in /wrist_camera, as Gazebo):
 
-  image_raw             sensor_msgs/Image, bgr8, the turned frame
-  camera_info           sensor_msgs/CameraInfo, same stamp and frame_id, from calibration_file
+  image_raw             sensor_msgs/Image, bgr8, the turned frame, only while subscribed
+  camera_info           sensor_msgs/CameraInfo, same stamp and frame_id, from calibration_file,
+                        with every frame, subscribed or not
   image_raw/compressed  sensor_msgs/CompressedImage, jpeg, encoded only while subscribed
 
 ROS parameters, with their defaults:
@@ -337,10 +338,9 @@ class WristCamera(Node):
         image.height = height
         image.encoding = 'bgr8'
         image.step = width * 3
-        # An array.array, not bytes: rclpy then copies it in one go instead of checking every
-        # one of the ~900 000 bytes in Python.
-        image.data = array.array('B', frame.tobytes())
-        self.image_pub.publish(image)
+        if self.image_pub.get_subscription_count() > 0:
+            image.data = array.array('B', frame.tobytes())
+            self.image_pub.publish(image)
 
         self.info.header = image.header
         self.info_pub.publish(self.info)

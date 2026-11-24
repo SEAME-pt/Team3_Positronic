@@ -32,6 +32,10 @@
 #   Cover the drop path of publish_frame (a frame of another size than the published one: no
 #   image, no camera_info, the camera kept), and the start-up check of width, height, fps,
 #   buffer_size, report_period (> 0) and jpeg_quality (1 to 100).
+# Follow-up prompt (PR review):
+#   image_raw is filled and published only while subscribed, like the jpeg. The fake image_raw
+#   publisher gets one subscriber by default; check that without one no raw image goes out,
+#   while camera_info and the jpeg still do, with the same header, and the frame still counts.
 
 """Check wrist_camera.py without a camera: the maths, the calibration, and the node."""
 
@@ -260,11 +264,15 @@ def ros():
     rclpy.shutdown()
 
 
-def make_node(opener, compressed_subscribers=0, **parameters):
-    """Return the node with fake publishers and the given parameter overrides."""
+def make_node(opener, compressed_subscribers=0, image_subscribers=1, **parameters):
+    """
+    Return the node with fake publishers and the given parameter overrides.
+
+    image_raw has one subscriber by default, so the tests see the raw image; the jpeg none.
+    """
     overrides = [Parameter(name, value=value) for name, value in parameters.items()]
     node = camera.WristCamera(open_capture=opener, parameter_overrides=overrides)
-    node.image_pub = FakePublisher()
+    node.image_pub = FakePublisher(image_subscribers)
     node.info_pub = FakePublisher()
     node.compressed_pub = FakePublisher(compressed_subscribers)
     return node
@@ -304,6 +312,22 @@ def test_jpeg_only_with_a_subscriber_and_it_decodes_to_the_image(ros):
         decoded = cv2.imdecode(numpy.frombuffer(bytes(compressed.data), numpy.uint8),
                                cv2.IMREAD_COLOR)
         assert decoded.shape == (640, 480, 3)
+    finally:
+        node.destroy_node()
+
+
+def test_raw_image_only_with_a_subscriber(ros):
+    """Check no image_raw without a subscriber, but camera_info and the jpeg still go out."""
+    node = make_node(FakeOpener(FakeCapture()), compressed_subscribers=1, image_subscribers=0)
+    try:
+        assert node.step()
+        assert node.image_pub.sent == []
+        assert len(node.info_pub.sent) == 1
+        assert len(node.compressed_pub.sent) == 1
+        info, compressed = node.info_pub.sent[0], node.compressed_pub.sent[0]
+        assert info.header.stamp == compressed.header.stamp
+        assert info.header.frame_id == compressed.header.frame_id == 'camera_link'
+        assert node.frames == 1  # the frame was read and handled: it counts in the rate
     finally:
         node.destroy_node()
 
