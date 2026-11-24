@@ -34,6 +34,8 @@
 #   bash $T/arm_run_static.sh run MODE [STAGES]   one mode in one go: up, then each stage
 #                                            after Enter (s skips it, q ends the mode), then
 #                                            down. STAGES default: start first stops base steps
+#                                            or one word: stops-only (start first stops),
+#                                            short (+ base), full (+ steps), full+wrist
 #   bash $T/arm_run_static.sh cool           no driver up: wait (arm holding still) until every
 #                                            servo is <= MAX_START_C (45); `run` does it first
 #   bash $T/arm_run_static.sh up MODE        tap + driver + bag for MODE (no motion; the
@@ -454,6 +456,13 @@ PY
     MODE=$2
     shift 2
     STAGES=${*:-start first stops base steps}
+    # The cut plan's names (Felipe + Manager, 24 Nov): one word for the usual combinations.
+    case "$STAGES" in
+      stops-only) STAGES="start first stops" ;; # the stop distance, the step-up rung
+      short) STAGES="start first stops base" ;;
+      full) STAGES="start first stops base steps" ;;
+      full+wrist) STAGES="start first stops base wrist steps" ;;
+    esac
     bash "$0" cool || exit 1
     bash "$0" up "$MODE" || exit 1
     for stage in $STAGES; do
