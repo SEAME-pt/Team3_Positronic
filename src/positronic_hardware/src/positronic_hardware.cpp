@@ -554,14 +554,16 @@ void RobotSystem::report_load_reliefs()
   if (!relief->refused) {
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
-      "Load relief %" PRIu64 ": joint '%s' stood still %.1f deg from its target pushing with load "
+      "Load relief %" PRIu64
+      ": joint '%s' stood still %.1f deg from its target pushing with load "
       "%d at %d degC: sent where it stands, until the controller moves it.",
       relief->number, joint, residual_deg, relief->load, relief->celsius);
     return;
   }
   RCLCPP_WARN_THROTTLE(
     get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
-    "Load relief %" PRIu64 ": joint '%s' stood still %.1f deg from its target pushing with load "
+    "Load relief %" PRIu64
+    ": joint '%s' stood still %.1f deg from its target pushing with load "
     "%d at %d degC, but where it stands is outside its URDF limits: not relieved.",
     relief->number, joint, residual_deg, relief->load, relief->celsius);
 }
