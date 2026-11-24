@@ -152,9 +152,10 @@ nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once 
 	rsync -a --delete docker/ $(NANO):positronic-docker/
 	ssh $(NANO) 'docker build --target runtime -t $(NANO_IMAGE) --build-arg USER_UID=$$(id -u) --build-arg USER_GID=$$(id -g) positronic-docker'
 
+# /bags is kept on the Jetson: --delete would erase the sessions record_session.py wrote there (#128).
 nano-sync: ## Copy this repo to ~/positronic/<you> on the Jetson
 	ssh $(NANO) mkdir -p $(NANO_DIR)
-	rsync -a --delete --exclude .git --exclude build --exclude install --exclude log ./ $(NANO):$(NANO_DIR)/
+	rsync -a --delete --exclude .git --exclude build --exclude install --exclude log --exclude /bags ./ $(NANO):$(NANO_DIR)/
 
 nano-build: nano-sync ## Sync, then colcon build NANO_PACKAGES on the Jetson
 	ssh $(NANO) "$(NANO_RUN) $(NANO_IMAGE) bash -c 'colcon build --symlink-install --parallel-workers 2 --packages-up-to $(NANO_PACKAGES)'"

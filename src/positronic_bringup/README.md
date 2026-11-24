@@ -26,6 +26,8 @@ Files:
   OpenCV, turns the frame upright and publishes image, `camera_info` and the jpeg.
 - `config/wrist_camera.yaml`: the camera calibration (`camera_calibration`'s `ost.yaml`), read by
   `camera.launch.py`. Without it `camera_info` carries only the image size.
+- `scripts/record_session.py`: records the same topics in every arm session into a bag, with a
+  `session.txt` next to it (#128). See [Recording a session](#recording-a-session).
 
 ## Arm in Gazebo
 
@@ -220,6 +222,50 @@ ros2 run camera_calibration cameracalibrator --size <COLSxROWS> --square <m> \
 SAVE, then copy `ost.yaml` out of `/tmp/calibrationdata.tar.gz` to `config/wrist_camera.yaml`
 and run `make nano-build` again. The node refuses a file made for another image size, with a
 warning, rather than publish a wrong `camera_info`.
+
+## Recording a session
+
+Every arm session is recorded with the same script, so each PR has its evidence and module 2
+has data (#128). Start it in its own terminal, before or after the launch:
+
+```bash
+ros2 run positronic_bringup record_session.py --issue 134 --who rui \
+    --what "T3 of #33 at update_rate 50, speed of #133"
+```
+
+It records until Ctrl+C, then waits for `ros2 bag` to close the bag. Each session gets its own
+folder, `bags/<date>_<time>_issue-<n>/`:
+
+- `session.txt`: who ran it, the issue, what was run, the host, the topics, start and stop.
+- `bag/`: the bag (MCAP).
+
+The topics, the same every time: `/joint_states`, `/arm_controller/joint_trajectory`,
+`/arm_controller/controller_state`, `/dynamic_joint_states` (where `driver/fault_code` is),
+`/diagnostics` and `/mission/heartbeat`. A topic nobody publishes yet is picked up when it
+appears. The goals MoveIt sends are actions, which `ros2 bag` does not record in Jazzy: what
+`arm_controller` does with them is on `controller_state`. `--dry-run` prints the folder and
+the command without recording.
+
+**Where the bags are kept.** Never in git: `bags/` is in `.gitignore`. In the containers it is
+`/ws/bags`, the only folder that outlives them; `make nano-sync` leaves it alone on the Jetson.
+Record on the Jetson, where no message is lost on the Wi-Fi, and copy the session to a laptop
+afterwards:
+
+```bash
+rsync -a nano:positronic/<you>/bags/ bags/
+```
+
+Size: about 32 MiB for a 10 minute session with `backend:=fake` at 30 Hz (3.2 MiB in 60 s);
+on the arm: SIZE_TBD (#128).
+
+**Play it back in RViz**, on a laptop: the mirror launch draws `/joint_states` as if the arm
+were there.
+
+```bash
+ros2 launch positronic_bringup mirror.launch.py
+ros2 bag play bags/<session>/bag          # in a second terminal
+ros2 bag info bags/<session>/bag          # topics, message counts, duration
+```
 
 ## Troubleshooting
 

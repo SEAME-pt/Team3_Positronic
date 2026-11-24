@@ -28,6 +28,9 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <!-- record_session.py runs `ros2 bag record`, MCAP storage (#128). -->
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_storage_mcap</exec_depend>
 
   <!-- ROS linters, run by make test. -->
   <test_depend>ament_lint_auto</test_depend>

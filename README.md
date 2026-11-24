@@ -38,6 +38,9 @@ make format          # format src/ (clang-format, then ROS uncrustify), changes 
 make help            # all targets
 ```
 
+Every session on the real arm is recorded: `ros2 run positronic_bringup record_session.py --issue <n> --who <you> --what "<what you run>"`,
+see [Recording a session](src/positronic_bringup/README.md#recording-a-session).
+
 Per-machine settings (the GPU mode, the Jetson's IP) live in `.env`: `cp .env.example .env`, then edit it
 (see [docs/build.md](docs/build.md), "GPU for Gazebo and RViz"). With `ARM_IP` set, `make doctor` also checks
 that the Jetson is reachable.
