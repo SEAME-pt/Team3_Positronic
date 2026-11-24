@@ -155,6 +155,32 @@ send() {  # send <file> <out>: one goal, its feedback kept in <out>; fails unles
 to_start() { send "$TRAJ/T0_to_start.yaml" "$(mode_dir)/move_start_$1.txt"; }
 to_rest() { send "$ROOT/traj/REST.yaml" "$(mode_dir)/move_rest_$1.txt"; }
 
+# The last servo temperatures in the tap (the driver's get_servo_temps replies, every few s).
+tap_temps() {
+  grep -o "fefe08e5[0-9a-f]\{12\}" "$(mode_dir)/tap.csv" 2> /dev/null | tail -1 \
+    | python3 -c "import sys; h=sys.stdin.read().strip()[8:]; print(*[int(h[i:i+2], 16) for i in range(0, 12, 2)])"
+}
+
+# Before a goal, at rest: if a servo is at HOT_C or more, wait there until all are at COOL_C or
+# less. One goal is ~14 s away from the rest pose, so it cannot start hot enough to reach the
+# driver's 60 degC power-off. No tap (DRY): no wait.
+cool_wait() {
+  [ -f "$(mode_dir)/tap.csv" ] || return 0
+  local temps max
+  temps=$(tap_temps)
+  [ -n "$temps" ] || return 0
+  max=$(echo "$temps" | tr ' ' '\n' | sort -n | tail -1)
+  [ "$max" -ge "${HOT_C:-54}" ] || return 0
+  echo ">>> servos $temps degC: waiting at rest until all <= ${COOL_C:-48}" | tee -a "$(mode_dir)/cool_waits.txt"
+  local start=$SECONDS
+  while [ "$max" -gt "${COOL_C:-48}" ]; do
+    sleep 10
+    temps=$(tap_temps)
+    max=$(echo "$temps" | tr ' ' '\n' | sort -n | tail -1)
+  done
+  echo ">>> servos $temps degC after $((SECONDS - start)) s" | tee -a "$(mode_dir)/cool_waits.txt"
+}
+
 goal() {  # goal <name> <run>: one #33 goal from the rest pose, recorded for waypoint_error.py
   local name=$1 run=$2 file="$ROOT/traj/$1.yaml"
   [ -f "$file" ] || file="$TRAJ/$1.yaml"
@@ -247,6 +273,7 @@ PY
     ;;
   first)
     need_mode
+    cool_wait
     countdown "MOVES: start pose, T1 (J1 5 deg out and back, 1.7 deg/s, the first move of this mode), rest"
     goal T1 1 || exit 1
     ;;
@@ -254,6 +281,7 @@ PY
     need_mode
     for name in T3 T6 T4; do
       for run in 1 2 3; do
+        cool_wait
         countdown "MOVES: start pose, $name run $run (J1 and J2 20 deg out and back), rest"
         goal "$name" "$run" || exit 1
       done
@@ -263,6 +291,7 @@ PY
     need_mode
     for name in T11 T12 T13; do
       for run in 1 2 3; do
+        cool_wait
         countdown "MOVES: start pose, $name run $run (J3 to J6 20 deg out and back, raises J3: nothing above), rest"
         goal "$name" "$run" || exit 1
       done
@@ -271,6 +300,7 @@ PY
   stops)
     need_mode
     for run in 1 2 3 4 5; do
+      cool_wait
       countdown "MOVES: start pose, then stop $run of 5: J1 40 deg at 15 deg/s, stopped about 1 s in"
       to_start "stop$run" || exit 1
       rm -f "$ROOT/trigger_ready" "$ROOT/trigger_go"
