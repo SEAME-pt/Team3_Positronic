@@ -23,7 +23,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -31,10 +30,8 @@
 
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/node_options.hpp"
-#include "rclcpp/rate.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/service.hpp"
-#include "rclcpp_action/client.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp_action/server.hpp"
 #include "rclcpp_action/server_goal_handle.hpp"

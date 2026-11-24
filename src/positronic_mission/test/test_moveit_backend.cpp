@@ -31,9 +31,13 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <memory>
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "positronic_mission/moveit_backend.hpp"
+#include "positronic_mission/motion_backend.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+#include "positronic_mission/moveit_backend.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace
 {
@@ -43,11 +47,31 @@ using positronic_mission::MoveitBackend;
 geometry_msgs::msg::PoseStamped any_pose()
 {
   geometry_msgs::msg::PoseStamped pose;
-  pose.header.frame_id = "g_base";
+  pose.header.frame_id = positronic_mission::BASE_FRAME;
   pose.pose.position.x = 0.15;
   pose.pose.position.z = 0.20;
   pose.pose.orientation.w = 1.0;
   return pose;
+}
+
+std::vector<geometry_msgs::msg::Pose> any_path()
+{
+  std::vector<geometry_msgs::msg::Pose> waypoints;
+  waypoints.reserve(2);
+
+  geometry_msgs::msg::Pose pose_1;
+  pose_1.position.x = 0.15;
+  pose_1.position.z = 0.20;
+  pose_1.orientation.w = 1.0;
+  waypoints.push_back(pose_1);
+
+  geometry_msgs::msg::Pose pose_2;
+  pose_2.position.x = 0.30;
+  pose_2.position.z = 0.205;
+  pose_2.orientation.w = 1.0;
+  waypoints.push_back(pose_2);
+
+  return waypoints;
 }
 
 class MoveitBackendTest : public ::testing::Test
@@ -114,10 +138,10 @@ TEST_F(MoveitBackendTest, StopWithoutMoveGroupIsSafe)
   EXPECT_NO_THROW(backend_->stop());
 }
 
-// No MoveIt: ready() is false, so the mission node stays INACTIVE. It must also return in
-// bounded time, or activating the node would hang. Margin: MoveIt waits 0.1 s for the
-// description (set above), the backend gives the connection 2 s; 5 s leaves room for a slow
-// CI runner and still fails if MoveIt's 10 s default wait were used.
+// No robot description: ready() returns false at its first check, so the mission node stays
+// INACTIVE. It must return in bounded time, or activating the node would hang. The 5 s bound
+// catches a regression where ready() starts waiting on MoveIt without the description.
+// (The "move_group does not answer" path is tested in MoveitBackendReadyTest.)
 TEST_F(MoveitBackendTest, ReadyIsFalseWithoutMoveIt)
 {
   const auto start = std::chrono::steady_clock::now();
@@ -134,4 +158,50 @@ TEST_F(MoveitBackendTest, DestructorReturns)
   const auto start = std::chrono::steady_clock::now();
   backend_.reset();
   EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+}
+
+// The stop stays until reset_stop(): a second call is preempted too.
+TEST_F(MoveitBackendTest, StopStaysUntilResetCartesian)
+{
+  backend_->stop();
+  EXPECT_EQ(backend_->plan_and_execute_cartesian(any_path()), MotionOutcome::PREEMPTED);
+  EXPECT_EQ(backend_->plan_and_execute_cartesian(any_path()), MotionOutcome::PREEMPTED);
+}
+
+// After reset_stop() the stop no longer applies: the call goes on to the next check, which
+// fails because the backend never connected to MoveIt.
+TEST_F(MoveitBackendTest, ResetStopClearsTheStopCartesian)
+{
+  backend_->stop();
+  backend_->reset_stop();
+  EXPECT_EQ(backend_->plan_and_execute_cartesian(any_path()), MotionOutcome::PLANNING_FAILED);
+}
+
+// Own suite: ready() needs the robot description parameters to get past its first check, and
+// global parameters are fixed at init. So this test runs its own init/shutdown, outside
+// MoveitBackendTest's.
+TEST(MoveitBackendReadyTest, ReadyIsFalseWhenMoveGroupDoesNotAnswer)
+{
+  // Dummy values are enough: the move_group wait fails before MoveGroupInterface is built,
+  // so nothing ever parses them.
+  const char * argv[] = {"test", "--ros-args",
+    "-p", "robot_description:=dummy",
+    "-p", "robot_description_semantic:=dummy"};
+  rclcpp::init(static_cast<int>(std::size(argv)), argv);
+
+  {
+    MoveitBackend backend("arm");
+    const auto start = std::chrono::steady_clock::now();
+
+    EXPECT_FALSE(backend.ready());
+    // Second call reuses the existing client and must fail the same way.
+    EXPECT_FALSE(backend.ready());
+    // Two 2 s waits, plus margin for a slow CI runner.
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(8));
+
+    // A failed ready() leaves no half-built move_group.
+    EXPECT_EQ(backend.plan_and_execute(any_pose()), MotionOutcome::PLANNING_FAILED);
+  }  // Destroy the backend before shutting ROS down
+
+  rclcpp::shutdown();
 }

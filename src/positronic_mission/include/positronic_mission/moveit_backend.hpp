@@ -26,11 +26,12 @@
 #include <string>
 #include <thread>
 #include <vector>
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "moveit_msgs/action/move_group.hpp"
-#include "positronic_mission/motion_backend.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/client.hpp"
+#include "positronic_mission/motion_backend.hpp"
 
 // Forwarding the class to the .cpp file
 namespace moveit::planning_interface

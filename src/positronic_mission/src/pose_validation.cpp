@@ -18,8 +18,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "positronic_mission/pose_validation.hpp"
 #include <cmath>
+
+#include "positronic_mission/pose_validation.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
 
 namespace positronic_mission

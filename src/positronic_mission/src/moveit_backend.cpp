@@ -31,11 +31,18 @@
 #include <rclcpp/node_options.hpp>
 #include "moveit_msgs/msg/move_it_error_codes.hpp"
 #include "moveit_msgs/msg/robot_trajectory.hpp"
+
 #include "positronic_mission/motion_backend.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission
 {
 using moveit::core::MoveItErrorCode;
+
+// Max distance in meters between interpolated points. For the endpoint
+static constexpr double EEF_STEP = 0.01;
+// How much of the Cartesian Path moveit could achieve. 1.0 is the whole path
+static constexpr double MIN_PLAN_FRACTION = 0.999;
 
 MoveitBackend::MoveitBackend(std::string group_name)
 : group_name_(std::move(group_name))
@@ -121,7 +128,7 @@ MotionOutcome MoveitBackend::plan_and_execute_cartesian(
   const bool avoid_collisions = true;
 
   if (move_group_->computeCartesianPath(
-      waypoints, EEF_STEP, trajectory, avoid_collisions, &error_code) < 0.999)
+      waypoints, EEF_STEP, trajectory, avoid_collisions, &error_code) < MIN_PLAN_FRACTION)
   {
     return MotionOutcome::PLANNING_FAILED;
   }
@@ -172,6 +179,7 @@ bool MoveitBackend::ready()
     RCLCPP_WARN(node_->get_logger(), "Moveit parameters missing");
     return false;
   }
+
   try {
     // Make sure the move_group responds before returning true.
     if (!check_client_) {
@@ -182,8 +190,15 @@ bool MoveitBackend::ready()
       RCLCPP_WARN(node_->get_logger(), "move_group not answering on move_action");
       return false;
     }
-    move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
+    auto temp_group = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
       node_, group_name_, nullptr, rclcpp::Duration::from_seconds(2.0));
+
+    // A Cartesian Path has no frame, so set here a default one.
+    temp_group->setPoseReferenceFrame(BASE_FRAME);
+    RCLCPP_INFO(node_->get_logger(), "Planning frame: %s, Reference frame: %s",
+      temp_group->getPlanningFrame().c_str(), temp_group->getPoseReferenceFrame().c_str());
+    // Only assign move_group once every setup is fine
+    move_group_ = std::move(temp_group);
     return true;
   } catch (const std::exception & e) {
     RCLCPP_WARN(

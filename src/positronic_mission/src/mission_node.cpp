@@ -18,9 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "positronic_mission/mission_node.hpp"
 #include <rclcpp/logging.hpp>
 #include <rclcpp_action/server.hpp>
+
+#include "positronic_mission/mission_node.hpp"
 #include "positronic_interfaces/action/go_to_pose.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "positronic_mission/moveit_backend.hpp"
@@ -250,10 +251,10 @@ void positronic_mission::MissionNode::heart_beat()
 rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
   const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
 {
-    if (goal == nullptr) {
-        RCLCPP_WARN(get_logger(), "Rejected, No goal");
-        return rclcpp_action::GoalResponse::REJECT;
-    }
+  if (goal == nullptr) {
+    RCLCPP_WARN(get_logger(), "Rejected, No goal");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
 
   if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
@@ -318,17 +319,27 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
   feedback->stage = "executing";
   goal_handle->publish_feedback(feedback);
 
-  // Blocking call made to Moveit
+  // Throws are rare but can happen. Treating them as execution error
   MotionOutcome outcome{MotionOutcome::PLANNING_FAILED};
-  switch(goal->mode) {
-    case (GoToPose::Goal::MODE_POSE):
-      outcome = backend_->plan_and_execute(goal->target_pose);
-      break;
-    case (GoToPose::Goal::MODE_CARTESIAN):
-      outcome = backend_->plan_and_execute_cartesian(goal->cartesian_path);
-      break;
-    default:
-      RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
+  try {
+    // Blocking call made to Moveit
+    switch(goal->mode) {
+      case (GoToPose::Goal::MODE_POSE):
+        outcome = backend_->plan_and_execute(goal->target_pose);
+        break;
+      case (GoToPose::Goal::MODE_CARTESIAN):
+        outcome = backend_->plan_and_execute_cartesian(goal->cartesian_path);
+        break;
+      default:
+        RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Backend threw: %s", e.what());
+    outcome = MotionOutcome::EXECUTION_FAILED;
+  } catch (...) {
+    // Backup catch for unknown throws
+    RCLCPP_ERROR(get_logger(), "Unknown Throw. Treated as execution failed");
+    outcome = MotionOutcome::EXECUTION_FAILED;
   }
 
   if (!rclcpp::ok()) {

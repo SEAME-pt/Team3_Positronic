@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <vector>
+
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
@@ -37,8 +38,6 @@ enum class MotionOutcome : std::uint8_t
   PREEMPTED
 };
 
-constexpr double EEF_STEP = 0.01;
-
 // Interface to talk with moveit
 // Same Interface is used by moveit backend and mock backend
 class MotionBackend
@@ -52,19 +51,21 @@ public:
   MotionBackend & operator=(MotionBackend &&) = delete;
 
   // Blocking. Called from the execute thread.
+  // Executes a single pose
   virtual MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) = 0;
 
+  // Executes a cartesian path
   virtual MotionOutcome plan_and_execute_cartesian(
     const std::vector<geometry_msgs::msg::Pose> & waypoints) = 0;
 
   // Must be safe to call from any thread. Makes a running
-  // plan_and_execute return PREEMPTED.
+  // plan_and_execute or plan_and_execute_cartesian return PREEMPTED.
   virtual void stop() = 0;
 
   // Clears a pending stop. Called by the node only when a new goal is accepted.
   virtual void reset_stop() = 0;
 
-  // Check if the move_groups is accessible to validade the backend connection
+  // Check if the move_groups is accessible to validate the backend connection
   virtual bool ready() = 0;
 };
 }  // namespace positronic_mission

@@ -28,7 +28,9 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
+
 #include "positronic_mission/motion_backend.hpp"
 
 namespace positronic_mission
@@ -48,26 +50,44 @@ public:
   std::atomic<int> cartesian_calls{0};
   std::atomic<int> stops{0};
 
+  // How the backend fails, for testing the node's catch blocks
+  enum class ThrowMode { NONE, STD_EXCEPTION, UNKNOWN };
+  std::atomic<ThrowMode> throw_mode{ThrowMode::NONE};
+
+  // Throw check
+  std::atomic<bool> throw_on_ready{false};
+
   // The pose of the last plan_and_execute call
   geometry_msgs::msg::PoseStamped last_pose()
   {
-    std::lock_guard<std::mutex> lock(pose_mutex_);
+    const std::lock_guard<std::mutex> lock(pose_mutex_);
     return last_pose_;
+  }
+
+  std::vector<geometry_msgs::msg::Pose> last_waypoint()
+  {
+    const std::lock_guard<std::mutex> lock(pose_mutex_);
+    return last_waypoint_;
   }
 
   MotionOutcome plan_and_execute(
     const geometry_msgs::msg::PoseStamped & pose) override
   {
     {
-      std::lock_guard<std::mutex> lock(pose_mutex_);
+      const std::lock_guard<std::mutex> lock(pose_mutex_);
       last_pose_ = pose;
     }
     ++pose_calls;
     return mock_execute();
   }
+
   MotionOutcome plan_and_execute_cartesian(
-    const std::vector<geometry_msgs::msg::Pose> & /* waypoints */) override
+    const std::vector<geometry_msgs::msg::Pose> & waypoints) override
   {
+    {
+      const std::lock_guard<std::mutex> lock(pose_mutex_);
+      last_waypoint_ = waypoints;
+    }
     ++cartesian_calls;
     return mock_execute();
   }
@@ -85,16 +105,29 @@ public:
 
   bool ready() override
   {
+    if (throw_on_ready) {
+      throw std::runtime_error("mock ready failure");
+    }
     return ready_result.load();
   }
 
 private:
   std::mutex pose_mutex_;
   geometry_msgs::msg::PoseStamped last_pose_;
+  std::vector<geometry_msgs::msg::Pose> last_waypoint_;
   std::atomic<bool> stop_requested_{false};
 
   MotionOutcome mock_execute()
   {
+    switch (throw_mode.load()) {
+      case ThrowMode::STD_EXCEPTION:
+        throw std::runtime_error("mock backend failure");
+      case ThrowMode::UNKNOWN:
+        throw 42;  // Not a std::exception: only catch (...) handles it
+      case ThrowMode::NONE:
+        break;
+    }
+
     if (stop_requested_) {
       return MotionOutcome::PREEMPTED;
     }
