@@ -34,6 +34,10 @@
 #   Later: --soft (make tidy) drops --warnings-as-errors but keeps the test checks; a warning is
 #   printed as 'warn' and exits 0, a file clang-tidy can't check still exits 1; make tidy runs
 #   the script with --soft and the same TIDY_TEST_* variables as CI.
+#   And the end summary: diagnostics parsed with their checks (strict's -warnings-as-errors
+#   dropped, a compile error without a check, notes ignored); a header's warning printed by two
+#   TUs counts once, in the header's package; soft with warnings passes, strict fails; the
+#   Markdown report has the per-package table.
 """Unit tests for the clang-tidy selection and runner of #144 (no ROS 2, no git)."""
 
 import io
@@ -271,7 +275,9 @@ def test_main_soft_prints_warnings_and_exits_0(tmp_path, monkeypatch, capsys):
     assert [c[-1] for c in calls if '--checks=-misc-*' in c] == [A_TEST]
     out = capsys.readouterr().out
     assert 'planted' in out and ' warn ' in out
-    assert '4 files, 0 failed, 2 with warnings' in out
+    assert 'clang-tidy summary' in out
+    assert out.rstrip().endswith(
+        "4 files, 2 warnings, 0 failed, 0 s wall, warnings don't fail make tidy")
 
 
 def test_main_soft_fails_when_clang_tidy_cannot_check_a_file(tmp_path, monkeypatch):
@@ -281,6 +287,60 @@ def test_main_soft_fails_when_clang_tidy_cannot_check_a_file(tmp_path, monkeypat
     monkeypatch.delenv('GITHUB_STEP_SUMMARY', raising=False)
     assert tc.main(['--all', '--soft', '--strict', '^/ws/src/', '--test-files', TESTS.pattern,
                     '--test-checks=-misc-*', '--build-dir', str(tmp_path)]) == 1
+
+
+HEADER_WARNING = A_HPP + ':3:7: warning: variable could be const [misc-const-correctness]\n'
+
+
+def test_warnings_in_reads_checks():
+    output = (HEADER_WARNING
+              + A_CPP + ':9:1: error: bad name [readability-identifier-naming,'
+              '-warnings-as-errors]\n'
+              + A_CPP + ":10:2: error: unknown type name 'Foo'\n"
+              + A_CPP + ':11:2: warning: c array [cppcoreguidelines-avoid-c-arrays,'
+              'modernize-avoid-c-arrays]\n'
+              + A_CPP + ':11:2: note: declared here\n'
+              '   12 | int x = 0;\n')
+    found = list(tc.warnings_in(output).values())
+    assert found == [
+        (A_HPP, ['misc-const-correctness']),
+        (A_CPP, ['readability-identifier-naming']),
+        (A_CPP, ['clang-diagnostic-error']),
+        (A_CPP, ['cppcoreguidelines-avoid-c-arrays', 'modernize-avoid-c-arrays'])]
+    assert tc.warnings_in('') == {}
+
+
+def test_summarize_counts_a_header_warning_once_in_its_package():
+    results = {B_CPP: (0, 4.0, HEADER_WARNING), A_TEST: (0, 1.0, HEADER_WARNING),
+               A_CPP: (1, 2.0, A_CPP + ':1:1: error: x [bugprone-x,-warnings-as-errors]\n')}
+    packages = tc.summarize(results, TESTS)
+    assert packages['pkg_a']['src'] == 1 and packages['pkg_a']['test'] == 1
+    assert packages['pkg_a']['warnings'] == 2  # the header's once, a.cpp's once
+    assert packages['pkg_a']['checks'] == {'misc-const-correctness': 1, 'bugprone-x': 1}
+    assert packages['pkg_a']['failed'] == 1 and packages['pkg_a']['seconds'] == 3.0
+    assert packages['pkg_b']['warnings'] == 0 and packages['pkg_b']['seconds'] == 4.0
+    assert tc.summarize({}, TESTS) == {}
+
+
+def test_summary_text_verdicts():
+    style = tc.Style(False)
+    clean = tc.summarize({A_CPP: (0, 1.0, '')}, TESTS)
+    warned = tc.summarize({A_CPP: (0, 1.0, HEADER_WARNING)}, TESTS)
+    failed = tc.summarize({A_CPP: (1, 1.0, '')}, TESTS)
+    text, passed = tc.summary_text(clean, True, 3.0, style)
+    assert passed and '✔ PASSED: 1 files, 0 warnings, 0 failed, 3 s wall' in text
+    assert not any(line != line.rstrip() for line in text.splitlines())
+    assert 'pkg_a' in text and '1 files (1 src, 0 test)' in text
+    text, passed = tc.summary_text(warned, True, 3.0, style)
+    assert passed and '! WARNINGS:' in text and 'misc-const-correctness ×1' in text
+    assert not tc.summary_text(warned, False, 3.0, style)[1]
+    text, passed = tc.summary_text(failed, True, 3.0, style)
+    assert not passed and '✘ FAILED:' in text
+
+
+def test_report_has_a_table_per_package():
+    text = tc.report(None, tc.ALL, {}, {A_CPP: (0, 1.0, HEADER_WARNING)}, TESTS, 1.0)
+    assert '| pkg_a | 1 | 1 | `misc-const-correctness` ×1 | 1.0 s |' in text
 
 
 def test_make_tidy_is_soft_with_the_same_test_rule_as_ci():
