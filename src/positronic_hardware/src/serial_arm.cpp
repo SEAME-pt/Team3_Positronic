@@ -182,7 +182,8 @@ SerialArm::SerialArm(
   // silence of the guard counts from now (like the #35 watchdog, reset by the thread).
   last_temperatures_ = Clock::now() - guard_.max_age;
   temperature_watchdog_.reset(Clock::now());
-  read_buffer_.reserve(512);
+  // read_until() keeps up to 2048 bytes plus one chunk: reserved, so a turn does not allocate.
+  read_buffer_.reserve(2048 + 256);
   thread_ = std::thread{&SerialArm::poll_loop, this};
 }
 
@@ -201,9 +202,7 @@ SerialArm::~SerialArm()
 
 JointPositions SerialArm::read_angles() const
 {
-  // readFromRT() returns a pointer to the current buffer; never null here because the buffer is
-  // seeded with START_POSE at construction.
-  return *latest_.readFromRT();
+  return latest_.readFromRT()->value_or(START_POSE);
 }
 
 void SerialArm::write_angles(const JointPositions & angles)
@@ -246,7 +245,8 @@ void SerialArm::wake_thread(bool & flag)
 
 bool SerialArm::has_sample() const
 {
-  return has_sample_.load();
+  // From the pose's own box, so a true here and the read_angles() after it agree.
+  return latest_.readFromRT()->has_value();
 }
 
 bool SerialArm::link_timed_out() const
@@ -454,6 +454,7 @@ void SerialArm::wait_for_sync_write()
   // A wait cut short by the destructor is not the arm's doing.
   if (!seen && !stop_.load()) {
     echo_timeouts_.fetch_add(1);
+    late_reply_possible_ = true;
   }
   // Published now, the moment the sync-write closes, not at the start of the next turn: the
   // pose is ~13 ms fresher for the read() that comes next (#170).
@@ -523,7 +524,6 @@ bool SerialArm::publish_poll_frames()
   const JointPositions pose{pp::to_radians(angles)};
   latest_.writeFromNonRT(pose);
   last_pose_ = pose;
-  has_sample_.store(true);
   watchdog_.on_reply(now);
   // The frames are a temperature reading too, one per send, and the guard asks nothing while
   // they come. Not with a bridged frame: it repeats an older reading.
@@ -536,6 +536,10 @@ bool SerialArm::publish_poll_frames()
 
 bool SerialArm::ask_angles(ReplyAssembler & assembler)
 {
+  // The reply of this request only: nothing left from an earlier one, a partial reply included,
+  // may complete it.
+  clear_line();
+  assembler.clear();
   // A failed write is transient (busy port): no reply this turn, the pose stays, the next turn
   // asks again.
   const positronic_protocol::Frame request{positronic_protocol::encode_get_angles()};
@@ -558,15 +562,35 @@ bool SerialArm::ask_angles(ReplyAssembler & assembler)
       continue;
     }
     if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
-      latest_.writeFromNonRT(pose.value());
+      latest_.writeFromNonRT(pose);
       last_pose_ = pose;
-      // Set after the write, so whoever sees true also finds the real pose in the buffer.
-      has_sample_.store(true);
       watchdog_.on_reply(Clock::now());
       return true;
     }
   }
+  late_reply_possible_ = true;
   return false;
+}
+
+void SerialArm::clear_line()
+{
+  auto drain_until{Clock::now()};
+  if (late_reply_possible_) {
+    drain_until += LATE_REPLY_DRAIN;
+  }
+  late_reply_possible_ = false;
+  std::array<std::uint8_t, 256> chunk{};
+  // Bounded: a line that never goes quiet must not hold the turn (64 chunks are ~16 KB, far
+  // past what the Atom sends in LATE_REPLY_DRAIN).
+  for (int reads{0}; reads < 64 && !stop_.load(); ++reads) {
+    if (transport_->read(chunk.data(), chunk.size()) > 0) {
+      continue;
+    }
+    if (Clock::now() >= drain_until) {
+      return;
+    }
+    std::this_thread::sleep_for(EMPTY_READ_BACKOFF);
+  }
 }
 
 std::chrono::milliseconds SerialArm::turn_period(bool sent) const
@@ -585,28 +609,34 @@ std::chrono::milliseconds SerialArm::turn_period(bool sent) const
 
 bool SerialArm::perform(const Request & request, const Scanner & reply)
 {
+  clear_line();
   if (!transport_->write(request.frame.bytes.data(), request.frame.size)) {
     return false;
   }
   const Clock::time_point deadline{Clock::now() + request.timeout};
+  bool found{false};
+  bool ok{true};
   switch (request.expect) {
     case Expect::NONE:
       return true;
     case Expect::REPLY:
       // A reply nobody scans for is a request that cannot succeed, not a crash on the thread.
-      return static_cast<bool>(reply) && read_until(deadline, reply);
+      found = static_cast<bool>(reply) && read_until(deadline, reply);
+      break;
     case Expect::ACK:
+      found = read_until(deadline, [&request, &ok](positronic_protocol::ByteView rx) {
+            const positronic_protocol::Decoded<std::uint8_t> ack{
+              positronic_protocol::decode_ack(rx, request.command)};
+            if (ack.status == positronic_protocol::DecodeStatus::FOUND) {
+              ok = ack.value == 1;
+            }
+            return ScanResult{ack.status == positronic_protocol::DecodeStatus::FOUND, ack.consumed};
+      });
       break;
   }
-  bool ok{false};
-  const bool found{read_until(deadline, [&request, &ok](positronic_protocol::ByteView rx) {
-        const positronic_protocol::Decoded<std::uint8_t> ack{
-          positronic_protocol::decode_ack(rx, request.command)};
-        if (ack.status == positronic_protocol::DecodeStatus::FOUND) {
-          ok = ack.value == 1;
-        }
-        return ScanResult{ack.status == positronic_protocol::DecodeStatus::FOUND, ack.consumed};
-  })};
+  if (!found) {
+    late_reply_possible_ = true;
+  }
   return found && ok;
 }
 
@@ -641,13 +671,11 @@ bool SerialArm::cut_power(const Overheat & trip)
   // The hold first, like halt(): from here on no target goes out, whatever the controller does.
   halted_.store(true);
   last_target_.writeFromNonRT(std::nullopt);
-  // The stop goes out without waiting for its ack: the power off must follow at once.
-  Request stop{stop_request()};
-  stop.expect = Expect::NONE;
-  std::ignore = perform(stop);
-  // The arm ignores the port for a moment after a frame (#32): the power off waits the settle,
-  // so it is not dropped.
-  std::this_thread::sleep_for(timing_.send_settle);
+  // The power off only after the stop's ack (36 to 37 ms on 24 Nov 2026): the Atom drops a frame
+  // that comes while it handles the stop, and a power off sent after a fixed 30 ms was dropped
+  // in all three recorded cuts, the servos torqued until its repeat 1.1 s later. Without the
+  // ack it goes out at ACK_TIMEOUT.
+  std::ignore = perform(stop_request());
   const bool off_written{perform(power_off_request())};
   // Recorded after the frames, the value before the joint: the plugin that sees the cut finds
   // the arm already told to stop and power off.
@@ -737,6 +765,7 @@ void SerialArm::gripper_turn()
   if (const std::optional<std::uint8_t> target{gripper_value_to_send()}) {
     const std::optional<positronic_protocol::Frame> frame{
       positronic_protocol::encode_set_gripper_value(target.value(), GRIPPER_SPEED)};
+    clear_line();
     if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
       gripper_last_sent_ = target;
       std::this_thread::sleep_for(timing_.send_settle);
@@ -755,28 +784,33 @@ void SerialArm::gripper_turn()
 
 std::optional<std::uint8_t> SerialArm::ask_gripper()
 {
+  clear_line();
   const positronic_protocol::Frame request{positronic_protocol::encode_get_gripper_value()};
   if (!transport_->write(request.bytes.data(), request.size)) {
     return std::nullopt;
   }
   std::optional<std::uint8_t> value{};
-  read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
-      const positronic_protocol::Decoded<std::uint8_t> reply{
-        positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
-      const bool found{reply.status == positronic_protocol::DecodeStatus::FOUND};
-      if (found) {
-        value = reply.value;
-      }
-      return ScanResult{found, reply.consumed};
-  });
+  const bool found{
+    read_until(Clock::now() + GRIPPER_REPLY_TIMEOUT, [&value](positronic_protocol::ByteView rx) {
+        const positronic_protocol::Decoded<std::uint8_t> reply{
+          positronic_protocol::decode_ack(rx, positronic_protocol::CommandId::GET_GRIPPER_VALUE)};
+        const bool got{reply.status == positronic_protocol::DecodeStatus::FOUND};
+        if (got) {
+          value = reply.value;
+        }
+        return ScanResult{got, reply.consumed};
+    })};
+  if (!found) {
+    late_reply_possible_ = true;
+  }
   return value;
 }
 
 /// After a cut, the power off goes out again every period, at the start of a turn, when the
-/// arm's input is free. The arm does ack it (`FE FE 03 11 01 FA`, Atom firmware 7.3), but the
-/// ack is not read here, so a dropped power off would leave the servos torqued and still
-/// heating; the resend covers it. The arm can also be powered on again without this port (the
-/// Atom's button, a power cycle). Nothing else can use the port meanwhile: it is exclusive.
+/// arm's input is free, and at the next turn while it has no ack. The arm can be powered on
+/// again without this port (the Atom's button, a power cycle), and once off it answers nothing,
+/// so each repeat waits its ACK_TIMEOUT. Nothing else can use the port meanwhile: it is
+/// exclusive.
 void SerialArm::repeat_power_off(Clock::time_point turn_start)
 {
   if (!overheated() || turn_start < next_power_off_) {
@@ -851,6 +885,7 @@ void SerialArm::poll_loop()
     if (new_target && target.has_value() && !asked_temperatures && !halted_.load()) {
       // NaN or out of range: nothing we can put on the wire, keep the previous target.
       const std::optional<positronic_protocol::Frame> frame{encode_command(*target)};
+      clear_line();
       if (frame.has_value() && transport_->write(frame->bytes.data(), frame->size)) {
         last_target_.writeFromNonRT(target);
         last_send_at_ = Clock::now();

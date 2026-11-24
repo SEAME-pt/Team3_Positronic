@@ -83,12 +83,14 @@ inline Request power_on_request()
     ACK_TIMEOUT};
 }
 
-/// Powers the servos off. The arm answers nothing: the overheat cut repeats it once a period.
+/// Powers the servos off. Acknowledged (FE FE 03 11 01 FA, 62 ms after the frame on 24 Nov
+/// 2026), after which the arm answers nothing until a power on. The overheat cut repeats it once
+/// a period, and at once when its ack does not come.
 inline Request power_off_request()
 {
   return {
-    positronic_protocol::CommandId::POWER_OFF, positronic_protocol::encode_power_off(),
-    Expect::NONE, std::chrono::milliseconds{0}};
+    positronic_protocol::CommandId::POWER_OFF, positronic_protocol::encode_power_off(), Expect::ACK,
+    ACK_TIMEOUT};
 }
 
 /// Asks the six servo temperatures. Answered with a reply frame.

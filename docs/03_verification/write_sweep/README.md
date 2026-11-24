@@ -153,8 +153,9 @@ those status frames, checksum included, and publishes the pose when the sync-wri
 so the stream follows the controller's cadence. A `get_angles` goes out only when a turn has no
 pose from a poll: the first turn, a lost or corrupt poll, a sync-write past `echo_timeout_ms`.
 At rest the controller still writes every cycle, and each write sends the unchanged target
-again, so the pose keeps coming from the poll (6 to 22 sends/s at rest in the final run, between
-`get_angles`). The exceptions to that repeat are in the driver's README.
+again, so the pose keeps coming from the poll (6 to 22 sends/s at rest in the final run of this
+part, between `get_angles`: a write that landed during a `get_angles` was lost, fixed in the third
+part). The exceptions to that repeat are in the driver's README.
 
 Three runs of 10 minutes at 33 ms, 30 Hz, arm alone (no gripper, no camera), joint 1 swinging
 10 deg, all tapped. The #150 column is the 10-minute run of the table above; the prototype is
@@ -239,7 +240,8 @@ requests, replies and stalls.
 ## #170, third part: the temperatures from the poll frames
 
 Since this part a poll whose six frames are all fresh is a temperature reading for the guard, so
-`get_servo_temps` is only asked at rest or while the poll comes broken, and the cut is by time:
+`get_servo_temps` is only asked when no send goes out, or every 3 s while the poll comes broken,
+and the cut is by time:
 see "Servo over-temperature" in [the driver's README](../../../src/positronic_hardware/README.md).
 The reason for the time: J1 gives false hot readings in frames with a good checksum, one poll at
 a time. In the run below, at a median of 42 degC, 12 polls were 10 degC or more above it, up to
@@ -275,7 +277,10 @@ path: J4's frames stopped passing the checksum at 46 degC and never came back, t
 back to `get_servo_temps`, which read 46, 47, 48, 49, 50, each two or three times, and the stop
 and power off came 1.8 s after the first reading at 50. The cut by time, replayed on that tap's
 readings, trips at the same reading as the rule of then (the request 53.20 s after the first
-send, the stop 9 ms after it). In replay: `HotPollsCutTheArmOnceTheyLastHotFor`,
-`PollsWithABridgedFrameLeaveTheAsksGoing` and the `OverheatDetector` tests. The Atom's own
+send, the stop 9 ms after it). The replays feed each tap's readings (the whole polls between a
+send and its sync-write, and the `get_servo_temps` replies) through `OverheatDetector`, with a
+script that is not in the repo; the rule itself is pinned by unit tests:
+`HotPollsCutTheArmOnceTheyLastHotFor`, `PollsWithABridgedFrameLeaveTheAsksGoing` and the
+`OverheatDetector` tests. The Atom's own
 reading kept following the servo while no frame of it passed: whether it can go stale is not
 shown by any tap.
