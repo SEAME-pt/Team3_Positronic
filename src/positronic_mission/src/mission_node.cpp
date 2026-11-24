@@ -324,10 +324,12 @@ positronic_mission::MotionOutcome positronic_mission::MissionNode::run_backend(
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Backend threw: %s", e.what());
+    backend_->stop();
     return MotionOutcome::EXECUTION_FAILED;
   } catch (...) {
     // Backup catch for unknown throws
     RCLCPP_ERROR(get_logger(), "Unknown Throw. Treated as execution failed");
+    backend_->stop();
     return MotionOutcome::EXECUTION_FAILED;
   }
 }
