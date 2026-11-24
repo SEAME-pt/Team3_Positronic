@@ -50,7 +50,9 @@ ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI
 TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
 TIDY_TEST_FILES := ^/ws/src/[^/]+/test/
 TIDY_TEST_CHECKS := -cert-*,-clang-analyzer-*,-concurrency-*,-cppcoreguidelines-*,-misc-*,-modernize-*,-performance-*,-portability-*,-readability-*
-TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)'
+TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)' $(TIDY_VERBOSE)
+# Only the files with warnings, then the summary; VERBOSE adds a line for every file (like make test).
+TIDY_VERBOSE = $(if $(VERBOSE),--verbose)
 # What make tidy-changed compares with. CI sets it to HEAD^1 (the PR's merge commit's base).
 TIDY_BASE ?= origin/dev
 
@@ -107,8 +109,11 @@ format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's full output)
 	$(RUN) env VERBOSE=$(VERBOSE) bash scripts/lint.sh
 
-tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
+# Every file in src/, with the same test-file rule as CI (ADR 0007), but warnings never fail
+# (ADR 0004): --soft. It fails only when clang-tidy can't check a file (it doesn't compile).
+tidy: ## clang-tidy on src/, warnings only, bugprone only on test files (VERBOSE: every file)
+	$(RUN) python3 scripts/tidy_changed.py --all --soft --strict='^/ws/src/' \
+	  --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)' $(TIDY_VERBOSE)
 
 # scripts/tidy_changed.py: the selection, then clang-tidy in parallel, one line per file.
 tidy-strict: ## clang-tidy on the strict packages (TIDY_STRICT_FILES), any warning is an error (needs make build first)
