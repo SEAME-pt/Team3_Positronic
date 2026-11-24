@@ -177,9 +177,10 @@ public:
   // lives in requests.hpp.
 
   // After a send that got no sync-write, an unchanged target goes out again after this long,
-  // not on every write: a target the Atom refuses costs one echo_timeout a second, and one
-  // sync-write lost in garbled bytes (a hot servo, 24 Nov 2026) stops the repeat at rest for a
-  // second instead of until the target changes.
+  // not on every write: a target the Atom refuses costs one echo_timeout a second, and one send
+  // the Atom dropped (24 Nov 2026: it went out on a late get_angles reply, while the Atom still
+  // answered the next get_angles) stops the repeat at rest for a second instead of until the
+  // target changes.
   static constexpr std::chrono::milliseconds REPEAT_RETRY{1000};
 
   static constexpr std::uint8_t GRIPPER_SPEED{20};
@@ -441,9 +442,7 @@ private:
   // servo bus after it (set_gripper_value: ack at ~2 ms, its write to the gripper until ~12 ms).
   bool input_free_{false};
   // #170, serial thread only: whether the last send_angles got its sync-write, and when it went
-  // out. An unchanged target is sent again on a write when it did, or REPEAT_RETRY after it:
-  // a target the Atom refuses would otherwise go out on every write, each one waiting the
-  // echo_timeout.
+  // out (REPEAT_RETRY).
   bool last_send_answered_{true};
   Clock::time_point last_send_at_;
   // #170: write_angles() wakes the thread (command_ready_, set by wake_thread()), so the send

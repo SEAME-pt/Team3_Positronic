@@ -139,10 +139,10 @@
 //   its age all passed. Check before that: the get_angles within two periods of the send, the
 //   pose 10 ms after the sync-write.
 // Follow-up prompt (#170, the repeat after a lost sync-write):
-//   On the arm, 24 Nov 2026, one send got no sync-write (a hot J4 garbles the bytes) and the
-//   repeat at rest stopped for good: 4 min of get_angles, no poll. Let an unanswered send go out
-//   again one second later instead of never, and check both sides: nothing before the second,
-//   the repeat on every write after it.
+//   On the arm, 24 Nov 2026, the Atom dropped one send (it went out on a late get_angles reply)
+//   and the repeat at rest stopped for good: 4 min of get_angles, no poll. Let an unanswered send
+//   go out again one second later instead of never, and check both sides: nothing before the
+//   second, the repeat on every write after it; a target still refused goes out once a second.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1877,8 +1877,9 @@ TEST(SerialArmPollPose, ATargetWithoutItsSyncWriteIsNotSentOnEveryWrite)
 {
   // An arm that never sync-writes a send (a target it refuses). With the pose from the poll an
   // unchanged target would go out again on every write, each time waiting the echo_timeout. It
-  // goes out once, the pose comes from get_angles, the link stays up, and a changed target still
-  // goes out.
+  // goes out once a second (REPEAT_RETRY): once in the first 400 ms, once more by 1.5 s, ~500 ms
+  // from the retry on each side. The pose comes from get_angles, the link stays up, and a
+  // changed target still goes out.
   auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
   ReplayTransport & port{*transport};
   port.set_sync_write(false);
@@ -1889,16 +1890,20 @@ TEST(SerialArmPollPose, ATargetWithoutItsSyncWriteIsNotSentOnEveryWrite)
   EXPECT_EQ(send_angles_frames(port.written()).size(), 1U);
   EXPECT_EQ(arm.echo_timeouts(), 1U);
   EXPECT_FALSE(arm.link_timed_out());
+  write_until(arm, refused, std::chrono::steady_clock::now() + std::chrono::milliseconds{1100});
+  EXPECT_EQ(send_angles_frames(port.written()).size(), 2U);
+  EXPECT_EQ(arm.echo_timeouts(), 2U);
   arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
-  EXPECT_EQ(wait_for_sends(port, 2).size(), 2U);
+  EXPECT_EQ(wait_for_sends(port, 3).size(), 3U);
 }
 
 TEST(SerialArmPollPose, ARepeatStoppedByOneLostSyncWriteComesBackAfterTheRetry)
 {
-  // One sync-write lost (garbled bytes from a hot servo, 24 Nov 2026), then the arm answers
-  // again, while the controller writes the same target at rest. Nothing goes out again before
-  // REPEAT_RETRY after the unanswered send; after it the repeat is back on every write. The
-  // first count is 300 ms before the retry is due, the second 700 ms after it: ~20 writes then.
+  // One send the Atom dropped (24 Nov 2026: it went out on a late get_angles reply), then the
+  // arm answers again, while the controller writes the same target at rest. Nothing goes out
+  // again before REPEAT_RETRY after the unanswered send; after it the repeat is back on every
+  // write. The first count is 300 ms before the retry is due, the second 700 ms after it: ~20
+  // writes then.
   auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
   ReplayTransport & port{*transport};
   port.set_sync_write(false);

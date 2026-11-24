@@ -59,8 +59,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
 - Without the pose from the poll, a target equal to the last one sent is not sent again. With
   it, every write sends even an unchanged target once, so the pose keeps coming from the poll,
   unless the gripper is due (see Gripper) or the last send got no sync-write: then it goes out
-  again one second after that send, so a refused target costs one wait a second and one lost
-  sync-write does not end the repeat at rest (24 Nov 2026, a hot J4). A target with a NaN
+  again one second after that send, so a refused target costs one wait a second and one send
+  the Atom dropped does not end the repeat at rest (24 Nov 2026). A target with a NaN
   or an angle out of the protocol range is skipped and the previous one stays.
 
 ## Use it in a URDF
