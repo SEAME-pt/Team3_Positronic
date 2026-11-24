@@ -17,6 +17,9 @@
 #   reached the driver's 55 degC activation gate in the middle of the stops. Refuse a mode that
 #   starts above 45 degC, do the stops right after the first move, and end the mode if the
 #   resume after a stop fails.
+# Follow-up prompt (Felipe, 24 Nov):
+#   The servos heat because the tip is left tilted after every move; upright (all zeros) they
+#   don't. Between tests the arm goes to a standing pose where gravity does not load the servos.
 #
 # Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
 # terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
@@ -27,7 +30,7 @@
 #                                            down. STAGES default: start first stops base steps
 #   bash $T/arm_run_adaptive.sh up MODE      tap + driver + bag for MODE (no motion; the
 #                                            servos are powered on and hold their pose)
-#   bash $T/arm_run_adaptive.sh start        MOVES: T0_to_start, one slow point to the start
+#   bash $T/arm_run_adaptive.sh start        MOVES: REST, upright (all zeros); every goal goes rest -> start pose -> goal -> rest; was: one slow point to the start
 #   bash $T/arm_run_adaptive.sh first        MOVES: T1, J1 5 deg out and back at 1.7 deg/s
 #   bash $T/arm_run_adaptive.sh base         MOVES: T3, T6, T4 (J1+J2, 10/15/20 deg/s), 3 each
 #   bash $T/arm_run_adaptive.sh wrist        MOVES: T11, T12, T13 (J3-J6, 10/15/17.5), 3 each
@@ -125,15 +128,33 @@ def pt(p, t):
 open(f'{out}/TS.yaml', 'w').write(
     f'trajectory:\n  joint_names: {names}\n  points:\n' + pt(start, 2.0)
     + pt(out_pose, 2.0 + 40 / 15) + pt(start, 2.0 + 80 / 15))
+# REST: upright, all zeros, in 6 s like T0_to_start: gravity does not load the wrist there.
+open(f'{out}/REST.yaml', 'w').write(
+    f'trajectory:\n  joint_names: {names}\n  points:\n' + pt([0.0] * 6, 6.0))
 PY
 }
 
-goal() {  # goal <name> <run>: one #33 goal, recorded for waypoint_error.py
+send() {  # send <file> <out>: one goal, its feedback kept in <out>; fails unless SUCCEEDED
+  ros2 action send_goal --feedback /arm_controller/follow_joint_trajectory \
+    control_msgs/action/FollowJointTrajectory "$(cat "$1")" > "$2" 2>&1
+  tail -1 "$2"
+  grep -q "status: SUCCEEDED" "$2"
+}
+
+# Felipe (24 Nov): tilted, the wrist holds the tip against gravity and heats (J4/J5 42 -> 59 degC
+# in 11 min, camera + gripper); upright it does not. The arm waits upright (REST, all zeros) and
+# every goal is rest -> start pose (T0_to_start, 6 s) -> goal -> rest. The files are move_*.txt,
+# so waypoint_error.py (goal_T*_r[123].txt) sees only the goals.
+to_start() { send "$TRAJ/T0_to_start.yaml" "$(mode_dir)/move_start_$1.txt"; }
+to_rest() { send "$ROOT/traj/REST.yaml" "$(mode_dir)/move_rest_$1.txt"; }
+
+goal() {  # goal <name> <run>: one #33 goal from the rest pose, recorded for waypoint_error.py
   local name=$1 run=$2 file="$ROOT/traj/$1.yaml"
   [ -f "$file" ] || file="$TRAJ/$1.yaml"
-  ros2 action send_goal --feedback /arm_controller/follow_joint_trajectory \
-    control_msgs/action/FollowJointTrajectory "$(cat "$file")" > "$(mode_dir)/goal_${name}_r${run}.txt" 2>&1
-  tail -1 "$(mode_dir)/goal_${name}_r${run}.txt"
+  to_start "${name}_r${run}" || return 1
+  # A JTC abort is a result (#33), not a reason to stop: no check on the goal itself.
+  send "$file" "$(mode_dir)/goal_${name}_r${run}.txt"
+  to_rest "${name}_r${run}" || return 1
   sleep "$WAIT_BETWEEN_S"
 }
 
@@ -213,20 +234,20 @@ PY
     ;;
   start)
     need_mode
-    countdown "MOVES: T0_to_start, one slow point to the start pose"
-    goal T0_to_start 1
+    countdown "MOVES: to the rest pose, upright, all zeros, 6 s"
+    to_rest start || exit 1
     ;;
   first)
     need_mode
-    countdown "MOVES: T1, J1 5 deg out and back, 1.7 deg/s (the first move of this mode)"
-    goal T1 1
+    countdown "MOVES: start pose, T1 (J1 5 deg out and back, 1.7 deg/s, the first move of this mode), rest"
+    goal T1 1 || exit 1
     ;;
   base)
     need_mode
     for name in T3 T6 T4; do
       for run in 1 2 3; do
-        countdown "MOVES: $name run $run, J1 and J2 20 deg out and back"
-        goal "$name" "$run"
+        countdown "MOVES: start pose, $name run $run (J1 and J2 20 deg out and back), rest"
+        goal "$name" "$run" || exit 1
       done
     done
     ;;
@@ -234,15 +255,16 @@ PY
     need_mode
     for name in T11 T12 T13; do
       for run in 1 2 3; do
-        countdown "MOVES: $name run $run, J3 to J6 20 deg out and back (raises J3: nothing above)"
-        goal "$name" "$run"
+        countdown "MOVES: start pose, $name run $run (J3 to J6 20 deg out and back, raises J3: nothing above), rest"
+        goal "$name" "$run" || exit 1
       done
     done
     ;;
   stops)
     need_mode
     for run in 1 2 3 4 5; do
-      countdown "MOVES: stop $run of 5, J1 40 deg at 15 deg/s, stopped about 1 s in"
+      countdown "MOVES: start pose, then stop $run of 5: J1 40 deg at 15 deg/s, stopped about 1 s in"
+      to_start "stop$run" || exit 1
       rm -f "$ROOT/trigger_ready" "$ROOT/trigger_go"
       python3 - "$ROOT" "$(mode_dir)/stop_r${run}_trigger.txt" << 'PY' &
 import os, sys, time
@@ -292,8 +314,9 @@ PY
         echo "!!! resume after stop $run failed (temperature gate? see launch.log): ending the stops" >&2
         exit 1
       fi
-      countdown "MOVES: back to the start pose"
-      goal T0_to_start "stop$run"
+      countdown "MOVES: back to the start pose, then rest"
+      to_start "stop${run}_back" || exit 1
+      to_rest "stop$run" || exit 1
     done
     ;;
   steps)
@@ -307,7 +330,8 @@ PY
     ros2 control set_controller_state arm_controller inactive
     ros2 run controller_manager spawner forward_position_controller --param-file \
       /ws/install/positronic_bringup/share/positronic_bringup/config/jetson_controllers.yaml
-    countdown "MOVES: J1 5 deg step and back, 3 times, 3 s apart"
+    # From the rest pose (all zeros), where the previous stage left the arm.
+    countdown "MOVES: J1 5 deg step and back, 3 times, 3 s apart, from the rest pose"
     STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps
     ros2 control set_controller_state forward_position_controller inactive
     ros2 control set_controller_state arm_controller active
@@ -351,12 +375,12 @@ PY
     bash "$0" up "$MODE" || exit 1
     for stage in $STAGES; do
       case "$stage" in
-        start) what="T0_to_start, slow, ~10 s" ;;
-        first) what="T1, J1 5 deg, ~15 s" ;;
-        base) what="T3 T6 T4 x3, J1+J2 20 deg, ~2.5 min" ;;
-        wrist) what="T11 T12 T13 x3, J3-J6 20 deg, J3 goes UP, ~2.5 min" ;;
-        stops) what="5 stops at 15 deg/s on J1 40 deg, each back to start, ~3 min" ;;
-        steps) what="3 x J1 5 deg step and back, ~1 min" ;;
+        start) what="to the rest pose, upright, ~10 s" ;;
+        first) what="T1, J1 5 deg, from and back to rest, ~30 s" ;;
+        base) what="T3 T6 T4 x3, J1+J2 20 deg, each from and back to rest, ~5 min" ;;
+        wrist) what="T11 T12 T13 x3, J3-J6 20 deg, J3 goes UP, each from and back to rest, ~5 min" ;;
+        stops) what="5 stops at 15 deg/s on J1 40 deg, each from and back to rest, ~4 min" ;;
+        steps) what="3 x J1 5 deg step and back, from rest, ~1 min" ;;
         *) echo "unknown stage $stage" >&2; continue ;;
       esac
       answer=""
