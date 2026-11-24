@@ -31,13 +31,18 @@
 #   comparison of the first positions, in degrees, against angles read with pymycobot. Report
 #   the header stamps too, to tell a slow control loop from a slow link, warn about a leading
 #   all-zero pose, print a Markdown table, and exit non-zero if any criterion fails.
+# Follow-up prompt (#173):
+#   Since #151 /joint_states also carries gripper_controller, so names fails on every new bag.
+#   Expect it besides the URDF joints by default, through an option that an older bag can set
+#   empty, and keep the criterion strict: an unknown name or a missing arm joint still fails.
 """Check a recorded /joint_states bag against the acceptance criteria of issue #23."""
 
 # Criteria, one PASS/FAIL line each:
 #   duration    at least --min-duration seconds of data (10 min by default)
 #   rate        mean rate within --rate-tolerance of the nominal --rate (the #20 value)
 #   periods     no period between two messages above 2x the nominal period
-#   names       every message carries exactly the revolute joints of the URDF
+#   names       every message carries exactly the revolute joints of the URDF and the
+#               --extra-joints (gripper_controller by default, on /joint_states since #151)
 #   radians     every position is finite and inside the URDF joint limits
 #   reference   (optional) the first positions match angles read with pymycobot, in degrees
 #
@@ -57,6 +62,8 @@ import xml.etree.ElementTree as ElementTree
 
 PERIOD_LIMIT_FACTOR = 2.0  # "no period above 2x nominal"
 NS_PER_S = 1_000_000_000
+# The joints /joint_states carries besides the revolute ones of the URDF: the gripper, since #151.
+EXTRA_JOINTS = ('gripper_controller',)
 
 
 @dataclasses.dataclass
@@ -149,7 +156,8 @@ def leading_zero_samples(samples):
 
 
 def evaluate(samples, rate_hz, limits, min_duration_s=600.0, rate_tolerance=0.05,
-             limit_margin=0.05, reference_deg=None, reference_tolerance_deg=0.5):
+             limit_margin=0.05, reference_deg=None, reference_tolerance_deg=0.5,
+             extra_joints=EXTRA_JOINTS):
     """Return the list of Criterion for the samples of one recording."""
     criteria = []
     receive = [sample.receive_ns for sample in samples]
@@ -174,14 +182,16 @@ def evaluate(samples, rate_hz, limits, min_duration_s=600.0, rate_tolerance=0.05
         detail += '; first: ' + ', '.join(f'{ms:.1f} ms at {at:.1f} s' for at, ms in late[:5])
     criteria.append(Criterion('periods', not late, detail))
 
-    expected = set(limits)
+    expected = set(limits) | set(extra_joints)
     wrong = [i for i, sample in enumerate(samples)
              if len(sample.names) != len(expected) or set(sample.names) != expected]
     if wrong:
         first = samples[wrong[0]].names
         detail = f'{len(wrong)} messages differ; first at index {wrong[0]}: {list(first)}'
     else:
-        detail = f'all {len(samples)} messages carry the {len(expected)} URDF joints'
+        detail = f'all {len(samples)} messages carry the {len(limits)} URDF joints'
+        if extra_joints:
+            detail += ' and ' + ', '.join(extra_joints)
     criteria.append(Criterion('names', not wrong, detail))
 
     problems = []
@@ -285,6 +295,11 @@ def parse_reference(text):
     return values
 
 
+def parse_joint_list(text):
+    """Return the joint names of a comma-separated list; an empty text gives none."""
+    return tuple(name.strip() for name in text.split(',') if name.strip())
+
+
 def main(argv=None):
     """Read the bag, check it, print the report and return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -299,6 +314,10 @@ def main(argv=None):
     parser.add_argument('--reference-deg', type=parse_reference,
                         help='pymycobot get_angles taken just before the run, e.g. "0.1,-2,..."')
     parser.add_argument('--report', help='also write the criteria as a Markdown table here')
+    parser.add_argument('--extra-joints', type=parse_joint_list, default=EXTRA_JOINTS,
+                        help='joints expected besides the URDF ones, comma-separated (default '
+                             'gripper_controller, on /joint_states since #151; "" for an older '
+                             'bag)')
     args = parser.parse_args(argv)
 
     with open(args.urdf or default_urdf_path(), encoding='utf-8') as urdf:
@@ -309,7 +328,8 @@ def main(argv=None):
         return 1
 
     criteria = evaluate(samples, args.rate, limits, min_duration_s=args.min_duration,
-                        rate_tolerance=args.rate_tolerance, reference_deg=args.reference_deg)
+                        rate_tolerance=args.rate_tolerance, reference_deg=args.reference_deg,
+                        extra_joints=args.extra_joints)
     header_stats = period_stats([sample.header_ns for sample in samples])
     print(f'{args.bag}: {len(samples)} messages on {args.topic}\n')
     print('\n'.join(report_lines(criteria, header_stats, leading_zero_samples(samples),

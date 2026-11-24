@@ -26,6 +26,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "positronic_hardware/fake_arm.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/tracking_check.hpp"
@@ -52,6 +53,8 @@ inline constexpr int MAX_SUPERVISOR_TIMEOUT_MS{5000};
 struct HardwareConfig
 {
   Backend backend{Backend::SERIAL};
+  /// How FakeArm moves (#122). Only the fake backend reads it.
+  FakeMode fake_mode{FakeMode::INSTANT};
   std::string port{"/dev/ttyTHS1"};
   int baud{1000000};
   double velocity_filter_alpha{VelocityEstimator::DEFAULT_ALPHA};

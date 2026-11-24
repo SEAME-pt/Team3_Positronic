@@ -66,9 +66,9 @@ enum class FaultCode : std::uint8_t
   /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
   /// the next activate, targets held meanwhile, like the link timeout.
   TRACKING_ERROR = 2,
-  /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
-  /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
-  /// next activate.
+  /// A servo stayed at or above servo_temp_limit_c for 1 s, no reading of it more than 1 degC
+  /// under: the serial thread has already stopped the arm and powered its servos off. read()
+  /// also returns ERROR. Latched until the next activate.
   OVERHEAT = 3,
   /// No heartbeat from the safety supervisor for supervisor_timeout_ms while active (#136): it
   /// died, hangs or was killed, and nobody would stop the arm. Targets held, like the link
@@ -191,6 +191,8 @@ private:
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
+  /// The sum of the periods read() got, in ns: the clock of FakeArm (#122).
+  std::atomic<std::int64_t> control_time_ns_{0};
 
   /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
   /// whose count starts at zero.
@@ -199,6 +201,13 @@ private:
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
   PositionLimits limits_{};
+
+  bool has_gripper_{false};
+  double gripper_closed_{0.0};
+  double gripper_open_{0.0};
+  JointHandles gripper_handles_{};
+  double gripper_previous_{0.0};
+  bool gripper_previous_valid_{false};
 
   /// The time of the supervisor's last heartbeat (#136), the same lock-free watchdog as the
   /// link's: the subscription callback writes it on an executor thread, read() reads it on the

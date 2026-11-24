@@ -32,7 +32,10 @@ using rclcpp_action::ResultCode;
 
 TEST_F(MissionNodeTest, GoalSucceedsWhenIdle)
 {
-  auto handle = send_goal(valid_pose());
+  // A pose different from the default, so a default or stale pose sent to the backend shows
+  auto pose = valid_pose();
+  pose.pose.position.y = 0.05;
+  auto handle = send_goal(pose);
   ASSERT_NE(handle, nullptr) << "Goal was rejected";
 
   auto result = wait_result(handle);
@@ -41,12 +44,36 @@ TEST_F(MissionNodeTest, GoalSucceedsWhenIdle)
   EXPECT_EQ(result->code, ResultCode::SUCCEEDED);
   EXPECT_EQ(result->result->code, GoToPose::Result::OK);
   EXPECT_TRUE(result->result->success);
-  EXPECT_TRUE(wait_until([this] {
-      return feedback_count_ > 0;
-  }))
-    << "No feedback received";
+  // No check on feedback: the node sends one message when the goal starts, and it is lost if
+  // the client's feedback subscription is not matched yet (a busy machine). That made this test
+  // flaky (#161). Feedback is information for the client, not a safety behaviour.
   EXPECT_TRUE(wait_for_state(State::IDLE));
   EXPECT_EQ(mock_->calls, 1);
+
+  // The goal's pose is what reaches the backend (where the arm goes)
+  const auto sent = mock_->last_pose();
+  EXPECT_EQ(sent.header.frame_id, pose.header.frame_id);
+  EXPECT_DOUBLE_EQ(sent.pose.position.x, pose.pose.position.x);
+  EXPECT_DOUBLE_EQ(sent.pose.position.y, pose.pose.position.y);
+  EXPECT_DOUBLE_EQ(sent.pose.position.z, pose.pose.position.z);
+  EXPECT_DOUBLE_EQ(sent.pose.orientation.w, pose.pose.orientation.w);
+}
+
+// The second goal's pose reaches the backend, not the first one's
+TEST_F(MissionNodeTest, EachGoalSendsItsOwnPose)
+{
+  auto first = valid_pose();
+  first.pose.position.y = 0.05;
+  auto second = valid_pose();
+  second.pose.position.y = -0.05;
+
+  for (const auto & pose : {first, second}) {
+    auto handle = send_goal(pose);
+    ASSERT_NE(handle, nullptr);
+    ASSERT_TRUE(wait_result(handle).has_value());
+    ASSERT_TRUE(wait_for_state(State::IDLE));
+    EXPECT_DOUBLE_EQ(mock_->last_pose().pose.position.y, pose.pose.position.y);
+  }
 }
 
 TEST_F(MissionNodeTest, TwoGoalsInARowBothSucceed)

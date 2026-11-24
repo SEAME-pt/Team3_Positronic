@@ -23,6 +23,8 @@
 //   Unit tests for requests.hpp (#149): every factory carries the frame its command encodes and
 //   the command the arm echoes, what each one waits for, the command byte at index 3 of every
 //   frame, and ACK_TIMEOUT between the arm's 60 ms and the 200 ms watchdog.
+// Follow-up prompt (#170, the cut's power off):
+//   The arm acks the power off (62 ms on 24 Nov 2026): it waits for its ack like the stop.
 
 #include <gtest/gtest.h>
 
@@ -79,13 +81,13 @@ TEST(Requests, PowerOnIsThePowerOnFrameAndWaitsForItsAck)
   EXPECT_EQ(request.timeout, ACK_TIMEOUT);
 }
 
-TEST(Requests, PowerOffWaitsForNothing)
+TEST(Requests, PowerOffWaitsForItsAck)
 {
   const Request request{power_off_request()};
   EXPECT_EQ(request.command, CommandId::POWER_OFF);
   EXPECT_EQ(bytes_of(request.frame), bytes_of(positronic_protocol::encode_power_off()));
-  EXPECT_EQ(request.expect, Expect::NONE);
-  EXPECT_EQ(request.timeout, std::chrono::milliseconds{0});
+  EXPECT_EQ(request.expect, Expect::ACK);
+  EXPECT_EQ(request.timeout, ACK_TIMEOUT);
 }
 
 TEST(Requests, GetServoTempsWaitsForAReply)
