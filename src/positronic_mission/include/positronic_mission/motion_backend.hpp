@@ -26,6 +26,7 @@
 
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "positronic_interfaces/action/go_to_pose.hpp"
 
 namespace positronic_mission
 {

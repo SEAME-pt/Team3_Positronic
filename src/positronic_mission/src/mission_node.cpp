@@ -306,6 +306,32 @@ void positronic_mission::MissionNode::handle_accepted(
   exec_thread_ = std::thread(exec_function);
 }
 
+positronic_mission::MotionOutcome positronic_mission::MissionNode::run_backend(
+  const std::shared_ptr<const positronic_interfaces::action::GoToPose::Goal> & goal)
+{
+  try {
+    // Blocking call made to Moveit
+    switch (goal->mode) {
+      case (GoToPose::Goal::MODE_POSE):
+        return backend_->plan_and_execute(goal->target_pose);
+        break;
+      case (GoToPose::Goal::MODE_CARTESIAN):
+        return backend_->plan_and_execute_cartesian(goal->cartesian_path);
+        break;
+      default:
+        RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
+        return MotionOutcome::PLANNING_FAILED;
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Backend threw: %s", e.what());
+    return MotionOutcome::EXECUTION_FAILED;
+  } catch (...) {
+    // Backup catch for unknown throws
+    RCLCPP_ERROR(get_logger(), "Unknown Throw. Treated as execution failed");
+    return MotionOutcome::EXECUTION_FAILED;
+  }
+}
+
 void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> & goal_handle)
 {
   RCLCPP_INFO(get_logger(), "Executing");
@@ -320,27 +346,7 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
   goal_handle->publish_feedback(feedback);
 
   // Throws are rare but can happen. Treating them as execution error
-  MotionOutcome outcome{MotionOutcome::PLANNING_FAILED};
-  try {
-    // Blocking call made to Moveit
-    switch (goal->mode) {
-      case (GoToPose::Goal::MODE_POSE):
-        outcome = backend_->plan_and_execute(goal->target_pose);
-        break;
-      case (GoToPose::Goal::MODE_CARTESIAN):
-        outcome = backend_->plan_and_execute_cartesian(goal->cartesian_path);
-        break;
-      default:
-        RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
-    }
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Backend threw: %s", e.what());
-    outcome = MotionOutcome::EXECUTION_FAILED;
-  } catch (...) {
-    // Backup catch for unknown throws
-    RCLCPP_ERROR(get_logger(), "Unknown Throw. Treated as execution failed");
-    outcome = MotionOutcome::EXECUTION_FAILED;
-  }
+  const MotionOutcome outcome = run_backend(goal);
 
   if (!rclcpp::ok()) {
     // Protection for the lower checks. If mission_node is shutdown

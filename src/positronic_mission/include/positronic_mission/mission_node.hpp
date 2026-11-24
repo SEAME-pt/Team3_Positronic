@@ -107,6 +107,10 @@ private:
     const std::shared_ptr<StateTrigger::Request> & request,
     const std::shared_ptr<StateTrigger::Response> & response);
 
+  // Run the backend inside a try/catch block
+  MotionOutcome run_backend(
+    const std::shared_ptr<const positronic_interfaces::action::GoToPose::Goal> & goal);
+
   // Mission Node action server
   rclcpp_action::Server<GoToPose>::SharedPtr mission_server_{nullptr};
 
