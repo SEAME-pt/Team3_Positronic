@@ -37,7 +37,8 @@
 #   And the end summary: diagnostics parsed with their checks (strict's -warnings-as-errors
 #   dropped, a compile error without a check, notes ignored); a header's warning printed by two
 #   TUs counts once, in the header's package; soft with warnings passes, strict fails; the
-#   Markdown report has the per-package table.
+#   Markdown report has the per-package table. Without --verbose only the files with warnings
+#   or failures are printed; make tidy passes --verbose only with VERBOSE.
 """Unit tests for the clang-tidy selection and runner of #144 (no ROS 2, no git)."""
 
 import io
@@ -198,10 +199,22 @@ def fake_runner(failing, warning=()):
     return runner, calls
 
 
+def test_run_all_quiet_prints_only_the_files_with_warnings():
+    runner, _ = fake_runner(set(), warning={A_TEST})
+    out = io.StringIO()
+    tc.run_all({A_CPP, A_TEST}, 'build', TESTS, '-misc-*', 2, runner, out, soft=True)
+    assert A_CPP not in out.getvalue()
+    assert '[2/2] warn' in out.getvalue() and 'planted' in out.getvalue()
+    out = io.StringIO()
+    tc.run_all({A_CPP}, 'build', TESTS, '-misc-*', 1, fake_runner(set())[0], out)
+    assert out.getvalue() == ''
+
+
 def test_run_all_passes_and_prints_one_line_per_file():
     runner, calls = fake_runner(set())
     out = io.StringIO()
-    results = tc.run_all({A_CPP, A_TEST}, 'build', TESTS, '-misc-*', 2, runner, out)
+    results = tc.run_all({A_CPP, A_TEST}, 'build', TESTS, '-misc-*', 2, runner, out,
+                         verbose=True)
     assert {tu: r[0] for tu, r in results.items()} == {A_CPP: 0, A_TEST: 0}
     assert len(calls) == 2
     lines = out.getvalue().splitlines()
@@ -350,6 +363,8 @@ def test_make_tidy_is_soft_with_the_same_test_rule_as_ci():
     assert 'scripts/tidy_changed.py --all --soft' in recipe
     assert "--test-files='$(TIDY_TEST_FILES)'" in recipe
     assert "--test-checks='$(TIDY_TEST_CHECKS)'" in recipe
+    assert '$(TIDY_VERBOSE)' in recipe
+    assert 'TIDY_VERBOSE = $(if $(VERBOSE),--verbose)' in makefile
 
 
 def test_tests_get_only_bugprone_whatever_clang_tidy_enables():

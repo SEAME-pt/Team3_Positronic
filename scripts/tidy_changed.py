@@ -37,7 +37,8 @@
 #   And a summary at the end of every run, like make test's (#148, reuse its Style): one line
 #   per package with files, warnings, the checks that fired most and time, then a verdict line.
 #   Count a warning in the package of the file it points at, once, even when a header's warning
-#   shows up in every file that includes it.
+#   shows up in every file that includes it. Like make test, print only the files with warnings or
+#   failures unless --verbose (make tidy VERBOSE), which prints one line for every file.
 """clang-tidy, warnings as errors, on the strict TUs a change can affect (issue #144)."""
 
 #   make tidy-strict    python3 scripts/tidy_changed.py --all <TIDY_* options>
@@ -195,8 +196,12 @@ def verdict(code, output):
     return 'warn' if output.strip() else 'ok'
 
 
-def run_all(tus, build_dir, test_files, test_checks, jobs, runner=None, out=None, soft=False):
-    """Run clang-tidy on every TU, jobs at a time; print each in order. Return {TU: result}."""
+def run_all(tus, build_dir, test_files, test_checks, jobs, runner=None, out=None, soft=False,
+            verbose=False):
+    """Run clang-tidy on every TU, jobs at a time. Return {TU: result}.
+
+    Print, in order, the files with warnings or failures and their output; every file if verbose.
+    """
     runner = runner or run_one
     out = out or sys.stdout
     results = {}
@@ -209,6 +214,8 @@ def run_all(tus, build_dir, test_files, test_checks, jobs, runner=None, out=None
             code, seconds, output = futures[tu].result()
             results[tu] = (code, seconds, output)
             kind = 'test' if test_files.search(tu) else 'src'
+            if not verbose and verdict(code, output) == 'ok':
+                continue
             line = '[%d/%d] %-4s %6.1f s  %-4s %s' % (n, len(ordered), verdict(code, output),
                                                       seconds, kind, tu)
             out.write(line + '\n')
@@ -361,6 +368,8 @@ def main(argv=None):
     parser.add_argument('--root', default='/ws', help='the repo path inside the depfiles')
     parser.add_argument('--jobs', type=int, default=os.cpu_count())
     parser.add_argument('--dry-run', action='store_true', help='print the selection only')
+    parser.add_argument('--verbose', action='store_true',
+                        help='a line for every file, not only those with warnings')
     parser.add_argument('--soft', action='store_true',
                         help='warnings are printed, not errors (make tidy, ADR 0004)')
     args = parser.parse_args(argv)
@@ -405,7 +414,7 @@ def main(argv=None):
         return 0
 
     results = run_all(tus, args.build_dir, test_files, args.test_checks, args.jobs,
-                      soft=args.soft)
+                      soft=args.soft, verbose=args.verbose)
     text = report(changed, selected, reasons, results, test_files, time.monotonic() - start)
     if results:
         summary, _ = summary_text(summarize(results, test_files), args.soft,
