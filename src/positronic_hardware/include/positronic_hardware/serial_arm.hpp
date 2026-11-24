@@ -447,8 +447,7 @@ private:
   std::atomic<int> overheat_celsius_{0};
   // Sends whose sync-write did not come within echo_timeout (#150). Written by the poll thread.
   std::atomic<std::uint64_t> echo_timeouts_{0};
-  // The load relief (#183), poll thread only: wire() on every command, update() on the frames of
-  // every poll, reset() while held.
+  // The load relief (#183). Poll thread only.
   LoadReliefCheck relief_;
   // Its last relief, for the plugin's log. Same rule as latest_.
   mutable realtime_tools::RealtimeBuffer<std::optional<ReliefEvent>> last_relief_{std::nullopt};

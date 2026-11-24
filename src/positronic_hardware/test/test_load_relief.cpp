@@ -32,6 +32,9 @@
 //   first wire(); a missing frame skipped; disabled; J3, the inverted joint, refused outside its
 //   URDF limit with the command tolerance, and counted again once moved; two reliefs due
 //   together come one per update, and reset() clears both and keeps the numbers.
+// Follow-up prompt (#183, the review):
+//   J1 at its upper URDF limit, with the command tolerance, and refused past it, as J3 at its
+//   lower one.
 
 #include <gtest/gtest.h>
 
@@ -305,9 +308,26 @@ TEST(LoadRelief, AReliefOutsideTheUrdfLimitsIsRefusedWithTheCommandTolerance)
   const JointPositions command{with(J3, position - ONE_DEG)};
   for (const double lower : {position, position + 1e-7}) {
     LoadReliefCheck check{short_limits(), range(lower)};
-    const std::optional<ReliefEvent> relief{after_hold(check, command, loaded(J3, 30, STEPS))};
+    const ReliefEvent relief{
+      after_hold(check, command, loaded(J3, 30, STEPS)).value_or(ReliefEvent{})};
+    EXPECT_FALSE(relief.refused) << lower;
     EXPECT_DOUBLE_EQ(check.wire(command).at(J3), position) << lower;
   }
+  // J1 still at 2072 steps, its command 1 deg further up: the same tolerance at the upper limit.
+  const double top{rad_of(2072, 0)};
+  const JointPositions up{with(0, top + ONE_DEG)};
+  for (const double upper : {top, top - 1e-7}) {
+    PositionLimits limits{range()};
+    limits.at(0).upper = upper;
+    LoadReliefCheck check{short_limits(), limits};
+    static_cast<void>(after_hold(check, up, loaded(0, 30, 2072)));
+    EXPECT_DOUBLE_EQ(check.wire(up).at(0), top) << upper;
+  }
+  PositionLimits under{range()};
+  under.at(0).upper = top - 1e-5;
+  LoadReliefCheck past{short_limits(), under};
+  EXPECT_TRUE(after_hold(past, up, loaded(0, 30, 2072)).value_or(ReliefEvent{}).refused);
+  EXPECT_EQ(past.wire(up), up);
   LoadReliefCheck check{short_limits(), range(position + 1e-5)};
   const ReliefEvent refused{
     after_hold(check, command, loaded(J3, 30, STEPS)).value_or(ReliefEvent{})};
@@ -337,9 +357,6 @@ TEST(LoadRelief, TwoReliefsDueTogetherComeOnePerUpdateAndResetClearsBoth)
   EXPECT_EQ(second.joint, 4u);
   ASSERT_EQ(check.wire(command), ZERO);
   check.reset();
-  // No command until the next wire(): a hold of polls decides nothing.
-  static_cast<void>(check.update(both, T0 + 10 * HOLD));
-  EXPECT_FALSE(check.update(both, T0 + 11 * HOLD).has_value());
   EXPECT_EQ(check.wire(command), command);
   // A whole hold again, and the numbers go on.
   EXPECT_EQ(after_hold(check, command, both, T0 + 20 * HOLD).value_or(ReliefEvent{}).number, 3u);

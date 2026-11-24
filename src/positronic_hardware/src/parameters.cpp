@@ -168,7 +168,7 @@ std::string read_numeric(
          std::to_string(std::lround(parameter.max)) + "].";
 }
 
-/// The seven SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
+/// The SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
 std::string read_special(const Parameters & parameters, HardwareConfig & config)
 {
   if (const std::string * backend{find_parameter(parameters, "backend")}) {

@@ -99,7 +99,8 @@ constexpr double to_state(FaultCode code)
 }
 
 /// The least time between two relief lines of read() (#183): at most one relief per poll, 33 ms
-/// apart, so none is dropped.
+/// apart, so the throttle drops none. A relief overwritten before read() takes it is not logged:
+/// the numbers in the log show the gap.
 constexpr int RELIEF_LOG_PERIOD_MS{20};
 
 /// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
@@ -543,8 +544,6 @@ void RobotSystem::report_echo_timeouts()
 
 void RobotSystem::report_load_reliefs()
 {
-  // The event carries its own number, so a read that meets the thread's write and gets the old
-  // box logs it next cycle.
   const std::optional<ReliefEvent> relief{arm_->last_load_relief()};
   if (!relief.has_value() || relief->number <= reported_reliefs_) {
     return;
@@ -555,16 +554,16 @@ void RobotSystem::report_load_reliefs()
   if (!relief->refused) {
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
-      "Joint '%s' stood still %.1f deg from its target pushing with load %d at %d degC: sent "
-      "where it stands, until the controller moves it.",
-      joint, residual_deg, relief->load, relief->celsius);
+      "Load relief %" PRIu64 ": joint '%s' stood still %.1f deg from its target pushing with load "
+      "%d at %d degC: sent where it stands, until the controller moves it.",
+      relief->number, joint, residual_deg, relief->load, relief->celsius);
     return;
   }
   RCLCPP_WARN_THROTTLE(
     get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
-    "Joint '%s' stood still %.1f deg from its target pushing with load %d at %d degC, but where "
-    "it stands is outside its URDF limits: not relieved.",
-    joint, residual_deg, relief->load, relief->celsius);
+    "Load relief %" PRIu64 ": joint '%s' stood still %.1f deg from its target pushing with load "
+    "%d at %d degC, but where it stands is outside its URDF limits: not relieved.",
+    relief->number, joint, residual_deg, relief->load, relief->celsius);
 }
 
 bool RobotSystem::temperatures_allow_activation()

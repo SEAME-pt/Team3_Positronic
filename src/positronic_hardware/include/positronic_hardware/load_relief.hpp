@@ -120,8 +120,8 @@ public:
     return sent;
   }
 
-  /// A stop, a cut or a power on: every joint starts over, nothing is relieved and the command is
-  /// unknown until the next wire(). The event numbers go on.
+  /// A stop or a cut (the arm held): every joint starts over, nothing is relieved and the command
+  /// is unknown until the next wire(). The event numbers go on.
   void reset()
   {
     joints_.fill(JointState{});

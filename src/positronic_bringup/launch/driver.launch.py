@@ -127,7 +127,6 @@ def generate_launch_description():
     tracking_error_ms = DeclareLaunchArgument(
         'tracking_error_ms', default_value='',
         description='ms a joint may stay over tracking_error_deg before fault 2 (50 to 5000).')
-    # The load relief (#183), on by default: false turns it off.
     load_relief = DeclareLaunchArgument(
         'load_relief', default_value='',
         description='true or false: relieve a still joint pushing short of its target.')
