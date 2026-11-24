@@ -100,55 +100,21 @@
 //   write. The tests that check a frame was left out now move a marker joint and wait for it,
 //   so they cannot pass without the poll being read.
 //
-// Follow-up prompt (#170, the servo state from the frames):
-//   The status frames of the poll also carry the temperature: with the pose from the poll the
-//   guard takes each whole poll as a reading. Check: in a stream the temperatures read equal the
-//   frames' and no get_servo_temps goes out; two polls with a servo at 61 degC cut the arm (stop,
-//   power off, overheat reported) and nothing is sent after; at rest, without polls, the request
-//   still goes out; last_servo_status() returns the six frames decoded, J1 first. A poll with a
-//   bridged frame is not a temperature reading: one fresh hot poll plus bridged ones must not cut.
-//
-// Follow-up prompt (#170, the cut by time):
-//   The cut now waits until the hot readings have lasted hot_for (1 s, 100 ms in fast_guard,
-//   the period, so two requests in a row still cut). Check that hot polls cut the arm only
-//   hot_for after the first send, not at the second poll. The bridged-frame test now follows
-//   the arm of 20 Nov: the hot servo's own frame is the one bridged, hot_for is 1 ms, no ask can
-//   land between the polls, and a marker joint shows the bridged poll was read. Pin the
-//   default period at least hot_for. Polls that each miss a different joint are all published
-//   and none is a reading: the guard must keep asking. A poll that is not published still
-//   keeps its good frames for the bridge of the next one (a fix of the second part, found in
-//   this review). last_servo_status() and its test leave this change: nothing here reads it.
-//   The at-rest request test goes too: ReadsTheTemperaturesWhileIdle covers it.
-//   A write that lands during a turn's get_angles counts for that turn: at rest, after a
-//   gripper read, the repeat goes on. Make the check need no clock: a get_angles of 40 ms,
-//   longer than the write period, so every write after a gripper read lands during one, and
-//   count the sends after the first gripper read (about 2 without the fix, about 20 with it).
-//   The last-target test waits for last_target() instead of reading it the moment the frame is
-//   on the wire: the thread stores it after write() returns. The test whose only readings are
-//   the requests gets a stale timeout over max_age, as on the arm, and the defaults are pinned.
-//
-// Follow-up prompt (#170, the simplification):
-//   Drop what no mutant needs: the impossible voltage and temperature of a first poll and the
-//   impossible jump (the edge tests cover them), the bridged hot frame
-//   (PollsWithABridgedFrameLeaveTheAsksGoing covers it) and the corrupt case of the missing frame
-//   (the decoder's). Share the setup of the replayed poll and the timing of a second send.
-// Follow-up prompt (#170, checks that passed with the rule broken):
-//   Three checks looked after the idle turns had asked get_angles anyway (two periods without a
-//   write): a poll published without a frame, a poll read with pose_from_poll off, a bridge past
-//   its age all passed. Check before that: the get_angles within two periods of the send, the
-//   pose 10 ms after the sync-write.
-// Follow-up prompt (#170, the repeat after a lost sync-write):
-//   On the arm, 24 Nov 2026, the Atom dropped one send (it went out on a late get_angles reply)
-//   and the repeat at rest stopped for good: 4 min of get_angles, no poll. Let an unanswered send
-//   go out again one second later instead of never, and check both sides: nothing before the
-//   second, the repeat on every write after it; a target still refused goes out once a second.
-// Follow-up prompt (#170, the review of 24 Nov: the cut's power off and stale answers):
-//   In all three recorded cuts the power off went out 30 ms after the stop, while the Atom was
-//   still on it (its ack at ~37 ms), and was dropped; the torque went off at the repeat, 1.1 s
-//   later. Check that the power off follows the stop's ack. A request answered past its window
-//   left the late answer to be taken by the next request, sent then while the Atom was busy:
-//   model an Atom that drops what comes while it answers, give it one answer 10 ms late, and
-//   check that nothing reaches it busy and the sends go on. The arms ack the power off.
+// Follow-up prompt (#170, part 3: the servo state from the frames, the turn made robust):
+//   With the pose from the poll, a poll whose six frames are all fresh is a temperature
+//   reading: in a stream the temperatures equal the frames' and no get_servo_temps goes out;
+//   polls that each miss a different joint are published but are no reading, so the asks go
+//   on. Hot polls cut only hot_for after the first send (fast_guard: 100 ms, the period, so two
+//   requests in a row still cut), the power off after the stop's ack (acked 60 ms late here),
+//   nothing sent after it; a power off without its ack goes out again next turn. A poll that is
+//   not published still keeps its good frames for the next bridge. A write that lands during a
+//   get_angles counts for its turn (a 40 ms get_angles; count the sends after the first gripper
+//   read). An unanswered send goes out again REPEAT_RETRY later, not before; a refused target
+//   once a second. An answer 2 ms past its window, an ack 6 ms past: nothing is written while
+//   the arm still answers, and the sends go on. Pin the default times. In the earlier tests:
+//   wait for the stored last target; a stale timeout over max_age where the requests are the
+//   only readings; check the fallback within two periods of the send and the off-poll pose
+//   10 ms after the sync-write; drop the tests whose mutants others kill.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -212,9 +178,6 @@ constexpr std::string_view RECORDED_SYNC_WRITE{
   "ff ff fe 34 83 29 07 01 32 e8 07 00 00 f1 01 02 32 01 08 00 00 32 01 03 32 4a 08 00 00 2c 01 "
   "04 32 3f 08 00 00 2c 01 05 32 13 08 00 00 9e 01 06 32 de 08 00 00 fe 01 2a"};
 constexpr std::chrono::milliseconds SYNC_WRITE_DELAY{20};
-/// A get_angles reply recorded on the arm on 24 Nov 2026 (the folded pose): `FE FE 0E 20` + six
-/// big-endian int16 in 0.01 deg + `FA`.
-constexpr std::string_view GET_ANGLES_REPLY{"fe fe 0e 20 01 a5 d0 a8 38 7a 12 92 ff dd 00 95 fa"};
 /// The longest a test gives the thread, after the replayed sync-write lands, to decode the poll
 /// and publish the pose: the work takes well under a millisecond, the rest is the 2 ms read
 /// backoff and the scheduler of a loaded test machine.
@@ -257,6 +220,10 @@ public:
     // can check what the thread put on the wire.
     const std::lock_guard<std::mutex> lock{mutex_};
     const auto now{std::chrono::steady_clock::now()};
+    // The Atom drops a frame that comes while it still answers a request (24 Nov 2026).
+    if (!queued_.empty() && queued_.front().silences && now < queued_.front().due) {
+      ++written_while_busy_;
+    }
     if (count == 5) {
       const std::uint8_t id{*std::next(data, 3)};
       if (id == STOP_ID || id == POWER_ON_ID || id == POWER_OFF_ID) {
@@ -268,7 +235,7 @@ public:
         // line is silent until then, as the arm answers nothing else while it handles the
         // request. With ack_requests_ off the request is taken and never answered: the case
         // #103 must survive.
-        if (ack_requests_.load()) {
+        if (ack_requests_.load() && (id != POWER_OFF_ID || ack_power_off_.load())) {
           queued_.push_back({now + ack_delay_.load(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA}, true});
         }
       } else if (id == GET_ANGLES_ID && angles_delay_.load().count() > 0) {
@@ -368,6 +335,19 @@ public:
     ack_delay_.store(delay);
   }
 
+  /// An arm that takes a power off without acking it (default: it acks it).
+  void set_ack_power_off(bool ack)
+  {
+    ack_power_off_.store(ack);
+  }
+
+  /// How many frames were written while a request was still unanswered (its answer not due).
+  std::size_t written_while_busy()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return written_while_busy_;
+  }
+
   /// A port that refuses the stop and power on frames only, until set_reject_requests(false).
   void set_reject_requests(bool reject)
   {
@@ -430,6 +410,8 @@ private:
   std::atomic<bool> silent_{false};
   std::atomic<bool> reject_requests_{false};
   std::atomic<bool> ack_requests_{true};
+  std::atomic<bool> ack_power_off_{true};
+  std::size_t written_while_busy_{0};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
   std::atomic<std::chrono::milliseconds> angles_delay_{std::chrono::milliseconds{0}};
   std::atomic<bool> answer_gripper_{false};
@@ -444,101 +426,6 @@ private:
   std::size_t sync_writes_sent_{0};
   std::vector<std::uint8_t> poll_frames_;
   std::atomic<bool> quiet_after_send_{false};
-  std::mutex mutex_;
-};
-
-/// An arm that answers each request after its own delay and drops every frame that comes while
-/// it is still answering one, as the Atom does: on 24 Nov 2026 a send_angles written 2.1 ms
-/// after a get_angles, on the late answer to the request before, got neither ack nor
-/// sync-write. A get_angles is answered with a recorded reply, in `first_delays` for the first
-/// ones and in 7 ms after them; a send_angles is acked at once and sync-written 20 ms later;
-/// a stop, power on or power off is acked after set_ack_delay() (at once by default), busy
-/// until then; get_servo_temps gets cool temperatures at once.
-class BusyArm : public SerialTransport
-{
-public:
-  explicit BusyArm(std::vector<std::chrono::milliseconds> first_delays)
-  : delays_{std::move(first_delays)}
-  {
-  }
-
-  bool write(const std::uint8_t * data, std::size_t count) override
-  {
-    const std::lock_guard<std::mutex> lock{mutex_};
-    const auto now{std::chrono::steady_clock::now()};
-    if (now < busy_until_) {
-      ++dropped_;
-      return true;  // the port takes it, the Atom drops it
-    }
-    if (count == 5 && *std::next(data, 3) == GET_ANGLES_ID) {
-      std::chrono::milliseconds delay{std::chrono::milliseconds{7}};
-      if (answered_ < delays_.size()) {
-        delay = delays_.at(answered_);
-      }
-      ++answered_;
-      queued_.push_back({now + delay, parse_hex(GET_ANGLES_REPLY)});
-      busy_until_ = now + delay;
-    } else if (count == 18 && *std::next(data, 3) == 0x22) {
-      ++sends_taken_;
-      queued_.push_back({now, {0xFE, 0xFE, 0x03, 0x22, 0x01, 0xFA}});
-      queued_.push_back({now + SYNC_WRITE_DELAY, parse_hex(RECORDED_SYNC_WRITE)});
-      busy_until_ = now + SYNC_WRITE_DELAY;
-    } else if (count == 5 && *std::next(data, 3) == TEMPS_ID) {
-      queued_.push_back({now, {0xFE, 0xFE, 0x08, 0xE5, 31, 33, 35, 30, 29, 28, 0xFA}});
-    } else if (count == 5) {
-      queued_.push_back({now + ack_delay_, {0xFE, 0xFE, 0x03, *std::next(data, 3), 0x01, 0xFA}});
-      busy_until_ = now + ack_delay_;
-    }
-    return true;
-  }
-
-  /// How long the arm takes to ack a stop, power on or power off, busy until then.
-  void set_ack_delay(std::chrono::milliseconds delay)
-  {
-    const std::lock_guard<std::mutex> lock{mutex_};
-    ack_delay_ = delay;
-  }
-
-  std::size_t read(std::uint8_t * dst, std::size_t max) override
-  {
-    const std::lock_guard<std::mutex> lock{mutex_};
-    if (queued_.empty() || std::chrono::steady_clock::now() < queued_.front().due) {
-      return 0;
-    }
-    const std::vector<std::uint8_t> bytes{queued_.front().bytes};
-    queued_.erase(queued_.begin());
-    const std::size_t n{std::min(max, bytes.size())};
-    std::copy_n(bytes.begin(), n, dst);
-    return n;
-  }
-
-  /// How many frames came while the arm was busy, and were dropped.
-  std::size_t dropped()
-  {
-    const std::lock_guard<std::mutex> lock{mutex_};
-    return dropped_;
-  }
-
-  /// How many send_angles the arm took.
-  std::size_t sends_taken()
-  {
-    const std::lock_guard<std::mutex> lock{mutex_};
-    return sends_taken_;
-  }
-
-private:
-  struct Queued
-  {
-    std::chrono::steady_clock::time_point due;
-    std::vector<std::uint8_t> bytes;
-  };
-  std::vector<std::chrono::milliseconds> delays_;
-  std::chrono::milliseconds ack_delay_{0};
-  std::size_t answered_{0};
-  std::vector<Queued> queued_;
-  std::chrono::steady_clock::time_point busy_until_{};
-  std::size_t dropped_{0};
-  std::size_t sends_taken_{0};
   std::mutex mutex_;
 };
 
@@ -2133,9 +2020,8 @@ TEST(SerialArmPollPose, AfterTheTemperaturesTheNextTurnSendsWithoutAGetAngles)
   const std::vector<std::uint8_t> missing{without_frame(parse_hex(RECORDED_POLL_FRAMES), 2)};
   auto transport{polling_port(missing)};
   ReplayTransport & port{*transport};
-  // The requests are the only readings here, one every max_age plus its reply: a stale timeout
-  // equal to max_age, as in fast_guard, turns stale for a moment between two of them. On the
-  // arm it is 10 s against 3 s.
+  // The requests are the only readings, as in AnOverdueReadingTakesTheTurn...: a stale timeout
+  // over max_age.
   TemperatureGuard guard{fast_guard()};
   guard.stale_timeout = std::chrono::milliseconds{1000};
   SerialArm arm{std::move(transport), POLL_TIMING, guard};
@@ -2215,12 +2101,16 @@ TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
 {
   auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
   ReplayTransport & port{*transport};
+  // Every ack 60 ms late: the power off must follow the stop's ack. The Atom takes ~37 ms over
+  // a stop and drops what comes before; a power off sent 30 ms after it was dropped in all three
+  // recorded cuts. 60 is under ACK_TIMEOUT and far from the old 30 ms.
+  port.set_ack_delay(std::chrono::milliseconds{60});
   const TemperatureGuard guard{fast_guard()};
   SerialArm arm{std::move(transport), POLL_TIMING, guard};
   static_cast<void>(wait_for_reply(arm));
 
   // Six hot_for of hot polls. The cut comes once they have lasted hot_for, not at the second
-  // poll: a stop and a power off, and no target goes out after them.
+  // poll: a stop, a power off after its ack, and no target goes out after them.
   stream_targets(arm, std::chrono::milliseconds{600});
   ASSERT_TRUE(arm.overheat().has_value());
   const Overheat trip{arm.overheat().value_or(Overheat{})};
@@ -2244,38 +2134,11 @@ TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
   // The first hot reading came after the first send, the trip hot_for after it, then the stop.
   const auto send_time{times.at(static_cast<std::size_t>(first_send - frames.begin()))};
   const auto stop_time{times.at(static_cast<std::size_t>(stop_at - frames.begin()))};
+  const auto off_time{times.at(static_cast<std::size_t>(off_at - frames.begin()))};
   EXPECT_GE(stop_time - send_time, guard.hot_for);
+  EXPECT_GE(off_time - stop_time, std::chrono::milliseconds{60});
   EXPECT_GE(send_angles_frames({frames.begin(), stop_at}).size(), 2U);
   EXPECT_EQ(send_angles_frames({off_at, frames.end()}).size(), 0U);
-}
-
-TEST(SerialArmPollPose, TheCutsPowerOffFollowsTheStopsAck)
-{
-  // The Atom acks a stop after ~37 ms and drops a frame that comes before (24 Nov 2026): a power
-  // off sent 30 ms after the stop was dropped in all three recorded cuts. Here every ack comes
-  // 60 ms after its request (under ACK_TIMEOUT, and far from the old 30 ms, so a late wake of
-  // that sleep cannot pass); the power off must not go out before the stop's ack.
-  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
-  ReplayTransport & port{*transport};
-  port.set_ack_delay(std::chrono::milliseconds{60});
-  SerialArm arm{std::move(transport), POLL_TIMING, fast_guard()};
-  static_cast<void>(wait_for_reply(arm));
-  stream_targets(arm, std::chrono::milliseconds{600});
-  ASSERT_TRUE(arm.overheat().has_value());
-
-  const auto frames{port.written()};
-  const auto times{port.written_at()};
-  const auto stop_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
-        return request_id(frame) == STOP_ID;
-  })};
-  ASSERT_NE(stop_at, frames.end());
-  const auto off_at{std::find_if(stop_at, frames.end(), [](const auto & frame) {
-        return request_id(frame) == POWER_OFF_ID;
-  })};
-  ASSERT_NE(off_at, frames.end());
-  const auto stop_time{times.at(static_cast<std::size_t>(stop_at - frames.begin()))};
-  const auto off_time{times.at(static_cast<std::size_t>(off_at - frames.begin()))};
-  EXPECT_GE(off_time - stop_time, std::chrono::milliseconds{60});
 }
 
 TEST(SerialArmPollPose, ALateAnswerIsNotTakenForTheNextRequests)
@@ -2283,30 +2146,73 @@ TEST(SerialArmPollPose, ALateAnswerIsNotTakenForTheNextRequests)
   // 24 Nov 2026, tap at 113.39 s: a get_angles answered past its 50 ms window, the late answer
   // taken for the next request's, and what followed reached the Atom while it was still
   // answering: dropped. Here the first answer comes 52 ms after its request, 2 ms past
-  // REPLY_TIMEOUT as on the arm, the others in 7 ms. Nothing may reach the arm while it is busy,
+  // REPLY_TIMEOUT as on the arm, the others at once. Nothing may be written while it is due,
   // and the sends go on: about 15 in the 600 ms stream, 5 asked for.
-  auto transport{std::make_unique<BusyArm>(
-    std::vector<std::chrono::milliseconds>{std::chrono::milliseconds{52}})};
-  BusyArm & port{*transport};
+  auto transport{polling_port()};
+  ReplayTransport & port{*transport};
+  port.set_angles_delay(std::chrono::milliseconds{52});
   SerialArm arm{std::move(transport), POLL_TIMING};
+  ASSERT_TRUE(wait_until([&port]() {
+      return !frames_with_id(port.written(), GET_ANGLES_ID).empty();
+  }));
+  port.set_angles_delay(std::chrono::milliseconds{0});
   stream_targets(arm, std::chrono::milliseconds{600});
-  EXPECT_EQ(port.dropped(), 0U);
-  EXPECT_GE(port.sends_taken(), 5U);
+  EXPECT_EQ(port.written_while_busy(), 0U);
+  EXPECT_GE(send_angles_frames(port.written()).size(), 5U);
 }
 
 TEST(SerialArmPollPose, ALateAckIsNotTakenForTheNextRequests)
 {
-  // A stop acked 86 ms after it, past ACK_TIMEOUT (seen once mid-move, 16 Nov 2026): the arm is
-  // busy until then, and what the thread writes next, the stop again or a get_angles, must wait
-  // for the late ack instead of reaching the busy arm. 400 ms of a halt on a writing controller.
-  auto transport{std::make_unique<BusyArm>(std::vector<std::chrono::milliseconds>{})};
-  BusyArm & port{*transport};
-  port.set_ack_delay(std::chrono::milliseconds{86});
+  // A stop acked 86 ms after it, 6 ms past ACK_TIMEOUT (seen once mid-move, 16 Nov 2026): what
+  // the thread writes next, the stop again or a get_angles, must wait for the late ack. 400 ms
+  // of a halt on a writing controller.
+  auto transport{polling_port()};
+  ReplayTransport & port{*transport};
   SerialArm arm{std::move(transport), POLL_TIMING};
-  stream_targets(arm, std::chrono::milliseconds{100});
+  static_cast<void>(wait_for_reply(arm));
+  port.set_ack_delay(std::chrono::milliseconds{86});
   arm.request_halt();
   stream_targets(arm, std::chrono::milliseconds{400});
-  EXPECT_EQ(port.dropped(), 0U);
+  EXPECT_EQ(port.written_while_busy(), 0U);
+}
+
+TEST(SerialArmPollPose, AnUnacknowledgedPowerOffGoesOutAgainNextTurn)
+{
+  // A cut whose power off gets no ack (dropped): it goes out again at the next turn, not a
+  // period later. The period is 1 s here, so a second power off within 400 ms of the stop is
+  // that resend; the repeat once a period would be the second at about 1 s.
+  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
+  ReplayTransport & port{*transport};
+  port.set_ack_power_off(false);
+  TemperatureGuard guard{fast_guard()};
+  guard.period = std::chrono::milliseconds{1000};
+  guard.stale_timeout = std::chrono::milliseconds{2000};
+  SerialArm arm{std::move(transport), POLL_TIMING, guard};
+  static_cast<void>(wait_for_reply(arm));
+  stream_targets(arm, std::chrono::milliseconds{600});
+  ASSERT_TRUE(arm.overheat().has_value());
+  const auto frames{port.written()};
+  const auto times{port.written_at()};
+  const auto stop_at{std::find_if(frames.begin(), frames.end(), [](const auto & frame) {
+        return request_id(frame) == STOP_ID;
+  })};
+  ASSERT_NE(stop_at, frames.end());
+  const auto stop_time{times.at(static_cast<std::size_t>(stop_at - frames.begin()))};
+  ASSERT_TRUE(wait_until([stop_time]() {
+      return std::chrono::steady_clock::now() - stop_time > std::chrono::milliseconds{400};
+  }));
+  std::size_t offs{0};
+  const auto all{port.written()};
+  const auto all_times{port.written_at()};
+  for (std::size_t i{0}; i < all.size(); ++i) {
+    if (
+      request_id(all[i]) == POWER_OFF_ID &&
+      all_times[i] - stop_time < std::chrono::milliseconds{400})
+    {
+      ++offs;
+    }
+  }
+  EXPECT_GE(offs, 2U);
 }
 
 TEST(SerialArmPollPose, PollsWithABridgedFrameLeaveTheAsksGoing)
