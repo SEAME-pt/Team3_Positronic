@@ -20,36 +20,49 @@
 # Follow-up prompt (Felipe, 24 Nov):
 #   The servos heat because the tip is left tilted after every move; upright (all zeros) they
 #   don't. Between tests the arm goes to a standing pose where gravity does not load the servos.
+# Follow-up prompt (approach "static", 24 Nov):
+#   The same run for the static driver (send_speed fixed at launch, fresh mode 1 sent by the
+#   driver before every power_on) over Felipe's full range: bytes 5, 10, 30, 50, 70, 90, 100,
+#   in three tip setups. Lift the 70 cap safely: high bytes step up only, each only after the
+#   stop distance at the byte before it was measured in the same setup (step_up_check.py), a
+#   byte above 70 is typed twice, and the rest pose's J4 is given for every setup but the first.
 #
 # Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
 # terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
 # touches Wi-Fi.
 #
-#   bash $T/arm_run_adaptive.sh run MODE [STAGES]   one mode in one go: up, then each stage
+#   bash $T/arm_run_static.sh run MODE [STAGES]   one mode in one go: up, then each stage
 #                                            after Enter (s skips it, q ends the mode), then
 #                                            down. STAGES default: start first stops base steps
-#   bash $T/arm_run_adaptive.sh up MODE      tap + driver + bag for MODE (no motion; the
+#   bash $T/arm_run_static.sh cool           no driver up: wait (arm holding still) until every
+#                                            servo is <= MAX_START_C (45); `run` does it first
+#   bash $T/arm_run_static.sh up MODE        tap + driver + bag for MODE (no motion; the
 #                                            servos are powered on and hold their pose)
-#   bash $T/arm_run_adaptive.sh start        MOVES: REST, upright (all zeros); every goal goes rest -> start pose -> goal -> rest; was: one slow point to the start
-#   bash $T/arm_run_adaptive.sh first        MOVES: T1, J1 5 deg out and back at 1.7 deg/s
-#   bash $T/arm_run_adaptive.sh base         MOVES: T3, T6, T4 (J1+J2, 10/15/20 deg/s), 3 each
-#   bash $T/arm_run_adaptive.sh wrist        MOVES: T11, T12, T13 (J3-J6, 10/15/17.5), 3 each
-#   bash $T/arm_run_adaptive.sh stops        MOVES: 5 x J1 at 15 deg/s, stopped mid-way
-#   bash $T/arm_run_adaptive.sh steps        MOVES: 3 x J1 5 deg step and back (#39 steps run)
-#   bash $T/arm_run_adaptive.sh down         bag, driver, tap stopped; summary printed
-#   bash $T/arm_run_adaptive.sh state        component, controllers, last summary (no motion)
+#   bash $T/arm_run_static.sh start          MOVES: REST, upright, J4 where the tip balances
+#   bash $T/arm_run_static.sh first          MOVES: T1, J1 5 deg out and back at 1.7 deg/s
+#   bash $T/arm_run_static.sh base           MOVES: T3, T6, T4 (J1+J2, 10/15/20 deg/s), 3 each
+#   bash $T/arm_run_static.sh wrist          MOVES: T11, T12, T13 (J3-J6, 10/15/17.5), 3 each
+#   bash $T/arm_run_static.sh stops          MOVES: 5 x J1 at 15 deg/s, stopped mid-way
+#   bash $T/arm_run_static.sh steps          MOVES: 6 x J1 5 deg step and back (#39 steps run)
+#   bash $T/arm_run_static.sh down           bag, driver, tap stopped; summary printed
+#   bash $T/arm_run_static.sh state          component, controllers, last summary (no motion)
 #
 #   T=docs/03_verification/speed_sweep/tools
 #   DRY=1 runs the same flow on the fake backend, without pymycobot and the tap: the desk check
 #   of the script (no arm, no serial port).
-#   MODE: fixed30 adaptive30 fixed50 adaptive50 fixed70 adaptive70, in that order. Each mode
-#   starts with `first`, and `stops` is done before the next speed is tried.
+#   MODE: fixed5 fixed10 fixed30 fixed50 fixed70 fixed90 fixed100, in that order (step up only).
+#   SETUP=setup1|setup2|setup3 (required by `up`): the tip, and the folder log/133s/SETUP/MODE.
+#   Above 30 a byte starts only after the 5 stops of the byte before it (30 -> 50 -> 70 -> 90 ->
+#   100) in the same setup, every travel <= STOP_MAX_DEG (4); above 70 also CONFIRM_BYTE=<byte>.
+#   REST_J4_DEG: required for setup2 and setup3 (measure it per tip), 39.8 for setup1.
+#   Each mode starts with `first` (stops, base, wrist, steps refuse before it), and `stops` is
+#   done before the next speed is tried.
 
 set -m
 source /opt/ros/jazzy/setup.bash
 source /ws/install/setup.bash
 
-ROOT=/ws/log/133a
+ROOT=/ws/log/133s
 TOOLS=/ws/docs/03_verification/speed_sweep/tools
 TRAJ=/ws/docs/03_verification/jtc_on_the_arm/trajectories
 WAYPOINT=/ws/docs/03_verification/jtc_on_the_arm/tools/waypoint_error.py
@@ -63,8 +76,10 @@ WAIT_BETWEEN_S=${WAIT_BETWEEN_S:-4} # the arm stands still before the next goal
 COUNTDOWN_S=${COUNTDOWN_S:-5}       # one person: time to move the hand from the keys to the switch
 # The rest pose's J4: where the tip balances with J4 released, measured per tip setup. Camera +
 # gripper: +39.8 deg (24 Nov; at 0 J4 still held the camera and stayed at 56 degC, at 39.8 it went
-# 45 -> 39 degC in 5 min). The other joints rest at 0.
-REST_J4_DEG=${REST_J4_DEG:-39.8}
+# 45 -> 39 degC in 5 min). The other joints rest at 0. Another tip moves the centre of mass, so
+# setup2 and setup3 must say it (`up` refuses without); setup1 defaults to 39.8.
+if [ -z "${REST_J4_DEG:-}" ] && [ "${SETUP:-}" = setup1 ]; then REST_J4_DEG=39.8; fi
+STOP_MAX_DEG=${STOP_MAX_DEG:-4} # step up: every stop at the byte before travelled at most this
 mkdir -p "$ROOT"
 
 countdown() {
@@ -82,26 +97,25 @@ need_mode() {
   fi
 }
 
-# The launch arguments of a mode. Never a byte above 70 (#133: 30, 50, 70, never 100).
+# Every byte starts with the 5 deg first move (#133): no other motion stage before T1 succeeded.
+need_first() {
+  if ! grep -q "status: SUCCEEDED" "$(mode_dir)/goal_T1_r1.txt" 2> /dev/null; then
+    echo "!!! no successful first move (T1) in $(current_mode): bash $0 first" >&2
+    exit 1
+  fi
+}
+
+# The launch arguments of a mode: Felipe's range (24 Nov), nothing else. Which byte may start
+# now is step_up_check.py's call, in `up`.
 mode_args() {
-  local kind=${1%%[0-9]*} byte=${1##*[a-z]}
-  case "$kind:$byte" in
-    fixed:30 | fixed:50 | fixed:70) echo "send_speed:=$byte" ;;
-    adaptive:30 | adaptive:50 | adaptive:70)
-      # deg/s per unit measured in fixed30 by `down`, if it found one; else the driver's 0.88.
-      local per_unit=""
-      [ -f "$ROOT/per_unit.txt" ] && per_unit=" send_speed_deg_s_per_unit:=$(cat "$ROOT/per_unit.txt")"
-      echo "send_speed:=$byte send_speed_adaptive:=true send_speed_floor:=10 send_speed_gain:=1.5$per_unit"
-      ;;
+  case "$1" in
+    fixed5 | fixed10 | fixed30 | fixed50 | fixed70 | fixed90 | fixed100) echo "send_speed:=${1#fixed}" ;;
     *) return 1 ;;
   esac
 }
 
 # What the driver's INFO line must say for a mode.
-expected_speed_line() {
-  local kind=${1%%[0-9]*} byte=${1##*[a-z]}
-  if [ "$kind" = fixed ]; then echo "send speed $byte\."; else echo "send speed adaptive, floor 10, ceiling $byte,"; fi
-}
+expected_speed_line() { echo "send speed ${1#fixed}\."; }
 
 # T6, T4 (from T3) and T12, T13 (from T11): the same goals with other times (#33 README).
 make_trajectories() {
@@ -194,14 +208,33 @@ goal() {  # goal <name> <run>: one #33 goal from the rest pose, recorded for way
 case "$1" in
   up)
     MODE=$2
-    ARGS=$(mode_args "$MODE") || { echo "MODE: fixed30 adaptive30 fixed50 adaptive50 fixed70 adaptive70" >&2; exit 2; }
+    ARGS=$(mode_args "$MODE") || { echo "MODE: fixed5 fixed10 fixed30 fixed50 fixed70 fixed90 fixed100" >&2; exit 2; }
     [ -n "$(current_mode)" ] && { echo "mode $(current_mode) is still up: bash $0 down" >&2; exit 1; }
-    DIR="$ROOT/$MODE"
+    case "${SETUP:-}" in
+      setup1 | setup2 | setup3) ;;
+      *) echo "SETUP=setup1 (camera + gripper), setup2 (gripper) or setup3 (bare)" >&2; exit 2 ;;
+    esac
+    [ -n "${REST_J4_DEG:-}" ] || { echo "REST_J4_DEG=<deg> for $SETUP: measure where the tip balances" >&2; exit 2; }
+    BYTE=${MODE#fixed}
+    # Step up only (Felipe, 24 Nov): above 30, the byte before must have its 5 stops here.
+    DRY_FLAG=""
+    [ "${DRY:-0}" = 1 ] && DRY_FLAG=--dry
+    # shellcheck disable=SC2086
+    STEP_UP=$(python3 "$TOOLS/step_up_check.py" "$ROOT/$SETUP" "$BYTE" \
+      --max-travel-deg "$STOP_MAX_DEG" $DRY_FLAG 2>&1) || { echo "!!! $STEP_UP" >&2; exit 1; }
+    echo "$STEP_UP"
+    # Above 70 the byte is typed twice: in MODE and in CONFIRM_BYTE.
+    if [ "$BYTE" -gt 70 ] && [ "${CONFIRM_BYTE:-}" != "$BYTE" ]; then
+      echo "!!! byte $BYTE is above 70: CONFIRM_BYTE=$BYTE to start it (hand on the switch)" >&2
+      exit 1
+    fi
+    DIR="$ROOT/$SETUP/$MODE"
     [ -e "$DIR" ] && DIR="$DIR-$(date +%H%M%S)"
     mkdir -p "$DIR"
-    echo "$(basename "$DIR")" > "$ROOT/current_mode"
+    echo "$STEP_UP" > "$DIR/step_up.txt"
+    echo "$SETUP/$(basename "$DIR")" > "$ROOT/current_mode"
     make_trajectories || { rm -f "$ROOT/current_mode"; exit 1; }
-    echo "rest pose J4 $REST_J4_DEG deg, others 0" > "$DIR/rest.txt"
+    echo "$SETUP, rest pose J4 $REST_J4_DEG deg, others 0" > "$DIR/rest.txt"
     if [ "${DRY:-0}" = 1 ]; then
       echo "driver: DRY, fake backend $ARGS" | tee "$DIR/args.txt"
       # shellcheck disable=SC2086
@@ -260,6 +293,15 @@ PY
       bash "$0" down > /dev/null 2>&1
       exit 1
     fi
+    # Static's step zero: the driver itself sends fresh mode 1 (FE FE 03 16 01 FA) before its
+    # power_on. The INFO line says how many the Atom acknowledged (the open question).
+    grep -m1 -o "Fresh mode 1 before power_on: .*" "$DIR/launch.log" | tee -a "$DIR/fresh_mode.txt"
+    if ! grep -q "Fresh mode 1 before power_on: [1-9]" "$DIR/launch.log" \
+      || ! grep -q "fefe031601fa" "$DIR/tap.csv"; then
+      echo "!!! the driver did not send fresh mode 1 before power_on (launch.log, tap.csv): stopping" >&2
+      bash "$0" down > /dev/null 2>&1
+      exit 1
+    fi
     grep -m1 -o "send speed[^.]*\.[0-9]*[^.]*" "$DIR/launch.log"
     ros2 bag record -o "$DIR/bag" /joint_states /dynamic_joint_states \
       /arm_controller/controller_state /forward_position_controller/commands > "$DIR/bag.log" 2>&1 &
@@ -268,7 +310,7 @@ PY
     ;;
   start)
     need_mode
-    countdown "MOVES: to the rest pose, upright, J4 at $REST_J4_DEG deg, 6 s"
+    countdown "MOVES: to the rest pose, upright, $(cut -d, -f2 "$(mode_dir)/rest.txt" | xargs), 6 s"
     to_rest start || exit 1
     ;;
   first)
@@ -279,6 +321,7 @@ PY
     ;;
   base)
     need_mode
+    need_first
     for name in T3 T6 T4; do
       for run in 1 2 3; do
         cool_wait
@@ -289,6 +332,7 @@ PY
     ;;
   wrist)
     need_mode
+    need_first
     for name in T11 T12 T13; do
       for run in 1 2 3; do
         cool_wait
@@ -299,6 +343,7 @@ PY
     ;;
   stops)
     need_mode
+    need_first
     for run in ${STOP_RUNS:-1 2 3 4 5}; do  # STOP_RUNS="5": redo one stop only
       cool_wait
       countdown "MOVES: start pose, then stop $run of 5: J1 40 deg at 15 deg/s, stopped about 1 s in"
@@ -364,6 +409,7 @@ PY
     ;;
   steps)
     need_mode
+    need_first
     # #171: the deployed rt_record.py must read the joints by name, or step 1 moves five joints.
     if ! grep -q "ARM_JOINTS" /ws/docs/03_verification/rt_profile/tools/rt_record.py; then
       echo "!!! rt_record.py reads /joint_states by index (#171): steps refused" >&2
@@ -402,28 +448,13 @@ PY
       [ -f "$DIR/tap.csv" ] && python3 "$TOOLS/tap_speed.py" "$DIR/tap.csv" --csv "$DIR/tap_rows.csv"
       ls "$DIR"/goal_T*_r[123].txt > /dev/null 2>&1 && python3 "$WAYPOINT" "$DIR"/goal_T*_r[123].txt
     } 2>&1 | tee "$DIR/summary.txt"
-    # From fixed30: the lowest servo goal speed per byte as deg/s per unit, for the adaptive
-    # modes. Only when the tap shows mode 1 and a value in a sane range; else the 0.88 default.
-    case "$(basename "$DIR")" in
-      fixed30*)
-        python3 - "$DIR/summary.txt" "$ROOT/per_unit.txt" << 'PY'
-import re, sys
-text = open(sys.argv[1]).read()
-m = re.search(r'byte  30:.*\n.*\n\s+lowest goal speed \d+ = [\d.]+ x byte = ([\d.]+) deg/s', text)
-if 'mode 1' in text and m and 0.3 <= float(m.group(1)) / 30 <= 3.0:
-    open(sys.argv[2], 'w').write(f'{float(m.group(1)) / 30:.3f}')
-    print('deg/s per unit for the adaptive modes:', f'{float(m.group(1)) / 30:.3f}')
-else:
-    print('no deg/s per unit from this tap: the adaptive modes keep the default 0.88')
-PY
-        ;;
-    esac
     echo "kept: $DIR (tap.csv, bag/, goal_*.txt, stop_*, rt/, launch.log, summary.txt)"
     ;;
   run)
     MODE=$2
     shift 2
     STAGES=${*:-start first stops base steps}
+    bash "$0" cool || exit 1
     bash "$0" up "$MODE" || exit 1
     for stage in $STAGES; do
       case "$stage" in
@@ -432,7 +463,7 @@ PY
         base) what="T3 T6 T4 x3, J1+J2 20 deg, each from and back to rest, ~5 min" ;;
         wrist) what="T11 T12 T13 x3, J3-J6 20 deg, J3 goes UP, each from and back to rest, ~5 min" ;;
         stops) what="5 stops at 15 deg/s on J1 40 deg, each from and back to rest, ~4 min" ;;
-        steps) what="3 x J1 5 deg step and back, from rest, ~1 min" ;;
+        steps) what="6 x J1 5 deg step and back, from rest, ~1 min" ;;
         *) echo "unknown stage $stage" >&2; continue ;;
       esac
       answer=""
@@ -446,7 +477,31 @@ PY
       bash "$0" "$stage" || { echo "!!! $stage failed: ending this mode" >&2; break; }
     done
     bash "$0" down
-    echo ">>> mode $MODE done. Cool down 2 min before the next one."
+    echo ">>> mode $MODE done. The arm holds the rest pose; the next run waits until it is cool."
+    ;;
+  cool)
+    # Between modes (handover, 24 Nov): the arm holds the rest pose and the wrist cools ~50 -> 40
+    # degC in ~10 min. `up` refuses above MAX_START_C; this waits for it instead. No driver may
+    # be up (it owns the port); power_on only holds the pose. DRY: nothing to wait for.
+    [ "${DRY:-0}" = 1 ] && exit 0
+    [ -n "$(current_mode)" ] && { echo "mode $(current_mode) is up: bash $0 down first" >&2; exit 1; }
+    python3 - "${MAX_START_C:-45}" "${COOL_TIMEOUT_S:-1800}" << 'PY'
+import sys, time
+from pymycobot import MyCobot280
+limit, timeout = float(sys.argv[1]), float(sys.argv[2])
+arm = MyCobot280('/dev/ttyTHS1', 1000000)
+arm.power_on()
+start = time.time()
+while True:
+    temps = arm.get_servo_temps()
+    ok = isinstance(temps, list) and len(temps) == 6 and all(0 < t <= limit for t in temps)
+    print(f'{time.time() - start:5.0f} s  servo temps degC: {temps}', flush=True)
+    if ok:
+        sys.exit(0)
+    if time.time() - start > timeout:
+        sys.exit(f'!!! not cool after {timeout:.0f} s: stop for the day or wait longer')
+    time.sleep(30)
+PY
     ;;
   state)
     echo "mode up: $(current_mode)"
@@ -454,7 +509,7 @@ PY
     timeout 5 ros2 control list_controllers 2> /dev/null
     ;;
   *)
-    sed -n "/^#   bash \$T\/arm_run_adaptive.sh run/,/^#   starts with/p" "$0"
+    sed -n "/^#   bash \$T\/arm_run_static.sh run/,/^#   done before the next speed/p" "$0"
     exit 2
     ;;
 esac
