@@ -445,7 +445,7 @@ private:
   // a target the Atom refuses would otherwise go out on every write, each one waiting the
   // echo_timeout.
   bool last_send_answered_{true};
-  Clock::time_point last_send_at_{};
+  Clock::time_point last_send_at_;
   // #170: write_angles() wakes the thread (command_ready_, set by wake_thread()), so the send
   // goes out right after the controller's write; a new halt or power on wakes it too
   // (request_ready_). Each turn clears both before it looks at what they
