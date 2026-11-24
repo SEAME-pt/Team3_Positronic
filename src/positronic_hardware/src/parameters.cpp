@@ -51,8 +51,9 @@ using Parameters = std::unordered_map<std::string, std::string>;
 constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count() / 2)};
 
 /// #150: the wait for the sync-write is the first part of the silence after a send. With two
-/// lost replies (2 x 50 ms) and a late reply (20 ms) after it, 80 ms fills the 200 ms link
-/// timeout exactly; the default 60 leaves 20 ms. Below 20 ms almost every sync-write would be
+/// lost replies (2 x 50 ms, each followed by the 8 ms LATE_REPLY_DRAIN) and a late reply (20 ms)
+/// after it, the default 60 comes to ~196 ms, under the 200 ms link timeout; at 80 two lost
+/// replies trip it. Below 20 ms almost every sync-write would be
 /// late (it ends 19 ms after the send at p50).
 constexpr int MIN_ECHO_TIMEOUT_MS{20};
 constexpr int MAX_ECHO_TIMEOUT_MS{80};
@@ -72,8 +73,8 @@ struct NumericParameter
 // The two timings of the serial thread that the URDF sets (#32, #150): a period above the arm's
 // own busy time and at most half the #35 link timeout, and the longest wait for the Atom's
 // sync-write after a send. The echo timeout may be longer than the period: it only counts when
-// the Atom is late. The settle of the overheat cut is a constant since #150, when the moving
-// turn stopped using it (SerialTiming::send_settle). servo_temp_limit_c only goes
+// the Atom is late. The settle is a constant since #150, when the moving turn stopped using it
+// (SerialTiming::send_settle), and only the gripper's set waits it. servo_temp_limit_c only goes
 // down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
