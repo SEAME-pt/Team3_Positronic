@@ -375,7 +375,14 @@ PY
       /ws/install/positronic_bringup/share/positronic_bringup/config/jetson_controllers.yaml
     # From the rest pose (all zeros), where the previous stage left the arm.
     countdown "MOVES: J1 5 deg step and back, 3 times, 3 s apart, from the rest pose"
-    STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps 2>&1 | tee "$(mode_dir)/steps.log"
+    # run_rt_profile.sh checks the controllers with the ros2 CLI, which sometimes answers empty
+    # on the Jetson right after the switch; a refused check moves nothing, so try up to 3 times.
+    for attempt in 1 2 3; do
+      STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps 2>&1 | tee -a "$(mode_dir)/steps.log"
+      [ -s "$(mode_dir)/rt/steps/steps.csv" ] && break
+      echo ">>> steps attempt $attempt refused by a check, trying again" | tee -a "$(mode_dir)/steps.log"
+      sleep 3
+    done
     ros2 control set_controller_state forward_position_controller inactive
     ros2 control set_controller_state arm_controller active
     # run_rt_profile.sh refuses on a failed check (stderr) without moving: say so here.
