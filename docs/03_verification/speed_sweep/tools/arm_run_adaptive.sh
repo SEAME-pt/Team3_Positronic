@@ -12,6 +12,11 @@
 #   the background), one command per mode (`run`) that waits for Enter between stages, a longer
 #   countdown, and the checks a second person would have done (fresh mode, the send speed the
 #   driver logged, the by-name rt_record) made by the script, which stops on a wrong one.
+# Follow-up prompt (arm day, 24 Nov):
+#   With camera + gripper the wrist servos (J4, J5) heat ~1.5 degC/min just holding the pose and
+#   reached the driver's 55 degC activation gate in the middle of the stops. Refuse a mode that
+#   starts above 45 degC, do the stops right after the first move, and end the mode if the
+#   resume after a stop fails.
 #
 # Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
 # terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
@@ -19,7 +24,7 @@
 #
 #   bash $T/arm_run_adaptive.sh run MODE [STAGES]   one mode in one go: up, then each stage
 #                                            after Enter (s skips it, q ends the mode), then
-#                                            down. STAGES default: start first base stops steps
+#                                            down. STAGES default: start first stops base steps
 #   bash $T/arm_run_adaptive.sh up MODE      tap + driver + bag for MODE (no motion; the
 #                                            servos are powered on and hold their pose)
 #   bash $T/arm_run_adaptive.sh start        MOVES: T0_to_start, one slow point to the start
@@ -163,7 +168,21 @@ arm = MyCobot280('/dev/ttyTHS1', 1000000)
 arm.power_on()
 arm.set_fresh_mode(1)
 print('fresh mode read-back:', arm.get_fresh_mode(), ' angles:', arm.get_angles())
+print('servo temps degC:', arm.get_servo_temps())
 PY
+    # The driver will not re-activate after a stop above 55 degC (#115); a mode is ~9 min powered
+    # and the wrist gains ~1.5 degC/min with camera + gripper: start at 45 at most.
+    if ! python3 - "$DIR/fresh_mode.txt" "${MAX_START_C:-45}" << 'PY'
+import ast, re, sys
+m = re.search(r'servo temps degC: (\[[^]]*\])', open(sys.argv[1]).read())
+temps = ast.literal_eval(m.group(1)) if m else None
+if not temps or len(temps) != 6 or max(temps) > float(sys.argv[2]):
+    sys.exit(f'!!! servo temps {temps}: need all <= {sys.argv[2]} degC to start a mode, let it cool')
+PY
+    then
+      rm -f "$ROOT/current_mode"
+      exit 1
+    fi
     rm -f /tmp/proxy_port
     python3 "$TAP" "$DIR/tap.csv" > "$DIR/tap.log" 2>&1 &
     echo $! > "$ROOT/tap.pid"
@@ -269,6 +288,10 @@ PY
       ros2 control set_hardware_component_state positronic_arm active
       ros2 control set_controller_state arm_controller active
       sleep 1
+      if ! timeout 5 ros2 control list_controllers 2> /dev/null | grep -E "^arm_controller .* active"; then
+        echo "!!! resume after stop $run failed (temperature gate? see launch.log): ending the stops" >&2
+        exit 1
+      fi
       countdown "MOVES: back to the start pose"
       goal T0_to_start "stop$run"
     done
@@ -324,7 +347,7 @@ PY
   run)
     MODE=$2
     shift 2
-    STAGES=${*:-start first base stops steps}
+    STAGES=${*:-start first stops base steps}
     bash "$0" up "$MODE" || exit 1
     for stage in $STAGES; do
       case "$stage" in
