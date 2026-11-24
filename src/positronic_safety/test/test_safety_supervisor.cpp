@@ -37,9 +37,8 @@
 //   Every test uses its own namespace, so tests running at the same time do not hear each other.
 // Follow-up prompt (#121):
 //   The fake also publishes /diagnostics. The supervisor logs the driver's reason once when it
-//   comes, although the status repeats every second, and again after an OK; the controller
-//   manager's own status is not the driver's. Capture the log lines with an rcutils output
-//   handler for the test.
+//   comes, although the status repeats every second, and again after an OK. Read the log lines
+//   on /rosout.
 
 #include <gtest/gtest.h>
 

@@ -217,9 +217,8 @@ CallbackReturn RobotSystem::on_init(
     return CallbackReturn::ERROR;
   }
 
-  // #121: the reason of the fault on /diagnostics, from the node the controller manager gives
-  // the component and spins on its executor, never on the control loop. No node without an
-  // executor (most tests): the fault interface works the same.
+  // #121: the fault on /diagnostics, on the node the controller manager gives the component
+  // and spins on its executor, never on the control loop.
   if (get_node() != nullptr) {
     diagnostics_ = std::make_unique<diagnostic_updater::Updater>(get_node());
     diagnostics_->setHardwareID(info.name);
@@ -423,11 +422,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
   }
 
   // #35: has_sample() stays true once the arm has answered, so it says nothing about a link that
-  // died later. Never activate on a silent link: read() would raise the fault again at once.
-  if (arm_->link_timed_out()) {
-    RCLCPP_ERROR(
-      get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
-    return CallbackReturn::ERROR;
+  // died later. Never activate on a silent link: read() would raise the fault again at once. An
+  // arm that answers again before the deadline (reactivated right after its link came back) is
+  // waited for, like its first reply above.
+  while (arm_->link_timed_out()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+      return CallbackReturn::ERROR;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
   // #34: the measured pose becomes the first command, so it must be inside the limits, or the
@@ -735,13 +739,12 @@ void RobotSystem::raise_fault(FaultCode code)
 
 void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
 {
-  const FaultCode code{fault_.load()};
-  diagnosed_ = code;
+  diagnosed_ = fault_.load();
   std::uint8_t level{diagnostic_msgs::msg::DiagnosticStatus::ERROR};
-  if (code == FaultCode::NONE) {
+  if (diagnosed_ == FaultCode::NONE) {
     level = diagnostic_msgs::msg::DiagnosticStatus::OK;
   }
-  status.summary(level, std::string{describe_fault(code)});
+  status.summary(level, std::string{describe_fault(diagnosed_)});
 }
 
 void RobotSystem::refuse(const CommandCheck & check)

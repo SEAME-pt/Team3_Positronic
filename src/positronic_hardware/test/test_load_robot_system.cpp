@@ -114,7 +114,8 @@
 //   With an executor in the resource manager params, as the controller manager gives it, the
 //   component gets a node and publishes its fault on /diagnostics. With the once-a-second status
 //   set to an hour, so a status that comes is a change: a silent arm gives ERROR LINK_TIMEOUT
-//   with its reason at once, and an activate brings OK back.
+//   with its reason at once, and an activate right after the arm answers again brings OK back:
+//   activate waits for the link to come back, as for the first reply, instead of refusing.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -739,8 +740,9 @@ protected:
     return true;
   }
 
-  /// The newest status once it has `level`, within 2 s: the fault watch looks every 50 ms.
-  [[nodiscard]] std::optional<diagnostic_msgs::msg::DiagnosticStatus> newest(std::uint8_t level)
+  /// The newest status's message once it has `level`, within 2 s (the fault watch looks every
+  /// 50 ms); "" at the timeout.
+  [[nodiscard]] std::string newest(std::uint8_t level)
   {
     const bool arrived{spin_until(
         [this, level]() {
@@ -748,9 +750,9 @@ protected:
       },
       std::chrono::seconds{2})};
     if (!arrived) {
-      return std::nullopt;
+      return "";
     }
-    return statuses_.back();
+    return statuses_.back().message;
   }
 
   rclcpp::executors::SingleThreadedExecutor::SharedPtr executor_;
@@ -1927,17 +1929,15 @@ TEST_F(FaultDiagnostics, ALinkTimeoutIsOnDiagnosticsAtOnceAndActivateBringsOkBac
   arm.reset();
   std::this_thread::sleep_for(std::chrono::milliseconds{300});
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-  const std::optional<DiagnosticStatus> fault{newest(DiagnosticStatus::ERROR)};
-  ASSERT_TRUE(fault.has_value());
-  const DiagnosticStatus error{fault.value_or(DiagnosticStatus{})};
-  EXPECT_EQ(error.message, "LINK_TIMEOUT: no valid reply from the arm; targets held");
+  EXPECT_EQ(
+    newest(DiagnosticStatus::ERROR), "LINK_TIMEOUT: no valid reply from the arm; targets held");
 
+  // The arm answers again and a person reactivates at once: activate waits for a fresh reply
+  // (the requests queued while it was silent get late answers, which the driver drops).
   arm = std::make_unique<ReplyingArm>(controller_);
   ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
-  const std::optional<DiagnosticStatus> cleared{newest(DiagnosticStatus::OK)};
-  ASSERT_TRUE(cleared.has_value());
-  EXPECT_EQ(cleared.value_or(DiagnosticStatus{}).message, "NONE: no fault");
+  EXPECT_EQ(newest(DiagnosticStatus::OK), "NONE: no fault");
 
   resource_manager_.reset();
   arm.reset();
