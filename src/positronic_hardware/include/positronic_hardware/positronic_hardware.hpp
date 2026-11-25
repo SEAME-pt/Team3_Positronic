@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -113,6 +114,12 @@ private:
   /// reason of the latched one. Runs on the executor that spins the component's node, beside a
   /// transition that may be replacing arm_: it reads fault_ only.
   void diagnose(diagnostic_updater::DiagnosticStatusWrapper & status);
+  /// on_init's part of #121: the Updater on the component's node, with diagnose() and the timer
+  /// that publishes a new fault at once. Nothing without a node (most tests).
+  void start_diagnostics(const std::string & hardware_id);
+  /// on_activate's wait for a link that died after the first reply (#35, #121): true once the
+  /// arm answers again before `deadline`, false with one log line if it stays silent.
+  bool link_alive_by(std::chrono::steady_clock::time_point deadline);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
