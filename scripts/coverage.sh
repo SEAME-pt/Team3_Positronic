@@ -53,13 +53,10 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 
 # C++ tests in parallel: packages (colcon) and the tests inside each (ctest -j). They write the
 # .gcda counters as they run; libgcov locks each file while it adds to it. No linters: they add
-# no coverage (make test runs them). positronic_mission after the others, alone (Makefile,
-# TEST_ALONE: one of its tests is not reliable on a loaded machine).
+# no coverage (make test runs them).
 echo "== C++ tests with coverage"
 colcon test --build-base "${BUILD}" --install-base "${INSTALL}" \
-  --packages-skip positronic_mission --ctest-args -j"${TEST_JOBS:-4}" -L gtest
-colcon test --build-base "${BUILD}" --install-base "${INSTALL}" \
-  --packages-select positronic_mission --ctest-args -L gtest
+  --ctest-args -j"${TEST_JOBS:-4}" -L gtest
 
 # colcon starts pytest itself, so the coverage options reach it through PYTEST_ADDOPTS.
 # --cov-append: each test adds to one data file. One at a time: pytest-cov merges into that
