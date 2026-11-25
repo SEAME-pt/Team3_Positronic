@@ -284,7 +284,9 @@ private:
   struct StampedPose
   {
     JointPositions angles{START_POSE};
-    Clock::time_point arrived{};
+    // No {}: a time_point's own constructor already makes it zero, and clang-tidy flags the
+    // braces as redundant (readability-redundant-member-init).
+    Clock::time_point arrived;
   };
 
   /// Publishes `pose`, decoded from a reply that arrived at `arrived`: the buffer (and so
