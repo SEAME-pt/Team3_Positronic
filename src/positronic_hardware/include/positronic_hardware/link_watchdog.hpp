@@ -39,6 +39,9 @@ namespace positronic_hardware
 ///
 /// It does not latch. timed_out() turns false again once a reply arrives; the plugin decides
 /// whether a timeout stays a fault until someone re-activates the driver.
+///
+/// The dead-man check (#136) uses it too, with its own timeout: on_reply() is then a heartbeat
+/// of the safety supervisor, written by the subscription callback on an executor thread.
 class LinkWatchdog
 {
 public:

@@ -46,6 +46,12 @@ enum class FaultCode : std::uint8_t
   /// under: the serial thread has already stopped the arm and powered its servos off. read()
   /// also returns ERROR. Latched until the next activate.
   OVERHEAT = 3,
+  /// No heartbeat from the safety supervisor for supervisor_timeout_ms while active (#136): it
+  /// died, hangs or was killed, and nobody would stop the arm. Targets held, like the link
+  /// timeout, and read() returns ERROR, like the overheat: with no supervisor left to act on
+  /// the fault, the controller manager takes the controllers and the component out of ACTIVE.
+  /// Latched until the next activate.
+  SUPERVISOR_LOST = 4,
 };
 
 /// The one table of the fault codes, as /diagnostics shows them (#121): the name and why the
@@ -63,6 +69,8 @@ enum class FaultCode : std::uint8_t
     case FaultCode::OVERHEAT:
       return "OVERHEAT: a servo stayed at its temperature limit for 1 s; the arm was stopped and "
              "powered off";
+    case FaultCode::SUPERVISOR_LOST:
+      return "SUPERVISOR_LOST: no heartbeat from the safety supervisor; targets held";
   }
   return "UNKNOWN: unknown fault code";
 }

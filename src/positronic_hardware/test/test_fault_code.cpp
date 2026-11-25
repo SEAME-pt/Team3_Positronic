@@ -23,6 +23,8 @@
 //   Write a GoogleTest suite for fault_code.hpp (#121), the one table of the driver's fault
 //   codes: each known code's line starts with its own name and has a reason after it; a value
 //   outside the enum is "UNKNOWN: unknown fault code", never dropped.
+// Follow-up prompt (merge of #136):
+//   Add SUPERVISOR_LOST (4) to the table; 5 is now the first value outside the enum.
 
 #include <gtest/gtest.h>
 
@@ -37,18 +39,19 @@ using positronic_hardware::FaultCode;
 
 TEST(FaultCode, EachCodeHasItsLineAndAnUnknownValueIsUnknown)
 {
-  const std::array<std::pair<FaultCode, std::string_view>, 4> names{{
+  const std::array<std::pair<FaultCode, std::string_view>, 5> names{{
     {FaultCode::NONE, "NONE: "},
     {FaultCode::LINK_TIMEOUT, "LINK_TIMEOUT: "},
     {FaultCode::TRACKING_ERROR, "TRACKING_ERROR: "},
     {FaultCode::OVERHEAT, "OVERHEAT: "},
+    {FaultCode::SUPERVISOR_LOST, "SUPERVISOR_LOST: "},
   }};
   for (const auto & [code, name] : names) {
     const std::string_view line{describe_fault(code)};
     EXPECT_EQ(line.substr(0, name.size()), name);
     EXPECT_GT(line.size(), name.size()) << name;  // a reason after the name
   }
-  for (const int value : {4, 255}) {
+  for (const int value : {5, 255}) {
     EXPECT_EQ(describe_fault(static_cast<FaultCode>(value)), "UNKNOWN: unknown fault code")
       << value;
   }
