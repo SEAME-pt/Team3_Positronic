@@ -21,10 +21,13 @@
 #ifndef POSITRONIC_SAFETY__SAFETY_SUPERVISOR_HPP_
 #define POSITRONIC_SAFETY__SAFETY_SUPERVISOR_HPP_
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,12 +62,17 @@ namespace positronic_safety
 ///
 /// This class only talks to ROS. What to do next is decided by SupervisorLogic, and "too long
 /// ago" by DeadlineWatchdog; both are tested without ROS. Every callback runs on one thread
-/// (spin it in a single-threaded executor), so there is no lock and no atomic. Every request
-/// is asynchronous: no callback ever waits for an answer.
+/// (spin it in a single-threaded executor), so there is no lock and no atomic, except for the
+/// few members halt_before_exit() shares with that thread. Every request is asynchronous: no
+/// callback ever waits for an answer.
+///
+/// It publishes ~/heartbeat at every check while it answers for the arm, resuming, monitoring
+/// or halting, and never while STOPPED (#136): the driver halts the arm by itself when the
+/// heartbeat stops while the arm may move, and refuses to activate without it.
 ///
 /// Limits: it stops the arm through the controller manager and the driver, so it cannot stop
-/// an arm whose serial line is dead (see "Link timeout" in the positronic_hardware README), and
-/// nothing stops the arm for it if its own process dies.
+/// an arm whose serial line is dead (see "Link timeout" in the positronic_hardware README). If
+/// its own process dies, the driver's dead-man check stops the arm after supervisor_timeout_ms.
 class SafetySupervisor : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -86,6 +94,14 @@ public:
 
   /// Runs the halt if the arm could still move. Keeps the clients, so the requests go out.
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & previous_state) override;
+
+  /// For the pre-shutdown hook of main() (#136): on Ctrl+C rclcpp runs no lifecycle transition,
+  /// so on_shutdown never comes and the arm would be left active with nobody watching. While the
+  /// supervisor is ACTIVE (the arm may move), the next check() starts the halt, and this waits
+  /// until its first step, hardware component inactive, is answered, at most
+  /// halt_step_timeout_ms. Otherwise it returns at once and nothing is sent. Called from
+  /// rclcpp's signal thread while the executor still spins on its own: the halt runs there.
+  void halt_before_exit();
 
 private:
   using Clock = DeadlineWatchdog::Clock;
@@ -160,6 +176,10 @@ private:
   /// Called when the logic moved to another mode.
   void on_mode_changed();
 
+  /// check()'s part of halt_before_exit(): starts the halt once, if the arm may move, and wakes
+  /// halt_before_exit() once its first step is no longer pending.
+  void serve_exit();
+
   // The three kinds of request. They return what send() returns.
   std::optional<bool> set_hardware_state(
     std::uint64_t ticket, std::uint8_t state_id, const char * label);
@@ -195,11 +215,23 @@ private:
   rclcpp::Subscription<DynamicJointState>::SharedPtr fault_subscription_;
   /// A plain publisher, not a lifecycle one: the status must also go out while INACTIVE.
   rclcpp::Publisher<SafetyStatus>::SharedPtr status_publisher_;
+  /// The driver's dead-man check listens to it (#136). Plain too, and created at configure
+  /// although check() publishes nothing while STOPPED: discovery is done before a resume needs
+  /// the driver to hear it.
+  rclcpp::Publisher<Heartbeat>::SharedPtr heartbeat_publisher_;
   rclcpp::Service<Trigger>::SharedPtr stop_service_;
   HardwareClient::SharedPtr hardware_client_;
   SwitchClient::SharedPtr switch_client_;
   TrajectoryClient::SharedPtr trajectory_client_;
   rclcpp::TimerBase::SharedPtr timer_;
+
+  // halt_before_exit() (#136). exit_requested_ and the three under exit_mutex_ are shared with
+  // the signal thread; exit_halt_started_ is the executor thread's alone.
+  std::atomic<bool> exit_requested_{false};
+  std::mutex exit_mutex_;
+  std::condition_variable exit_condition_;
+  bool exit_ready_{false};
+  bool exit_halt_started_{false};
 };
 
 }  // namespace positronic_safety

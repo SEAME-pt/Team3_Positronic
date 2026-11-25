@@ -110,6 +110,19 @@
 //   (hold, +10 deg, +20 deg) on J1 and the wrist J5 with fake_mode=measured, and checks the
 //   largest error between command and state: under the controller's 0.087 rad trajectory
 //   tolerance at 10 deg/s, over it at 30 deg/s.
+// Follow-up prompt (#136):
+//   The dead-man check: with supervisor_timeout_ms > 0 the plugin subscribes to the supervisor's
+//   heartbeat through the node ros2_control gives it, which needs an executor. Give the fixture
+//   an executor spun on a thread and a stand-in supervisor that publishes the heartbeat, and
+//   keep every other test at supervisor_timeout_ms = 0. Test: the heartbeat stops while active,
+//   then read() returns ERROR, the stop leaves for the arm and fault 4 is latched; an activate
+//   with the heartbeat back clears it and targets go out again; activate is refused without a
+//   heartbeat; nothing happens at 0; on_init refuses the check without a node; and a link
+//   timeout that came first keeps fault 1.
+// Follow-up prompt (#136, PR review):
+//   The supervisor now beats only from its resume on, so the first heartbeat reaches the driver
+//   while on_activate already waits. Test that a heartbeat that starts after activate() was
+//   called still activates.
 // Follow-up prompt (#120):
 //   The driver gpio may also declare driver/pose_age_s, the age in seconds of the pose read()
 //   publishes, NaN until the first pose. FAULT_GPIO now declares it, as the xacro does. Test:
@@ -150,6 +163,7 @@
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_interfaces/msg/heartbeat.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
@@ -194,6 +208,11 @@ constexpr double NO_FAULT{0.0};
 constexpr double LINK_TIMEOUT_FAULT{1.0};
 constexpr double OVERHEAT_FAULT{3.0};
 constexpr double TRACKING_ERROR_FAULT{2.0};
+constexpr double SUPERVISOR_LOST_FAULT{4.0};
+
+/// Where the supervisor publishes its heartbeat and the driver listens (#136), written out for
+/// the same reason.
+constexpr std::string_view HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -252,16 +271,22 @@ constexpr std::string_view FAKE_BACKEND{"<param name=\"backend\">fake</param>"};
 
 /// `description` (the arm's URDF by default) with a <ros2_control> block that uses RobotSystem
 /// for `joint_blocks`, with `parameters` in its <hardware> tag and `gpio` after the joints.
+/// Unless `parameters` set supervisor_timeout_ms, it is 0: the tests have no supervisor, so the
+/// dead-man check (#136) is off except in the tests about it.
 std::string urdf_with(
   const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND,
   const std::string & description = read_description(), std::string_view gpio = FAULT_GPIO)
 {
   std::string urdf{description};
+  std::string hardware_parameters{parameters};
+  if (parameters.find("supervisor_timeout_ms") == std::string_view::npos) {
+    hardware_parameters += param("supervisor_timeout_ms", "0");
+  }
   const std::string ros2_control{
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
     "<hardware><plugin>positronic_hardware/RobotSystem</plugin>" +
-    std::string{parameters} + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
+    hardware_parameters + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
   urdf.insert(urdf.rfind("</robot>"), ros2_control);
   return urdf;
 }
@@ -583,16 +608,72 @@ protected:
     rclcpp::shutdown();
   }
 
+  void TearDown() override
+  {
+    stop_spinning();
+  }
+
   /// Loads `urdf` into a fresh ResourceManager, as the controller manager does at start-up.
-  hardware_interface::ResourceManager & load(const std::string & urdf)
+  /// Without `executor` the component gets no ROS node, as in every test but the #136 ones.
+  hardware_interface::ResourceManager & load(
+    const std::string & urdf, const rclcpp::Executor::SharedPtr & executor = nullptr)
   {
     hardware_interface::ResourceManagerParams params;
     params.robot_description = urdf;
     params.clock = std::make_shared<rclcpp::Clock>();
     params.logger = rclcpp::get_logger("test_load_robot_system");
+    params.executor = executor;
     resource_manager_ = std::make_unique<hardware_interface::ResourceManager>(params, false);
     loaded_ = resource_manager_->load_and_initialize_components(params);
     return *resource_manager_;
+  }
+
+  /// load() with an executor spun on a thread of its own, as the controller manager does it, so
+  /// the component gets the node the dead-man check (#136) subscribes with. The same executor
+  /// spins a stand-in for the supervisor, which publishes a heartbeat every 20 ms, like the real
+  /// one, while beating_ is true.
+  void load_with_node(const std::string & urdf)
+  {
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    supervisor_ = std::make_shared<rclcpp::Node>("fake_safety_supervisor");
+    heartbeat_ = supervisor_->create_publisher<positronic_interfaces::msg::Heartbeat>(
+      std::string{HEARTBEAT_TOPIC}, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
+    beat_timer_ = supervisor_->create_wall_timer(std::chrono::milliseconds{20}, [this]() {
+          if (beating_) {
+            heartbeat_->publish(positronic_interfaces::msg::Heartbeat{});
+          }
+    });
+    executor_->add_node(supervisor_);
+    load(urdf, executor_);
+    spinner_ = std::thread{[this]() {
+        executor_->spin();
+      }};
+  }
+
+  /// True once the driver's subscription has matched the stand-in's publisher: before that, a
+  /// heartbeat would be lost to discovery, not to a dead supervisor. Waits at most 5 s.
+  bool driver_listens()
+  {
+    const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+    while (heartbeat_->get_subscription_count() == 0) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return true;
+  }
+
+  /// Stops the executor of load_with_node(), if any. Before the resource manager goes: the
+  /// heartbeat callback must not run while the plugin is destroyed.
+  void stop_spinning()
+  {
+    if (executor_ != nullptr) {
+      executor_->cancel();
+      if (spinner_.joinable()) {
+        spinner_.join();
+      }
+    }
   }
 
   /// Lifecycle state id of the component, or PRIMARY_STATE_UNKNOWN if it is not listed.
@@ -691,6 +772,14 @@ protected:
   bool loaded_{false};
   /// The controller side of the pseudo-terminal of load_on_pseudo_terminal(), or -1.
   int controller_{-1};
+
+  // load_with_node() (#136).
+  rclcpp::Executor::SharedPtr executor_;
+  std::thread spinner_;
+  rclcpp::Node::SharedPtr supervisor_;
+  rclcpp::Publisher<positronic_interfaces::msg::Heartbeat>::SharedPtr heartbeat_;
+  rclcpp::TimerBase::SharedPtr beat_timer_;
+  std::atomic<bool> beating_{false};
 };
 
 }  // namespace
@@ -1901,4 +1990,159 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
   resource_manager_.reset();
   arm.reset();
   ::close(controller);
+}
+
+// #136, the dead-man check. The tests sleep because the plugin reads the real clock; the exact
+// boundary of the timeout is LinkWatchdog's, tested without sleeps in test_link_watchdog.cpp.
+// A 200 ms timeout, and 400 ms of silence before the read() that must see it: the last
+// heartbeat may still arrive up to 20 ms after beating_ turns false, and the margin left covers
+// a loaded CI runner being late by as much as the timeout itself.
+constexpr std::string_view SUPERVISED{"<param name=\"supervisor_timeout_ms\">200</param>"};
+constexpr std::chrono::milliseconds PAST_THE_SUPERVISOR_TIMEOUT{400};
+
+TEST_F(LoadRobotSystem, SupervisorSilenceHaltsTheArmAndLatchesFault4UntilTheNextActivate)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  load_with_node(urdf_with(
+    all_good_joints(),
+    param("backend", "serial") + param("port", port.data()) + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  beating_ = true;
+  ASSERT_TRUE(driver_listens());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const std::size_t before_silence{arm->received().size()};
+
+  // The supervisor dies (kill -9: no halt from it). The next read() past the timeout halts.
+  beating_ = false;
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  // request_halt(): the serial thread sends the stop at its next turn, without waiting for it.
+  bool stopped{false};
+  for (int turn{0}; turn < 50 && !stopped; ++turn) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    const std::vector<std::uint8_t> sent{arm->received()};
+    stopped = find_request(sent, 0x29, before_silence) < sent.size();
+  }
+  EXPECT_TRUE(stopped);
+
+  // Latched: a configure shows fault 4, and with no heartbeat activate is refused.
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), SUPERVISOR_LOST_FAULT);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+
+  // The supervisor is back: its resume configures and activates, which clears the fault, and
+  // targets go out again.
+  beating_ = true;
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 0.1));
+  bool sent{false};
+  for (int cycle{0}; cycle < 20 && !sent; ++cycle) {
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    sent = arm->received_send_angles();
+  }
+  EXPECT_TRUE(sent);
+
+  stop_spinning();
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, ActivateWaitsForTheSupervisorHeartbeat)
+{
+  load_with_node(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(driver_listens());
+
+  // No supervisor: refused after waiting the timeout, before the servos get torque.
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  beating_ = true;
+  EXPECT_EQ(activate(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, ActivateHearsAHeartbeatThatStartsWhileItWaits)
+{
+  // As the supervisor's resume does: silent while STOPPED, it starts beating just before it
+  // asks for the activate. 1000 ms of wait for a heartbeat that starts after 100 ms: the 900 ms
+  // left is the margin for a loaded runner, not a requirement.
+  load_with_node(urdf_with(
+    all_good_joints(), std::string{FAKE_BACKEND} + param("supervisor_timeout_ms", "1000")));
+  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(driver_listens());
+
+  std::thread resume{[this]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+      beating_ = true;
+    }};
+  const hardware_interface::return_type result{activate()};
+  resume.join();
+  EXPECT_EQ(result, hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, NoSupervisorCheckAtZero)
+{
+  // With a node, so the check is off because of the 0 and not because it cannot subscribe.
+  load_with_node(
+    urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + param("supervisor_timeout_ms", "0")));
+  ASSERT_TRUE(loaded_);
+
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, InitRefusesTheSupervisorCheckWithoutANode)
+{
+  // No executor, so no node to subscribe with: the check must never be skipped silently.
+  load(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + std::string{SUPERVISED}));
+
+  EXPECT_FALSE(loaded_);
+}
+
+TEST_F(LoadRobotSystem, ALinkTimeoutKeepsItsFaultWhenTheSupervisorGoesSilentAfter)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  load_with_node(urdf_with(
+    all_good_joints(),
+    param("backend", "serial") + param("port", port.data()) + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  beating_ = true;
+  ASSERT_TRUE(driver_listens());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  // The arm goes silent first (300 ms against the 200 ms link timeout, as in the #35 test).
+  arm.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+
+  // Then the supervisor: still ERROR, nobody is left to act on the fault, but the fault stays
+  // the cause, 1.
+  beating_ = false;
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+
+  stop_spinning();
+  resource_manager_.reset();
+  ::close(controller_);
 }
