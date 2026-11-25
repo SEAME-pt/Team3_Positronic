@@ -18,6 +18,11 @@ The safety supervisor of the arm (#45): a lifecycle node on the Jetson, next to 
 | Supervisor deactivated | `DEACTIVATED` | `ros2 lifecycle set ... deactivate` |
 | Resume failed | `RESUME_FAILED` | a resume request failed or was not answered |
 
+Why the driver faulted comes on `/diagnostics` (#121), the hardware component's own status
+(`hardware_id` = `hardware_component`), within 50 ms of the code, before or after it: the
+supervisor logs it once when it comes, "The driver says why: LINK_TIMEOUT: no valid reply from
+the arm; targets held.", and again only after an OK. It decides nothing.
+
 "Fault data lost" exists because the controller manager deactivates the broadcaster too when
 the driver's `read()`/`write()` returns ERROR: a supervisor watching only the code would be
 blind exactly then.
@@ -58,7 +63,7 @@ of `SupervisorLogic`.
 ## Tests
 
 `make test`; no arm, no controller manager: `test_supervisor_logic` (the decisions),
-`test_deadline_watchdog` (timeouts), `test_fault_code` (reading the fault code),
+`test_deadline_watchdog` (timeouts), `test_fault_code` (reading the fault code and its reason),
 `test_safety_supervisor` (the node against a fake controller manager, trajectory controller
 and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`.
 
