@@ -43,6 +43,8 @@
 //   one, the gripper (id 7), the error byte and the sign-magnitude speed and load, the sync-write
 //   and our replies are not it, an empty buffer. angle_from_steps against values pymycobot
 //   reported.
+// Follow-up prompt (#170, the simplification):
+//   One test of angle_from_steps: the recorded poll of get_angles_19 adds no mutant to it.
 
 #include <gtest/gtest.h>
 
@@ -768,16 +770,4 @@ TEST(DecodeServoStatus, AngleFromSteps)
   EXPECT_EQ(pp::angle_from_steps(0, 0), 18000);
   EXPECT_EQ(pp::angle_from_steps(4095, 0), -17991);
   EXPECT_EQ(pp::angle_from_steps(0, 2), -18000);
-}
-
-TEST(DecodeServoStatus, AngleFromStepsEqualsTheAtomsReplyToTheSamePoll)
-{
-  // get_angles_19 of frames_20261016_124447.txt: the six status frames of one poll and the
-  // get_angles reply built from it. Rounding would be wrong on five of the six (-9, -18, -62,
-  // 44, 62).
-  constexpr std::array<std::uint16_t, 6> STEPS{2049, 2050, 2041, 2062, 2043, 2041};
-  constexpr std::array<pp::CentiDegrees, 6> REPLY{-8, -17, -61, -123, 43, 61};
-  for (std::size_t joint{0}; joint < STEPS.size(); ++joint) {
-    EXPECT_EQ(pp::angle_from_steps(STEPS.at(joint), joint), REPLY.at(joint)) << joint;
-  }
 }
