@@ -92,6 +92,16 @@ bool has_fault_gpio(const hardware_interface::HardwareInfo & info)
   return false;
 }
 
+/// True if the <gpio> named FAULT_GPIO declares a POSE_AGE_STATE state interface (#120). It is
+/// optional, so its absence is no error: the plugin then exports no pose age.
+bool declares_pose_age(const hardware_interface::HardwareInfo & info)
+{
+  return std::any_of(
+    info.gpios.begin(), info.gpios.end(), [](const hardware_interface::ComponentInfo & gpio) {
+      return gpio.name == FAULT_GPIO && has_interface(gpio.state_interfaces, POSE_AGE_STATE);
+    });
+}
+
 /// A FaultCode as the value of the fault state interface: a small whole number, exact in a double.
 constexpr double to_state(FaultCode code)
 {
@@ -342,6 +352,12 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     }
     fault_handle_ =
       get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{FAULT_STATE});
+    // #120: only when the URDF declares it; without it read() publishes no pose age.
+    pose_age_handle_.reset();
+    if (declares_pose_age(info_)) {
+      pose_age_handle_ =
+        get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{POSE_AGE_STATE});
+    }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
@@ -351,6 +367,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   for (const auto & [name, description] : joint_state_interfaces_) {
     set_state(name, std::numeric_limits<double>::quiet_NaN());
   }
+  // #120: no pose yet, so no age.
+  set_pose_age(std::nullopt);
   // #35: a fault latched before an on_error stays visible; only on_activate clears it.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), true);
   return CallbackReturn::SUCCESS;
@@ -528,8 +546,7 @@ void RobotSystem::report_echo_timeouts()
     get_logger(),
     "%" PRIu64
     " send_angles got no sync-write from the arm since the last report: each of their "
-    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
-    "and so does a send that reached the arm while it was still answering a request.",
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
     fresh.value());
 }
 
@@ -730,9 +747,14 @@ void RobotSystem::update_states(double dt)
   // No reply from the arm yet: keep the states NaN ("unknown") rather than publish the
   // placeholder pose, and keep the velocity estimator from using it as a baseline.
   if (!arm_->has_sample()) {
+    set_pose_age(std::nullopt);
     return;
   }
-  const JointPositions angles{arm_->read_angles()};
+  // #120: the pose and its age from one read of the backend, so the age is the one of the pose
+  // published below, measured up to this read().
+  const PoseSample sample{arm_->read_pose()};
+  const JointPositions & angles{sample.angles};
+  set_pose_age(sample.age);
   const JointPositions velocities{velocity_estimator_.update(angles, dt)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_set = false: never block on a controller that is reading the handle.
@@ -749,6 +771,19 @@ void RobotSystem::update_states(double dt)
     std::ignore = set_state(gripper_handles_.position, position, false);
     std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
+}
+
+void RobotSystem::set_pose_age(std::optional<std::chrono::steady_clock::duration> age)
+{
+  if (pose_age_handle_ == nullptr) {
+    return;
+  }
+  double age_ms{std::numeric_limits<double>::quiet_NaN()};
+  if (age.has_value()) {
+    age_ms = std::chrono::duration<double, std::milli>{age.value()}.count();
+  }
+  // wait_until_set = false, as for the joints: never block on a controller reading the handle.
+  std::ignore = set_state(pose_age_handle_, age_ms, false);
 }
 
 }  // namespace positronic_hardware

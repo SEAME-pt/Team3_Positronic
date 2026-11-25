@@ -23,8 +23,10 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -63,9 +65,9 @@ enum class FaultCode : std::uint8_t
   /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
   /// the next activate, targets held meanwhile, like the link timeout.
   TRACKING_ERROR = 2,
-  /// A servo stayed at or above servo_temp_limit_c for 1 s, no reading of it more than 1 degC
-  /// under: the serial thread has already stopped the arm and powered its servos off. read()
-  /// also returns ERROR. Latched until the next activate.
+  /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
+  /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
+  /// next activate.
   OVERHEAT = 3,
 };
 
@@ -73,6 +75,12 @@ enum class FaultCode : std::uint8_t
 /// The supervisor reads "driver/fault_code".
 inline constexpr std::string_view FAULT_GPIO{"driver"};
 inline constexpr std::string_view FAULT_STATE{"fault_code"};
+
+/// #120: the age of the pose read() publishes, in ms, on the same gpio: the time from the
+/// arrival of the reply that carried the pose to the read() that publishes it. NaN until the
+/// first pose. Optional: exported only when the <gpio name="driver"> declares it, as
+/// positronic_real.urdf.xacro does; nothing reads it yet.
+inline constexpr std::string_view POSE_AGE_STATE{"pose_age_ms"};
 
 class RobotSystem : public hardware_interface::SystemInterface
 {
@@ -155,8 +163,12 @@ private:
   };
 
   /// Asks the arm where the joints are, estimates the velocity from the change since the last
-  /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
+  /// call `dt` seconds ago, and stores both in the state interfaces, with the age of that pose
+  /// (#120). No allocation, no blocking.
   void update_states(double dt);
+
+  /// Writes `age` to driver/pose_age_ms in ms, NaN for nullopt, when the URDF declares it.
+  void set_pose_age(std::optional<std::chrono::steady_clock::duration> age);
 
   HardwareConfig config_{};
   std::unique_ptr<ArmBackend> arm_;
@@ -165,6 +177,8 @@ private:
   std::array<JointHandles, NUM_JOINTS> handles_{};
   /// "driver/fault_code", looked up once like the joint handles.
   hardware_interface::StateInterface::SharedPtr fault_handle_;
+  /// "driver/pose_age_ms" (#120), or null when the URDF does not declare it.
+  hardware_interface::StateInterface::SharedPtr pose_age_handle_;
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
