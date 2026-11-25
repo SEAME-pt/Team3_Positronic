@@ -491,14 +491,17 @@ and nothing reads the age yet: the latency budget of sprint 4 and the camera and
 module 2 will.
 
 **On the arm.** 60 s with the arm moving under the JTC (J1 10 deg out and back at 2.5 deg/s),
-procedure and tool in `docs/03_verification/pose_age`. Run on <date>, driver at <commit>:
+procedure and tool in `docs/03_verification/pose_age`. Run on 25 Nov 2026:
 
 | Samples | NaN | min (ms) | mean (ms) | p50 (ms) | p99 (ms) | max (ms) |
 |---|---|---|---|---|---|---|
-| <count> in 60 s | <nan> | <min> | <mean> | <p50> | <p99> | <max> |
+| 1801 in 60 s | 0 | 0.1 | 26.4 | 26.8 | 32.9 | 54.5 |
 
-<one or two sentences on what the numbers say: the spread within one turn, any age above one turn
-and when it came>
+The ages sit inside one controller period (33 ms at 30 Hz) and close to its end: the pose of a
+turn is published when the sync-write after that cycle's command closes, a few ms into the
+period, and the next `read()` comes one period after the last. Under 1 % of the samples are
+older than one period, up to 54.5 ms: a turn that published no pose, so `read()` got the pose
+of the turn before.
 
 ## Requests to the Atom (#149)
 
