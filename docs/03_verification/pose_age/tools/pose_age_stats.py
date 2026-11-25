@@ -27,7 +27,10 @@
 #   value, and print the count, the NaN count, min, mean, p50, p99 and max as a Markdown table
 #   for the README of positronic_hardware, optionally with the raw values in a CSV. Keep the
 #   parsing and the statistics in pure functions, unit-tested without ROS.
-"""Record driver/pose_age_ms from /dynamic_joint_states and summarise it (#120)."""
+# Follow-up prompt:
+#   The interface is now driver/pose_age_s, in seconds (CONTRIBUTING, Units). Read seconds,
+#   keep the table and the CSV in ms for people: convert once, where the value is read.
+"""Record driver/pose_age_s from /dynamic_joint_states and summarise it in ms (#120)."""
 
 # Run it inside the ROS 2 container, next to the driver, while the arm moves:
 #   python3 docs/03_verification/pose_age/tools/pose_age_stats.py --duration 60 --csv ages.csv
@@ -39,23 +42,25 @@ import statistics
 import sys
 
 GPIO = 'driver'
-INTERFACE = 'pose_age_ms'
+INTERFACE = 'pose_age_s'
+MS_PER_S = 1000.0
 TOPIC = '/dynamic_joint_states'
 
 
 def find_age(joint_names, interface_values, gpio=GPIO, interface=INTERFACE):
     """
-    Return the value of `gpio`/`interface` in one DynamicJointState, or None when absent.
+    Return the age in one DynamicJointState in ms, or None when absent.
 
-    `joint_names` and `interface_values` are the two lists of the message: the entry of a name
-    has `interface_names` and `values`, in the same order.
+    The driver publishes `gpio`/`interface` in seconds; the table and the CSV are in ms, so the
+    value is converted here, once. `joint_names` and `interface_values` are the two lists of the
+    message: the entry of a name has `interface_names` and `values`, in the same order.
     """
     for name, entry in zip(joint_names, interface_values):
         if name != gpio:
             continue
         for key, value in zip(entry.interface_names, entry.values):
             if key == interface:
-                return float(value)
+                return float(value) * MS_PER_S
     return None
 
 

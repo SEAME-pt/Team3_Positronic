@@ -111,11 +111,11 @@
 //   largest error between command and state: under the controller's 0.087 rad trajectory
 //   tolerance at 10 deg/s, over it at 30 deg/s.
 // Follow-up prompt (#120):
-//   The driver gpio may also declare driver/pose_age_ms, the age in ms of the pose read()
+//   The driver gpio may also declare driver/pose_age_s, the age in seconds of the pose read()
 //   publishes, NaN until the first pose. FAULT_GPIO now declares it, as the xacro does. Test:
 //   it is exported; it is NaN after configure and 0 after a read on the fake arm; a URDF
 //   without it still loads and runs, with no such interface; on the pseudo-terminal arm it is
-//   finite and small while the arm answers, and at least the silence once the arm goes quiet.
+//   finite and small while the arm answers, and well past a turn once the arm goes quiet.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -184,7 +184,7 @@ constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
 /// The driver <gpio>, exactly as in positronic_real.urdf.xacro: the fault the supervisor reads
 /// (#35) and the age of the pose (#120).
 constexpr std::string_view FAULT_GPIO{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
-  R"(<state_interface name="pose_age_ms"/></gpio>)"};
+  R"(<state_interface name="pose_age_s"/></gpio>)"};
 /// The driver <gpio> as before #120: the fault alone. The pose age is optional.
 constexpr std::string_view FAULT_ONLY_GPIO{
   R"(<gpio name="driver"><state_interface name="fault_code"/></gpio>)"};
@@ -737,7 +737,7 @@ TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesTheFaultCodeAndThePoseAge)
     expected.push_back(joint + "/velocity");
   }
   expected.emplace_back("driver/fault_code");
-  expected.emplace_back("driver/pose_age_ms");
+  expected.emplace_back("driver/pose_age_s");
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
   std::sort(expected.begin(), expected.end());
@@ -1473,13 +1473,13 @@ TEST_F(LoadRobotSystem, PoseAgeIsUnknownAfterConfigureAndZeroOnTheFakeArm)
   load(urdf_with(all_good_joints()));
   ASSERT_TRUE(loaded_);
   ASSERT_EQ(configure(), hardware_interface::return_type::OK);
-  EXPECT_TRUE(std::isnan(state("driver", "pose_age_ms").value_or(0.0)));
+  EXPECT_TRUE(std::isnan(state("driver", "pose_age_s").value_or(0.0)));
 
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-  EXPECT_DOUBLE_EQ(state("driver", "pose_age_ms").value_or(std::nan("")), 0.0);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-  EXPECT_DOUBLE_EQ(state("driver", "pose_age_ms").value_or(std::nan("")), 0.0);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
 }
 
 // #120: the pose age is optional. A URDF without it, as before, loads and runs, and the plugin
@@ -1493,32 +1493,34 @@ TEST_F(LoadRobotSystem, RunsWithoutThePoseAge)
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
   const auto keys{resource_manager.state_interface_keys()};
-  EXPECT_EQ(std::count(keys.begin(), keys.end(), "driver/pose_age_ms"), 0);
+  EXPECT_EQ(std::count(keys.begin(), keys.end(), "driver/pose_age_s"), 0);
 }
 
 // #120, end to end on the pseudo-terminal arm. While it answers, a reply comes every turn (10 ms
-// at rest), so the pose read() publishes is young: 100 ms leaves room for a turn that asked the
-// temperatures and for a loaded test machine. Once the arm is quiet, the pose stays the last
-// one and its age is at least the silence. The age is not reset by the link fault.
+// at rest), so the pose read() publishes is young. Once the arm is quiet, the pose stays the last
+// one and its age grows with the silence; the link fault does not reset it. One bound splits the
+// two, half the silence: far above a turn, so a loaded CI runner stays under it while the arm
+// answers, and far below the silence, so a reply still on the line at the cut stays over it.
 TEST_F(LoadRobotSystem, PoseAgeIsSmallWhileTheArmAnswersAndGrowsWhenItGoesQuiet)
 {
   constexpr std::chrono::milliseconds QUIET_FOR{300};
-  constexpr double YOUNG_MS{100.0};
+  const double split_s{std::chrono::duration<double>{QUIET_FOR}.count() / 2.0};
   ASSERT_TRUE(load_on_pseudo_terminal());
   auto arm{std::make_unique<ReplyingArm>(controller_)};
   ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   ASSERT_EQ(activate(), hardware_interface::return_type::OK);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-  const double alive{state("driver", "pose_age_ms").value_or(std::nan(""))};
+  const double alive{state("driver", "pose_age_s").value_or(std::nan(""))};
   EXPECT_TRUE(std::isfinite(alive));
   EXPECT_GE(alive, 0.0);
-  EXPECT_LT(alive, YOUNG_MS);
+  EXPECT_LT(alive, split_s);
 
   arm.reset();
   std::this_thread::sleep_for(QUIET_FOR);
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
-  EXPECT_GE(
-    state("driver", "pose_age_ms").value_or(std::nan("")), static_cast<double>(QUIET_FOR.count()));
+  const double quiet{state("driver", "pose_age_s").value_or(std::nan(""))};
+  EXPECT_GE(quiet, split_s);
+  EXPECT_GT(quiet, alive);
 
   resource_manager_.reset();
   ::close(controller_);

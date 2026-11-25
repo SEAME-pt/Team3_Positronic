@@ -54,7 +54,7 @@
 #   use camera_link as their frame_id. Check that camera_link is in the description and hangs
 #   under joint 6 (joint6_flange) through fixed joints only, for both backends.
 # Follow-up prompt (#120):
-#   The driver gpio also declares pose_age_ms, the age of the published pose, as a state
+#   The driver gpio also declares pose_age_s, the age of the published pose, as a state
 #   interface and never as a command, for both backends. joint_state_broadcaster publishes it on
 #   /dynamic_joint_states with driver/fault_code, as long as the yaml does not narrow it
 #   (test_controllers_config.py checks that).
@@ -266,7 +266,7 @@ def test_driver_reports_the_fault_code(backend):
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
 def test_driver_reports_the_pose_age(backend):
-    """Check that the driver gpio has a pose_age_ms state and no such command (#120)."""
+    """Check that the driver gpio has a pose_age_s state and no such command (#120)."""
     drivers = [
         gpio
         for gpio in expand(backend=backend).findall('ros2_control/gpio')
@@ -277,8 +277,8 @@ def test_driver_reports_the_pose_age(backend):
     commands = [
         command.get('name') for command in drivers[0].findall('command_interface')
     ]
-    assert states.count('pose_age_ms') == 1
-    assert 'pose_age_ms' not in commands
+    assert states.count('pose_age_s') == 1
+    assert 'pose_age_s' not in commands
 
 
 def test_supervisor_reads_the_names_of_this_description():

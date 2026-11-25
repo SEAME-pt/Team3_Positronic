@@ -1,6 +1,6 @@
 # Pose age on the arm (#120)
 
-The driver publishes `driver/pose_age_ms`: how old the pose of `/joint_states` is, in ms, from
+The driver publishes `driver/pose_age_s`: how old the pose of `/joint_states` is, in seconds, from
 the arrival of the serial reply that carried it to the `read()` that published it. This run
 records it for 60 s with the arm moving under the `joint_trajectory_controller` and gives the
 min, mean and max that go in the README of `positronic_hardware` (section "Pose age").
@@ -8,7 +8,7 @@ min, mean and max that go in the README of `positronic_hardware` (section "Pose 
 | File | What it is |
 |---|---|
 | `trajectories/moving_60s.yaml` | J1 10 deg out and back in 4 s legs (2.5 deg/s), seven times, 60 s in all. |
-| `tools/pose_age_stats.py` | Subscribes to `/dynamic_joint_states` for 60 s and prints the Markdown table of the ages. |
+| `tools/pose_age_stats.py` | Subscribes to `/dynamic_joint_states` for 60 s and prints the Markdown table of the ages, in ms. |
 | `tools/test_pose_age_stats.py` | Its unit tests, no ROS needed: `python3 -m pytest docs/03_verification/pose_age/tools`. |
 
 ## Safety
@@ -42,7 +42,7 @@ start pose, then start the recording:
 ```bash
 ssh -t nano docker exec -it positronic-arm bash
 source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash
-ros2 topic echo --once /dynamic_joint_states   # "driver" has fault_code and pose_age_ms
+ros2 topic echo --once /dynamic_joint_states   # "driver" has fault_code and pose_age_s
 ros2 action send_goal /arm_controller/follow_joint_trajectory \
   control_msgs/action/FollowJointTrajectory \
   "$(cat docs/03_verification/jtc_on_the_arm/trajectories/T0_to_start.yaml)"

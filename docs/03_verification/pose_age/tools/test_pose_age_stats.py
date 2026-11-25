@@ -26,12 +26,16 @@
 #   missing; summarize() gives count, NaN count, min, mean, p50, p99 and max, leaves NaN out of
 #   the statistics, and gives None for every statistic when no age is finite; percentile() at
 #   its edges; markdown() writes '-' for a missing value.
+# Follow-up prompt:
+#   The interface is now driver/pose_age_s, in seconds; find_age() returns ms. Check the
+#   conversion, and that NaN stays NaN.
 """Unit tests of pose_age_stats.py."""
 
 import math
 from types import SimpleNamespace
 
 import pose_age_stats
+import pytest
 
 
 def entry(names, values):
@@ -44,9 +48,9 @@ def test_finds_the_age_among_other_entries():
     names = ['joint2_to_joint1', 'driver']
     values = [
         entry(['position', 'velocity'], [0.1, 0.0]),
-        entry(['fault_code', 'pose_age_ms'], [0.0, 12.5]),
+        entry(['fault_code', 'pose_age_s'], [0.0, 0.0125]),
     ]
-    assert pose_age_stats.find_age(names, values) == 12.5
+    assert pose_age_stats.find_age(names, values) == pytest.approx(12.5)
 
 
 def test_no_driver_or_no_age_is_none():
@@ -58,7 +62,7 @@ def test_no_driver_or_no_age_is_none():
 
 def test_nan_is_returned_as_nan():
     """Check that NaN, the age before the first pose, comes through as NaN, not None."""
-    age = pose_age_stats.find_age(['driver'], [entry(['pose_age_ms'], [math.nan])])
+    age = pose_age_stats.find_age(['driver'], [entry(['pose_age_s'], [math.nan])])
     assert math.isnan(age)
 
 

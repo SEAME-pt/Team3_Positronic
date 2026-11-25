@@ -779,12 +779,13 @@ void RobotSystem::set_pose_age(std::optional<std::chrono::steady_clock::duration
   if (pose_age_handle_ == nullptr) {
     return;
   }
-  double age_ms{std::numeric_limits<double>::quiet_NaN()};
+  // Seconds, as every ROS interface (CONTRIBUTING, Units).
+  double age_s{std::numeric_limits<double>::quiet_NaN()};
   if (age.has_value()) {
-    age_ms = std::chrono::duration<double, std::milli>{age.value()}.count();
+    age_s = std::chrono::duration<double>{age.value()}.count();
   }
   // wait_until_set = false, as for the joints: never block on a controller reading the handle.
-  std::ignore = set_state(pose_age_handle_, age_ms, false);
+  std::ignore = set_state(pose_age_handle_, age_s, false);
 }
 
 }  // namespace positronic_hardware

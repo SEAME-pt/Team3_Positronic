@@ -97,7 +97,7 @@
          fault; any other value is a latched fault, see FaultCode in positronic_hardware.hpp. -->
     <gpio name="driver">
       <state_interface name="fault_code"/>
-      <state_interface name="pose_age_ms"/>
+      <state_interface name="pose_age_s"/>
     </gpio>
   </ros2_control>
 </robot>

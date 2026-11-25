@@ -76,11 +76,11 @@ enum class FaultCode : std::uint8_t
 inline constexpr std::string_view FAULT_GPIO{"driver"};
 inline constexpr std::string_view FAULT_STATE{"fault_code"};
 
-/// #120: the age of the pose read() publishes, in ms, on the same gpio: the time from the
+/// #120: the age of the pose read() publishes, in seconds (SI), on the same gpio: the time from the
 /// arrival of the reply that carried the pose to the read() that publishes it. NaN until the
 /// first pose. Optional: exported only when the <gpio name="driver"> declares it, as
 /// positronic_real.urdf.xacro does; nothing reads it yet.
-inline constexpr std::string_view POSE_AGE_STATE{"pose_age_ms"};
+inline constexpr std::string_view POSE_AGE_STATE{"pose_age_s"};
 
 class RobotSystem : public hardware_interface::SystemInterface
 {
@@ -167,7 +167,7 @@ private:
   /// (#120). No allocation, no blocking.
   void update_states(double dt);
 
-  /// Writes `age` to driver/pose_age_ms in ms, NaN for nullopt, when the URDF declares it.
+  /// Writes `age` to driver/pose_age_s in seconds, NaN for nullopt, when the URDF declares it.
   void set_pose_age(std::optional<std::chrono::steady_clock::duration> age);
 
   HardwareConfig config_{};
@@ -177,7 +177,7 @@ private:
   std::array<JointHandles, NUM_JOINTS> handles_{};
   /// "driver/fault_code", looked up once like the joint handles.
   hardware_interface::StateInterface::SharedPtr fault_handle_;
-  /// "driver/pose_age_ms" (#120), or null when the URDF does not declare it.
+  /// "driver/pose_age_s" (#120), or null when the URDF does not declare it.
   hardware_interface::StateInterface::SharedPtr pose_age_handle_;
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
