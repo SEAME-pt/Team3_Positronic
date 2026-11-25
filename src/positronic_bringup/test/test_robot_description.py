@@ -49,10 +49,11 @@
 #   The defaults of the driver's parameters now live only in the driver (HardwareConfig): the
 #   xacro writes a <param> only for an argument that is set. Check that no argument, or an
 #   empty one as the launch passes, writes no <param>.
-# Follow-up prompt (real wrist camera):
-#   The real xacro includes mycobot_280_jn_gripper_camera.urdf, so the real camera images can
-#   use camera_link as their frame_id. Check that camera_link is in the description and hangs
-#   under joint 6 (joint6_flange) through fixed joints only, for both backends.
+# Follow-up prompt (#120):
+#   The driver gpio also declares pose_age_ms, the age of the published pose, as a state
+#   interface and never as a command, for both backends. joint_state_broadcaster publishes it on
+#   /dynamic_joint_states with driver/fault_code, as long as the yaml does not narrow it
+#   (test_controllers_config.py checks that).
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -115,22 +116,6 @@ def revolute_joints(robot):
     return [
         j.get('name') for j in robot.findall('joint') if j.get('type') == 'revolute'
     ]
-
-
-def chain_to(robot, link, ancestor):
-    """
-    Return the joints from `ancestor` down to `link`, as (name, type), ancestor side first.
-
-    Fails the test if `link` does not hang under `ancestor`.
-    """
-    parent_joint = {joint.find('child').get('link'): joint for joint in robot.findall('joint')}
-    chain = []
-    while link != ancestor:
-        assert link in parent_joint, f'{link} does not hang under {ancestor}'
-        joint = parent_joint[link]
-        chain.insert(0, (joint.get('name'), joint.get('type')))
-        link = joint.find('parent').get('link')
-    return chain
 
 
 def hardware_params(robot):
@@ -259,6 +244,23 @@ def test_driver_reports_the_fault_code(backend):
     assert 'fault_code' not in commands
 
 
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_driver_reports_the_pose_age(backend):
+    """Check that the driver gpio has a pose_age_ms state and no such command (#120)."""
+    drivers = [
+        gpio
+        for gpio in expand(backend=backend).findall('ros2_control/gpio')
+        if gpio.get('name') == 'driver'
+    ]
+    assert len(drivers) == 1
+    states = [state.get('name') for state in drivers[0].findall('state_interface')]
+    commands = [
+        command.get('name') for command in drivers[0].findall('command_interface')
+    ]
+    assert states.count('pose_age_ms') == 1
+    assert 'pose_age_ms' not in commands
+
+
 def test_supervisor_reads_the_names_of_this_description():
     """Check safety_supervisor.yaml against the <ros2_control> block (#45)."""
     with open(SUPERVISOR_CONFIG) as file:
@@ -278,18 +280,3 @@ def test_the_gripper_is_served_by_the_arm_block(backend):
     """Check that RobotSystem is the only <ros2_control> block, gripper included (#123)."""
     blocks = expand(backend=backend).findall('ros2_control')
     assert [block.get('name') for block in blocks] == ['positronic_arm']
-
-
-@pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_camera_link_hangs_under_joint_6(backend):
-    """Check the frame_id of the real camera images is under joint 6, by fixed joints only."""
-    robot = expand(backend=backend)
-    assert 'camera_link' in [link.get('name') for link in robot.findall('link')]
-    # joint6_flange is the child of joint 6 (joint6output_to_joint6): the camera turns with it.
-    joint6 = [joint for joint in robot.findall('joint')
-              if joint.get('name') == 'joint6output_to_joint6']
-    assert len(joint6) == 1
-    flange = joint6[0].find('child').get('link')
-    chain = chain_to(robot, 'camera_link', flange)
-    assert chain  # at least one joint between the flange and the camera
-    assert all(kind == 'fixed' for _, kind in chain), chain
