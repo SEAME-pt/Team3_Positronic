@@ -353,6 +353,25 @@ TEST_F(MissionNodeTest, CancelMidCartesianGivesCanceledAndStopped)
   EXPECT_TRUE(wait_for_state(State::STOPPED));
 }
 
+// Redundant test, since the same check already exists for the Pose.
+TEST_F(MissionNodeTest, EStopMidCartesianAbortsWithStopped)
+{
+  mock_->duration_ms = 2000;
+  auto handle = send_waypoint(valid_waypoint());
+  ASSERT_NE(handle, nullptr);
+  ASSERT_TRUE(wait_for_state(State::MOVING));
+  auto stop = call_stop();
+  ASSERT_NE(stop, nullptr);
+  EXPECT_TRUE(stop->accepted);
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->code, ResultCode::ABORTED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::STOPPED);
+  EXPECT_EQ(mock_->cartesian_calls, 1);
+  EXPECT_TRUE(wait_for_state(State::STOPPED));
+  EXPECT_GE(mock_->stops, 1);
+}
+
 // A backend exception must not kill the node. We can't know if the arm moved, so the goal ends
 // as ERROR and the arm state is ERROR (a reset is needed). The heartbeat reporting ERROR also
 // shows the node is still running.
