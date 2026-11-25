@@ -72,11 +72,7 @@ the wire, same driver base).
 - **`joint_limits.yaml` (#41): the byte gives no reason to change the limits.** The working limit
   comes from the controller's tracking, not the byte: on the base ~4° worst error at 20 deg/s (T4)
   with any tip, so #33's 15 deg/s stays; the wrist only at 30 (above), ~4° at 17.5 deg/s.
-- **One rest pose, for camera + gripper (the setup we keep): J4 39.8°, the other joints 0, J5
-  locked where it settles.** There the tip balances, so J4 holds no load; with J4 at 0 or the tip
-  tilted, J4 and J5 heat until the 60 °C cut powers the arm off and it drops. J5 is released and
-  locked again after the arm reaches it, because a target even 1° off where J5 settles keeps it
-  pushing (44 → 63 °C in 50 min). The values for the other tips are under Temperature.
+- Keep a rest pose per tip and a temperature readout in any long arm session.
 
 ## Not measured
 
