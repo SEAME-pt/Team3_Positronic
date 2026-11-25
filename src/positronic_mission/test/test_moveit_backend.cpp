@@ -30,7 +30,9 @@
 
 #include <gtest/gtest.h>
 #include <chrono>
+#include <iterator>
 #include <memory>
+#include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "positronic_mission/motion_backend.hpp"
@@ -79,9 +81,8 @@ class MoveitBackendTest : public ::testing::Test
 protected:
   static void SetUpTestSuite()
   {
-    // MoveIt waits for the robot description (URDF and SRDF) on a topic before giving up; its
-    // default wait is 10 s each. The backend's node takes parameters from the global arguments,
-    // so short waits keep the ready() test fast. No robot description is ever published here.
+    // Arguments are only a safety net,
+    // since moveit ready() now returns before Moveit is ever constructed
     const char * argv[] = {"test", "--ros-args",
       "-p", "robot_description_timeout:=0.1",
       "-p", "robot_description_semantic_timeout:=0.1"};
@@ -139,14 +140,14 @@ TEST_F(MoveitBackendTest, StopWithoutMoveGroupIsSafe)
 }
 
 // No robot description: ready() returns false at its first check, so the mission node stays
-// INACTIVE. It must return in bounded time, or activating the node would hang. The 5 s bound
+// INACTIVE. It must return in bounded time, or activating the node would hang. The 500 ms bound
 // catches a regression where ready() starts waiting on MoveIt without the description.
 // (The "move_group does not answer" path is tested in MoveitBackendReadyTest.)
 TEST_F(MoveitBackendTest, ReadyIsFalseWithoutMoveIt)
 {
   const auto start = std::chrono::steady_clock::now();
   EXPECT_FALSE(backend_->ready());
-  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(5));
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(500));
 
   // Still not connected afterwards: a failed ready() leaves no half-built move_group.
   EXPECT_EQ(backend_->plan_and_execute(any_pose()), MotionOutcome::PLANNING_FAILED);
@@ -158,6 +159,13 @@ TEST_F(MoveitBackendTest, DestructorReturns)
   const auto start = std::chrono::steady_clock::now();
   backend_.reset();
   EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+}
+
+TEST_F(MoveitBackendTest, CreateDestroyImmediatelyDoesNotHang)
+{
+  for (int i = 0; i < 20; i++) {
+    MoveitBackend("arm");
+  }
 }
 
 // The stop stays until reset_stop(): a second call is preempted too.
