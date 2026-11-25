@@ -110,6 +110,12 @@
 //   (hold, +10 deg, +20 deg) on J1 and the wrist J5 with fake_mode=measured, and checks the
 //   largest error between command and state: under the controller's 0.087 rad trajectory
 //   tolerance at 10 deg/s, over it at 30 deg/s.
+// Follow-up prompt (#120):
+//   The driver gpio may also declare driver/pose_age_ms, the age in ms of the pose read()
+//   publishes, NaN until the first pose. FAULT_GPIO now declares it, as the xacro does. Test:
+//   it is exported; it is NaN after configure and 0 after a read on the fake arm; a URDF
+//   without it still loads and runs, with no such interface; on the pseudo-terminal arm it is
+//   finite and small while the arm answers, and at least the silence once the arm goes quiet.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -175,8 +181,12 @@ constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
 constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
 /// ros2_control's clamping limiter off, as in positronic_real.urdf.xacro (#34).
 constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
-/// The fault <gpio> the supervisor reads (#35), exactly as in positronic_real.urdf.xacro.
-constexpr std::string_view FAULT_GPIO{
+/// The driver <gpio>, exactly as in positronic_real.urdf.xacro: the fault the supervisor reads
+/// (#35) and the age of the pose (#120).
+constexpr std::string_view FAULT_GPIO{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+  R"(<state_interface name="pose_age_ms"/></gpio>)"};
+/// The driver <gpio> as before #120: the fault alone. The pose age is optional.
+constexpr std::string_view FAULT_ONLY_GPIO{
   R"(<gpio name="driver"><state_interface name="fault_code"/></gpio>)"};
 /// The values of FaultCode the supervisor relies on: written out here, not taken from the
 /// header, so the test fails if someone renumbers them.
@@ -715,18 +725,19 @@ TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesAndTheFaultCode)
+TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesTheFaultCodeAndThePoseAge)
 {
   auto & resource_manager{load(urdf_with(all_good_joints()))};
   ASSERT_TRUE(loaded_);
 
   std::vector<std::string> expected;
-  expected.reserve(2 * JOINTS.size() + 1);
+  expected.reserve(2 * JOINTS.size() + 2);
   for (const auto & joint : JOINTS) {
     expected.push_back(joint + "/position");
     expected.push_back(joint + "/velocity");
   }
   expected.emplace_back("driver/fault_code");
+  expected.emplace_back("driver/pose_age_ms");
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
   std::sort(expected.begin(), expected.end());
@@ -1453,6 +1464,64 @@ TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+}
+
+// #120: the fake pose is computed at the read() that publishes it, so its age is 0, and NaN
+// ("unknown") before any read, like the joints.
+TEST_F(LoadRobotSystem, PoseAgeIsUnknownAfterConfigureAndZeroOnTheFakeArm)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_TRUE(std::isnan(state("driver", "pose_age_ms").value_or(0.0)));
+
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_ms").value_or(std::nan("")), 0.0);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_ms").value_or(std::nan("")), 0.0);
+}
+
+// #120: the pose age is optional. A URDF without it, as before, loads and runs, and the plugin
+// exports no such interface.
+TEST_F(LoadRobotSystem, RunsWithoutThePoseAge)
+{
+  auto & resource_manager{
+    load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), FAULT_ONLY_GPIO))};
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const auto keys{resource_manager.state_interface_keys()};
+  EXPECT_EQ(std::count(keys.begin(), keys.end(), "driver/pose_age_ms"), 0);
+}
+
+// #120, end to end on the pseudo-terminal arm. While it answers, a reply comes every turn (10 ms
+// at rest), so the pose read() publishes is young: 100 ms leaves room for a turn that asked the
+// temperatures and for a loaded test machine. Once the arm is quiet, the pose stays the last
+// one and its age is at least the silence. The age is not reset by the link fault.
+TEST_F(LoadRobotSystem, PoseAgeIsSmallWhileTheArmAnswersAndGrowsWhenItGoesQuiet)
+{
+  constexpr std::chrono::milliseconds QUIET_FOR{300};
+  constexpr double YOUNG_MS{100.0};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const double alive{state("driver", "pose_age_ms").value_or(std::nan(""))};
+  EXPECT_TRUE(std::isfinite(alive));
+  EXPECT_GE(alive, 0.0);
+  EXPECT_LT(alive, YOUNG_MS);
+
+  arm.reset();
+  std::this_thread::sleep_for(QUIET_FOR);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_GE(
+    state("driver", "pose_age_ms").value_or(std::nan("")), static_cast<double>(QUIET_FOR.count()));
+
+  resource_manager_.reset();
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)

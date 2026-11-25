@@ -115,6 +115,14 @@
 //   wait for the stored last target; a stale timeout over max_age where the requests are the
 //   only readings; check the fallback within two periods of the send and the off-poll pose
 //   10 ms after the sync-write; drop the tests whose mutants others kill.
+// Follow-up prompt (#120):
+//   read_pose() returns the pose of read_angles() with the time since the thread decoded the
+//   reply that carried it, nullopt before the first one. With ScriptedArm, which now can lose
+//   its get_angles replies and records when it hands each one out, check: no age before the
+//   first reply; replies at known times give the age since the last one, within the decode
+//   margin; lost replies make the age grow by the time that passed and keep the pose; the next
+//   reply brings it back down to the time since that reply. With the pose from the poll, the
+//   age counts from the sync-write that closed the poll.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -1145,9 +1153,13 @@ public:
     written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
     const std::uint8_t id{count == 5 ? *std::next(data, 3) : std::uint8_t{0}};
     if (id == GET_ANGLES_ID) {
+      if (!answer_angles_) {
+        return true;  // a lost reply (#120): the request went out, nothing comes back
+      }
       for (const auto & burst : recorded_bursts()) {
         pending_.insert(pending_.end(), burst.begin(), burst.end());
       }
+      angles_pending_ = true;
     } else if (id == TEMPS_ID && answer_temperatures_) {
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x08, 0xE5});
       pending_.insert(pending_.end(), temperatures_.begin(), temperatures_.end());
@@ -1172,7 +1184,26 @@ public:
     const std::size_t n{std::min(max, pending_.size())};
     std::copy_n(pending_.begin(), n, dst);
     pending_.erase(pending_.begin(), std::next(pending_.begin(), static_cast<std::ptrdiff_t>(n)));
+    // The get_angles reply is complete once nothing of it is left to hand out (#120).
+    if (angles_pending_ && pending_.empty()) {
+      angles_pending_ = false;
+      angles_handed_.push_back(std::chrono::steady_clock::now());
+    }
     return n;
+  }
+
+  /// An arm whose get_angles replies are lost while `answer` is false (default: it answers).
+  void set_answer_angles(bool answer)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    answer_angles_ = answer;
+  }
+
+  /// When read() handed out the last byte of each get_angles reply, oldest first (#120).
+  std::vector<std::chrono::steady_clock::time_point> angles_handed()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return angles_handed_;
   }
 
   void set_temperatures(const ServoTemperatures & temperatures)
@@ -1199,6 +1230,9 @@ private:
   std::vector<std::uint8_t> pending_;
   ServoTemperatures temperatures_{COOL};
   bool answer_temperatures_{true};
+  bool answer_angles_{true};
+  bool angles_pending_{false};
+  std::vector<std::chrono::steady_clock::time_point> angles_handed_;
   std::uint8_t gripper_{100};
   std::mutex mutex_;
 };
@@ -2357,4 +2391,126 @@ TEST(SerialArmPollPose, TheJumpEdgeOfAPlausibleFrame)
   EXPECT_NEAR(
     pose_after_poll(frames_at(0, far, 7, 0x23, 1), 1).at(0), rad_of(RECORDED_POLL_STEPS.at(0), 0),
     1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Age of the pose (#120)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+using positronic_hardware::PoseSample;
+using SteadyClock = std::chrono::steady_clock;
+
+/// Waits until `port` has handed out more than `count` get_angles replies, then for the thread
+/// to decode the last one (DECODE_MARGIN). Returns when the last one went out, or nullopt.
+std::optional<SteadyClock::time_point> wait_for_reply_after(ScriptedArm & port, std::size_t count)
+{
+  const auto more{[&port, count]() {
+      return port.angles_handed().size() > count;
+    }};
+  if (!wait_until(more)) {
+    return std::nullopt;
+  }
+  std::this_thread::sleep_for(DECODE_MARGIN);
+  return port.angles_handed().back();
+}
+
+/// Stops the replies and returns when the last one went out. A request already answered when
+/// the switch comes still delivers: the wait covers it (a turn, the reply, the decode).
+SteadyClock::time_point lose_replies_from_now(ScriptedArm & port)
+{
+  port.set_answer_angles(false);
+  std::this_thread::sleep_for(SerialArm::POLL_PERIOD + DECODE_MARGIN);
+  return port.angles_handed().back();
+}
+
+/// Checks that `arm`'s age, read now, is the time since `arrived`: the thread decoded that
+/// reply at most DECODE_MARGIN after the transport handed it out, so the age is at most the
+/// time since `arrived` and at least that minus the margin. Returns the sample.
+PoseSample expect_age_since(const SerialArm & arm, SteadyClock::time_point arrived)
+{
+  const auto before{SteadyClock::now()};
+  const PoseSample sample{arm.read_pose()};
+  const auto after{SteadyClock::now()};
+  EXPECT_TRUE(sample.age.has_value());
+  const SteadyClock::duration age{sample.age.value_or(SteadyClock::duration::max())};
+  EXPECT_LE(age, after - arrived);
+  EXPECT_GE(age, before - arrived - DECODE_MARGIN);
+  return sample;
+}
+
+/// More than any age the turns of a live link can give (a turn of POLL_PERIOD, a reply at once,
+/// the decode): a lost reply must push the age past it.
+constexpr std::chrono::milliseconds LOST_FOR{150};
+}  // namespace
+
+TEST(SerialArmPoseAge, IsUnknownBeforeTheFirstReply)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  transport->set_answer_angles(false);
+  const SerialArm arm{std::move(transport)};
+  std::this_thread::sleep_for(3 * SerialArm::POLL_PERIOD);
+  const PoseSample sample{arm.read_pose()};
+  EXPECT_FALSE(arm.has_sample());
+  EXPECT_FALSE(sample.age.has_value());
+  EXPECT_EQ(sample.angles, arm.read_angles());  // the placeholder, never NaN
+}
+
+TEST(SerialArmPoseAge, GrowsWhileRepliesAreLostAndDropsWithTheNextOne)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  const SerialArm arm{std::move(transport)};
+
+  // Replies at known times: the age is the time since the last one.
+  ASSERT_TRUE(wait_for_reply_after(port, 0).has_value());
+  const SteadyClock::time_point last{lose_replies_from_now(port)};
+  const PoseSample first{expect_age_since(arm, last)};
+  EXPECT_EQ(first.angles, arm.read_angles());
+  const JointPositions expected{expected_pose()};
+  for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+    EXPECT_NEAR(first.angles.at(joint), expected.at(joint), 1e-9) << joint;
+  }
+
+  // Lost replies: the pose stays, its age grows by the time that passed, from the same reply.
+  std::this_thread::sleep_for(LOST_FOR);
+  const PoseSample lost{expect_age_since(arm, last)};
+  EXPECT_EQ(lost.angles, first.angles);
+  EXPECT_GE(lost.age.value_or(SteadyClock::duration::zero()), LOST_FOR);
+  EXPECT_GE(
+    lost.age.value_or(SteadyClock::duration::zero()) -
+      first.age.value_or(SteadyClock::duration::zero()),
+    LOST_FOR);
+
+  // The next reply brings it back down: the age counts from that one now.
+  const std::size_t handed{port.angles_handed().size()};
+  port.set_answer_angles(true);
+  ASSERT_TRUE(wait_for_reply_after(port, handed).has_value());
+  const SteadyClock::time_point next{lose_replies_from_now(port)};
+  const PoseSample back{expect_age_since(arm, next)};
+  EXPECT_LT(back.age.value_or(SteadyClock::duration::max()), LOST_FOR);
+}
+
+TEST(SerialArmPoseAge, CountsFromTheSyncWriteWhenThePoseComesFromThePoll)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
+  port.set_quiet_after_send(true);
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  const auto synced{[&port]() {
+      return !port.sync_write_times().empty();
+    }};
+  ASSERT_TRUE(wait_until(synced));
+  // The poll is published when the sync-write closes; the next turn waits two periods for a
+  // write before it asks a get_angles, so the pose read here is still the poll's.
+  std::this_thread::sleep_for(DECODE_MARGIN);
+  const PoseSample sample{expect_age_since(arm, port.sync_write_times().front())};
+  const JointPositions expected{recorded_poll_pose()};
+  for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+    EXPECT_NEAR(sample.angles.at(joint), expected.at(joint), 1e-9) << joint;
+  }
 }
