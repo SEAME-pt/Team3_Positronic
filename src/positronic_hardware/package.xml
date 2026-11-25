@@ -13,6 +13,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>positronic_interfaces</depend>
   <depend>positronic_protocol</depend>
   <depend>realtime_tools</depend>
   <depend>urdf</depend>
