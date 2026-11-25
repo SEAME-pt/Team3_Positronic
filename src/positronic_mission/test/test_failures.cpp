@@ -87,7 +87,7 @@ TEST_F(MissionNodeTest, ExecutionFailedGivesErrorAndNeedsReset)
 
   // Goals are rejected until someone resets
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 1);
 
   auto reset = call_reset();
   ASSERT_NE(reset, nullptr);
