@@ -211,3 +211,62 @@ ros2 service call /mission/reset positronic_interfaces/srv/StateTrigger "{}"
 
 - This resets the node to IDLE state after an ERROR or STOPPED
 `ros2 service call /mission/reset positronic_interfaces/srv/StateTrigger "{}"`
+
+---
+
+## Extra Cartesian Goals
+- Two small examples to make it clear the difference between a goal and a path.
+- In both examples, Step 1 moves the arm to the start of the path.
+- Then you execute a path, which is composed of multiple poses.
+- The arm draws a square or circle, while keeping the cartasian constains.
+- Both cases are tested in sim, expected code 0 and leave the arm in IDLE state.
+- The cartesian positions refer to the joint6_flange. Not the gripper tip.
+- The gripper keeps it's orientation and moves in straight lines between points.
+
+### Square
+- The square is drawn with the gripper pointing forwards.
+- Step 1. Setup
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
+position: {x: 0.16, y: -0.03, z: 0.22},
+orientation: {x: 0.0, y: 0.70711, z: 0.0, w: 0.70711}}}}"
+```
+
+- Step 2. Cartasian Square
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: [
+{position: {x: 0.16, y: 0.03, z: 0.22}, orientation: {x: 0.0, y: 0.70711, z: 0.0, w: 0.70711}},
+{position: {x: 0.16, y: 0.03, z: 0.28}, orientation: {x: 0.0, y: 0.70711, z: 0.0, w: 0.70711}},
+{position: {x: 0.16, y: -0.03, z: 0.28}, orientation: {x: 0.0, y: 0.70711, z: 0.0, w: 0.70711}},
+{position: {x: 0.16, y: -0.03, z: 0.22}, orientation: {x: 0.0, y: 0.70711, z: 0.0, w: 0.70711}}]}"
+```
+
+### Circle
+- The circle is drawn with the gripper pointing downwards.
+- Step 1. Setup
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 0, target_pose: {header: {frame_id: g_base}, pose: {
+position: {x: 0.23, y: 0.0, z: 0.15},
+orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}}}"
+```
+
+- Step 2. Cartasian Circle
+```
+ros2 action send_goal --feedback /mission/go_to_pose positronic_interfaces/action/GoToPose \
+"{mode: 1, cartesian_path: [
+{position: {x: 0.2246, y: 0.02, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.21, y: 0.0346, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.19, y: 0.04, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.17, y: 0.0346, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.1554, y: 0.02, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.15, y: 0.0, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.1554, y: -0.02, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.17, y: -0.0346, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.19, y: -0.04, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.21, y: -0.0346, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.2246, y: -0.02, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}},
+{position: {x: 0.23, y: 0.0, z: 0.15}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}]}"
+```
