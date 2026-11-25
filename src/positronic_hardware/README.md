@@ -370,7 +370,7 @@ Only `on_activate` clears it, and it refuses a link that is still silent.
 | 4 | Supervisor lost: no heartbeat from the safety supervisor for `supervisor_timeout_ms` (500) while active. Targets held like the link timeout; `read()` also returns ERROR (see Dead-man check) |
 
 New codes are added at the end of `FaultCode` in `fault_code.hpp`, with their line in
-`describe_fault()` (a code without one is a compiler warning); a value is never reused.
+`describe_fault()` (a code without one does not compile: `-Werror=switch`); a value is never reused.
 
 ### The reason on `/diagnostics` (#121)
 

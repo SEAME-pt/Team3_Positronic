@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.8)
 project(positronic_hardware)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  # -Werror=switch: a FaultCode without its line in describe_fault() does not compile (#121).
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror=switch)
 endif()
 
 # find dependencies

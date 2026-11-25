@@ -55,7 +55,7 @@ enum class FaultCode : std::uint8_t
 };
 
 /// The one table of the fault codes, as /diagnostics shows them (#121): the name and why the
-/// arm stopped. No default: a new FaultCode without its line here is a compiler warning. A value
+/// arm stopped. No default: a new FaultCode without its line here does not compile. A value
 /// outside the enum is "UNKNOWN", never dropped.
 [[nodiscard]] constexpr std::string_view describe_fault(FaultCode code) noexcept
 {
