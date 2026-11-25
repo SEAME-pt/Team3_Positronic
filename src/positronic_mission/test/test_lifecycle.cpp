@@ -161,7 +161,7 @@ TEST_F(MissionNodeTest, ActivationRefusedWhenBackendNotReady)
   EXPECT_EQ(last_state_, 255) << "Heartbeat sent while MoveIt is not ready";
 
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
 
   // Once MoveIt is ready, activation works
   mock_->ready_result = true;
