@@ -50,7 +50,9 @@ ALLOW_X = @if [ -n "$$DISPLAY" ] && command -v xhost > /dev/null; then xhost +SI
 TIDY_STRICT_FILES := ^/ws/src/(positronic_hardware|positronic_protocol|positronic_mission|positronic_safety)/
 TIDY_TEST_FILES := ^/ws/src/[^/]+/test/
 TIDY_TEST_CHECKS := -cert-*,-clang-analyzer-*,-concurrency-*,-cppcoreguidelines-*,-misc-*,-modernize-*,-performance-*,-portability-*,-readability-*
-TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)'
+TIDY_OPTIONS = --strict='$(TIDY_STRICT_FILES)' --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)' $(TIDY_VERBOSE)
+# Only the files with warnings, then the summary; VERBOSE adds a line for every file (like make test).
+TIDY_VERBOSE = $(if $(VERBOSE),--verbose)
 # What make tidy-changed compares with. CI sets it to HEAD^1 (the PR's merge commit's base).
 TIDY_BASE ?= origin/dev
 
@@ -85,19 +87,15 @@ build: ## colcon build
 # ROS_DOMAIN_ID is unset so the tests that talk over ROS (ament_add_ros_isolated_gtest) each get
 # a free domain: with it set (17, the arm's) they all share it and see each other's nodes (#144).
 # LOCALHOST: test nodes never discover anything on the network, like the arm's, whatever domain.
-# TEST_ALONE runs after the others, one test at a time: on a loaded CI runner, positronic_mission's
-# GoalSucceedsWhenIdle can miss the one feedback message the node sends (a race in the test).
 TEST_JOBS ?= 4
-TEST_ALONE := positronic_mission
 TEST_HANDLERS = $(if $(VERBOSE),,--event-handlers console_stderr-)
 test: ## colcon test, then a summary per package and each failure (VERBOSE: full output)
 	$(RUN) bash -c 'unset ROS_DOMAIN_ID; export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; \
-	  colcon test $(TEST_HANDLERS) --packages-skip $(TEST_ALONE) --ctest-args -j$(TEST_JOBS); rc=$$?; \
-	  colcon test $(TEST_HANDLERS) --packages-select $(TEST_ALONE) || rc=$$?; \
+	  colcon test $(TEST_HANDLERS) --ctest-args -j$(TEST_JOBS); rc=$$?; \
 	  $(if $(VERBOSE),colcon test-result --verbose;) python3 scripts/summarize_tests.py --colcon-rc $$rc'
 
 # Own build in build_cov/ and install_cov/ (scripts/coverage.sh), then the gate: each package at 80 %.
-# CI runs it as report-only (continue-on-error) until #46.
+# CI runs it on every PR and blocks the merge below 80 % (#46).
 coverage: ## Line coverage of src/ (C++ and Python), fails if a package is below 80 %
 	$(RUN) bash -c 'bash scripts/coverage.sh && python3 scripts/coverage_gate.py'
 
@@ -107,8 +105,11 @@ format: ## Format C/C++ in src/: clang-format, then ROS uncrustify (final word)
 format-check: ## ROS 2 lint on src/, one line per tool (VERBOSE: each tool's full output)
 	$(RUN) env VERBOSE=$(VERBOSE) bash scripts/lint.sh
 
-tidy: ## clang-tidy on src/ (needs make build first)
-	$(RUN) bash -c 'run-clang-tidy -quiet -p build "^/ws/src/"'
+# Every file in src/, with the same test-file rule as CI (ADR 0007), but warnings never fail
+# (ADR 0004): --soft. It fails only when clang-tidy can't check a file (it doesn't compile).
+tidy: ## clang-tidy on src/, warnings only, bugprone only on test files (VERBOSE: every file)
+	$(RUN) python3 scripts/tidy_changed.py --all --soft --strict='^/ws/src/' \
+	  --test-files='$(TIDY_TEST_FILES)' --test-checks='$(TIDY_TEST_CHECKS)' $(TIDY_VERBOSE)
 
 # scripts/tidy_changed.py: the selection, then clang-tidy in parallel, one line per file.
 tidy-strict: ## clang-tidy on the strict packages (TIDY_STRICT_FILES), any warning is an error (needs make build first)
@@ -141,7 +142,7 @@ export ROS_DOMAIN_ID
 
 NANO_RUN = docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) -v \$$HOME/$(NANO_DIR):/ws
 
-.PHONY: nano-image nano-sync nano-build nano-shell nano-service nano-packages
+.PHONY: nano-image nano-sync nano-build nano-shell nano-camera nano-service nano-packages
 
 nano-image: ## Build the slim Jetson image (runtime target) ON the Jetson, once per Dockerfile change
 	rsync -a --delete docker/ $(NANO):positronic-docker/
@@ -157,8 +158,19 @@ nano-build: nano-sync ## Sync, then colcon build NANO_PACKAGES on the Jetson
 nano-packages: ## Print the packages the Jetson builds (CI reads this)
 	@echo $(NANO_PACKAGES)
 
-nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port
-	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_IMAGE) bash"
+# The wrist camera device on the Jetson. nano-shell maps it when it is plugged in, so
+# driver.launch.py camera:=true can use it; without it the shell starts as before. --group-add:
+# the gid of the device on the Jetson, whatever the image calls it.
+NANO_CAMERA ?= /dev/video0
+NANO_CAMERA_ARGS = \$$([ -e $(NANO_CAMERA) ] && echo --device $(NANO_CAMERA) --group-add \$$(stat -c %g $(NANO_CAMERA)))
+
+nano-shell: nano-sync ## Sync, then shell on the Jetson with the arm's serial port (and the camera, if plugged)
+	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-arm --device /dev/ttyTHS1 $(NANO_CAMERA_ARGS) $(NANO_IMAGE) bash"
+
+# The camera alone (camera.launch.py), in its own container next to nano-shell's driver.
+nano-camera: nano-sync ## Sync, then shell on the Jetson with the wrist camera only (NANO_CAMERA)
+	ssh -t $(NANO) "$(NANO_RUN) -it --name positronic-camera --device $(NANO_CAMERA) \
+	  --group-add \$$(stat -c %g $(NANO_CAMERA)) $(NANO_IMAGE) bash"
 
 NANO_SERVICE := positronic-driver
 

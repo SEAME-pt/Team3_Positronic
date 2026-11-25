@@ -24,7 +24,9 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -38,7 +40,6 @@
 #include <unordered_map>
 #include <vector>
 #include "lifecycle_msgs/msg/state.hpp"
-#include "positronic_hardware/link_watchdog.hpp"
 #include "urdf/model.h"
 
 namespace positronic_hardware
@@ -126,6 +127,20 @@ void log_fault(
     to_string(check.fault), limit.lower, limit.upper);
 }
 
+std::uint8_t to_gripper_value(double radians, double closed, double open)
+{
+  const double fraction{std::clamp((radians - closed) / (open - closed), 0.0, 1.0)};
+  const double value{GRIPPER_CLOSED_VALUE + fraction * (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return static_cast<std::uint8_t>(std::lround(value));
+}
+
+double to_gripper_radians(std::uint8_t value, double closed, double open)
+{
+  const double fraction{
+    (static_cast<double>(value) - GRIPPER_CLOSED_VALUE) /
+    (GRIPPER_OPEN_VALUE - GRIPPER_CLOSED_VALUE)};
+  return std::clamp(closed + std::clamp(fraction, 0.0, 1.0) * (open - closed), closed, open);
+}
 }  // namespace
 
 CallbackReturn RobotSystem::on_init(
@@ -138,12 +153,13 @@ CallbackReturn RobotSystem::on_init(
   const hardware_interface::HardwareInfo & info{params.hardware_info};
 
   // The URDF must list the joints in protocol order: J1 (base) first, J6 (flange) last.
-  if (info.joints.size() != NUM_JOINTS) {
+  if (info.joints.size() != NUM_JOINTS && info.joints.size() != NUM_JOINTS + 1) {
     RCLCPP_ERROR(
-      get_logger(), "The URDF must have exactly %zu joints, %zu were read.", NUM_JOINTS,
-      info.joints.size());
+      get_logger(), "The URDF must have %zu joints, or %zu with the gripper; %zu were read.",
+      NUM_JOINTS, NUM_JOINTS + 1, info.joints.size());
     return CallbackReturn::ERROR;
   }
+  has_gripper_ = info.joints.size() == NUM_JOINTS + 1;
 
   for (const auto & joint : info.joints) {
     if (!has_position_and_velocity(joint)) {
@@ -194,7 +210,47 @@ CallbackReturn RobotSystem::on_init(
   if (!read_parameters(info.hardware_parameters)) {
     return CallbackReturn::ERROR;
   }
+  if (!start_supervisor_check()) {
+    return CallbackReturn::ERROR;
+  }
   return CallbackReturn::SUCCESS;
+}
+
+bool RobotSystem::start_supervisor_check()
+{
+  if (config_.supervisor_timeout_ms == 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Dead-man check off (supervisor_timeout_ms = 0): if the safety supervisor dies, nothing "
+      "stops the arm. Only for a run without the supervisor.");
+    return true;
+  }
+  // The controller manager gives each component a node of its own, spun by its executor, so
+  // the callback runs on an executor thread and never on the control loop. No node means the
+  // component was loaded without an executor: never run with the check silently skipped.
+  const rclcpp::Node::SharedPtr node{get_node()};
+  if (node == nullptr) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "supervisor_timeout_ms is %d but the component has no ROS node to subscribe to %s with. "
+      "Set it to 0 for a run without the safety supervisor.",
+      config_.supervisor_timeout_ms, std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str());
+    return false;
+  }
+  supervisor_watchdog_.emplace(std::chrono::milliseconds{config_.supervisor_timeout_ms});
+  // Only the arrival counts, so best effort and keep last 1, like the supervisor's publisher: a
+  // lost heartbeat is not worth sending again, the next one is 20 ms away.
+  heartbeat_subscription_ = node->create_subscription<positronic_interfaces::msg::Heartbeat>(
+    std::string{SUPERVISOR_HEARTBEAT_TOPIC}, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+    [this](const positronic_interfaces::msg::Heartbeat & /*message*/) {
+      // When it arrived on this machine's steady clock, not the stamp it carries: a clock that
+      // jumps, or sim time, cannot fake or hide a heartbeat.
+      supervisor_watchdog_->on_reply(LinkWatchdog::Clock::now());
+    });
+  RCLCPP_INFO(
+    get_logger(), "Dead-man check on: the arm halts after %d ms without a heartbeat on %s.",
+    config_.supervisor_timeout_ms, std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str());
+  return true;
 }
 
 bool RobotSystem::read_parameters(const std::unordered_map<std::string, std::string> & parameters)
@@ -248,6 +304,22 @@ bool RobotSystem::load_limits(const hardware_interface::HardwareInfo & info)
       get_logger(), "Joint '%s' limits: [%.4f, %.4f] rad.", info.joints.at(i).name.c_str(),
       limits_.at(i).lower, limits_.at(i).upper);
   }
+  if (has_gripper_) {
+    const std::string & name{info.joints.at(NUM_JOINTS).name};
+    const urdf::JointConstSharedPtr gripper{model.getJoint(name)};
+    if (
+      gripper == nullptr || gripper->type != urdf::Joint::REVOLUTE || gripper->limits == nullptr ||
+      !std::isfinite(gripper->limits->lower) || !std::isfinite(gripper->limits->upper) ||
+      gripper->limits->lower >= gripper->limits->upper)
+    {
+      RCLCPP_ERROR(
+        get_logger(), "Gripper joint '%s' has no usable revolute <limit>. Refusing to start.",
+        name.c_str());
+      return false;
+    }
+    gripper_closed_ = gripper->limits->lower;
+    gripper_open_ = gripper->limits->upper;
+  }
   return true;
 }
 
@@ -267,10 +339,17 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
       arm_ = std::make_unique<SerialArm>(
-        config_.port, config_.baud, config_.timing, guard,
+        config_.port, config_.baud, config_.timing, guard, has_gripper_,
         static_cast<std::uint8_t>(config_.send_speed));
     } else {
-      arm_ = std::make_unique<FakeArm>();
+      // The fake arm's time is the sum of the periods read() got: on the control loop that is
+      // the time that passed, and a test that passes the periods in moves the arm without
+      // sleeping (#122). Not the `time` argument: the resource manager replaces it with its own
+      // clock.
+      arm_ = std::make_unique<FakeArm>(config_.fake_mode, [this]() {
+            return FakeArm::Clock::time_point{std::chrono::duration_cast<FakeArm::Clock::duration>(
+          std::chrono::nanoseconds{control_time_ns_.load()})};
+      });
     }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot start the serial backend: %s", error.what());
@@ -278,6 +357,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   }
   // A fresh history: the first read() after (re)configure has no earlier sample to difference.
   velocity_estimator_ = VelocityEstimator{config_.velocity_filter_alpha};
+  gripper_previous_valid_ = false;
 
   // Look the handles up once, here, so read() and write() build no string. This throws if a
   // name is missing, which is fine outside the control loop.
@@ -289,6 +369,15 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       handles_.at(i).position =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
       handles_.at(i).velocity =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
+    }
+    if (has_gripper_) {
+      const std::string & name{info_.joints.at(NUM_JOINTS).name};
+      gripper_handles_.command =
+        get_command_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.position =
+        get_state_interface_handle(name + "/" + hardware_interface::HW_IF_POSITION);
+      gripper_handles_.velocity =
         get_state_interface_handle(name + "/" + hardware_interface::HW_IF_VELOCITY);
     }
     fault_handle_ =
@@ -328,6 +417,11 @@ CallbackReturn RobotSystem::on_shutdown(const rclcpp_lifecycle::State & previous
 
 CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
+  // #136: no motion without someone watching it. Otherwise read() would raise the fault again
+  // at once.
+  if (!supervisor_allows_activation()) {
+    return CallbackReturn::ERROR;
+  }
   // "Allow motion": every command starts at the measured position, so the first thing a
   // controller sees is "stay where you are" and write() sends nothing new until a controller
   // writes.
@@ -339,6 +433,16 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       RCLCPP_ERROR(
         get_logger(), "The arm did not answer within %d ms. Is it powered and on %s?",
         static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()), config_.port.c_str());
+      return CallbackReturn::ERROR;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
       return CallbackReturn::ERROR;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
@@ -437,6 +541,10 @@ CallbackReturn RobotSystem::on_error(const rclcpp_lifecycle::State & /*previous_
 
 return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
+  // A period that is not positive is no time passing: the fake arm's clock never goes back.
+  if (period.nanoseconds() > 0) {
+    control_time_ns_.fetch_add(period.nanoseconds());
+  }
   update_states(period.seconds());
   // First, before the link check: the power off of an overheat cut silences the arm, so a link
   // timeout can follow the cut, and only the first fault is kept. The cause must win. Also
@@ -448,6 +556,20 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   if (active && arm_->link_timed_out()) {
     raise_fault(FaultCode::LINK_TIMEOUT);
   }
+  // #136: the supervisor went silent while active. After the link check, so a link that died
+  // first keeps its fault, the cause. Returned as ERROR even then: with no supervisor left, the
+  // controller manager is the one that takes the controllers and the component out of ACTIVE.
+  // Logged here, once, for the same reason as the overheat: read() is not called again until
+  // the component is configured.
+  const bool supervisor_lost{active && supervisor_silent()};
+  if (supervisor_lost) {
+    raise_fault(FaultCode::SUPERVISOR_LOST);
+    RCLCPP_ERROR(
+      get_logger(),
+      "No heartbeat from the safety supervisor for over %d ms (fault %d latched). Arm halted, "
+      "targets held. Start the supervisor again and activate it to resume.",
+      config_.supervisor_timeout_ms, static_cast<int>(fault_.load()));
+  }
   // #103: a target the arm did not follow. After the link check: a silent arm has a stale
   // pose, and the silence is the cause to report, not the lag that follows it.
   if (active) {
@@ -456,10 +578,46 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
-  // anyone reading it sees the latched value. The overheat is the exception: it returns ERROR
-  // as well, because the arm is already cut and must not be driven again before a configure.
+  // anyone reading it sees the latched value. Two exceptions return ERROR as well: the
+  // overheat, because the arm is already cut and must not be driven again before a configure,
+  // and the supervisor loss, because there is no supervisor to decide.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), false);
+  if (supervisor_lost) {
+    return return_type::ERROR;
+  }
   return temperatures;
+}
+
+bool RobotSystem::supervisor_allows_activation()
+{
+  if (!supervisor_watchdog_.has_value()) {
+    return true;
+  }
+  // The supervisor only beats while it answers for the arm: it starts at its resume, just
+  // before it asks for this activate, so the first heartbeat normally comes within one of its
+  // 20 ms checks. The subscription runs on another thread of the executor meanwhile. With the
+  // supervisor STOPPED nothing comes, so an activate it did not ask for is refused. Sleeping is
+  // fine here, outside the control loop.
+  const auto deadline{LinkWatchdog::Clock::now() + supervisor_watchdog_->timeout()};
+  while (supervisor_silent()) {
+    if (LinkWatchdog::Clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "No heartbeat from the safety supervisor on %s for %d ms; not activating. Activate the "
+        "supervisor, which asks for this activate, or set supervisor_timeout_ms:=0 for a run "
+        "without it.",
+        std::string{SUPERVISOR_HEARTBEAT_TOPIC}.c_str(), config_.supervisor_timeout_ms);
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+bool RobotSystem::supervisor_silent() const
+{
+  return supervisor_watchdog_.has_value() &&
+         supervisor_watchdog_->timed_out(LinkWatchdog::Clock::now());
 }
 
 void RobotSystem::report_echo_timeouts()
@@ -473,7 +631,8 @@ void RobotSystem::report_echo_timeouts()
     get_logger(),
     "%" PRIu64
     " send_angles got no sync-write from the arm since the last report: each of their "
-    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this.",
+    "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
+    "and so does a send that reached the arm while it was still answering a request.",
     fresh.value());
 }
 
@@ -596,7 +755,24 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
     return return_type::ERROR;
   }
 
+  double gripper_target{0.0};
+  const bool gripper_read{
+    has_gripper_ && get_command(gripper_handles_.command, gripper_target, false)};
+  if (
+    gripper_read && (!std::isfinite(gripper_target) || gripper_target < gripper_closed_ ||
+    gripper_target > gripper_open_))
+  {
+    arm_->request_halt();
+    RCLCPP_ERROR(
+      get_logger(), "Command refused, arm halted: joint '%s' = %.4f rad, outside [%.4f, %.4f] rad.",
+      info_.joints.at(NUM_JOINTS).name.c_str(), gripper_target, gripper_closed_, gripper_open_);
+    return return_type::ERROR;
+  }
+
   arm_->write_angles(commands);
+  if (gripper_read) {
+    arm_->write_gripper(to_gripper_value(gripper_target, gripper_closed_, gripper_open_));
+  }
   return return_type::OK;
 }
 
@@ -645,7 +821,8 @@ void RobotSystem::raise_fault(FaultCode code)
   // included: only cutting the servo power does.
   arm_->request_halt();
   // Logged once, at the transition, like a refusal (#34): read() does not log on later cycles.
-  // An overheat is logged by check_temperatures(), which knows the joint and the value.
+  // An overheat is logged by check_temperatures(), which knows the joint and the value, and a
+  // supervisor loss by read(), which logs it even when another fault came first.
   if (code == FaultCode::LINK_TIMEOUT) {
     RCLCPP_ERROR(
       get_logger(),
@@ -658,8 +835,9 @@ void RobotSystem::raise_fault(FaultCode code)
 void RobotSystem::refuse(const CommandCheck & check)
 {
   // Going silent does not stop the arm: it keeps going to its last target. request_halt() is
-  // the non-blocking stop of #36 (two atomic stores, safe here on the control loop); on_error
-  // asks for it again, which changes nothing. The refused command never reached the backend.
+  // the non-blocking stop of #36 (two atomic stores and a short lock, safe here on the control
+  // loop); on_error asks for it again, which changes nothing. The refused command never reached
+  // the backend.
   arm_->request_halt();
   // One log line per refusal: write() is not called again once the component leaves ACTIVE.
   log_fault(get_logger(), "Command refused, arm halted", check, limits_, info_);
@@ -678,6 +856,16 @@ void RobotSystem::update_states(double dt)
     // wait_until_set = false: never block on a controller that is reading the handle.
     std::ignore = set_state(handles_.at(i).position, angles.at(i), false);
     std::ignore = set_state(handles_.at(i).velocity, velocities.at(i), false);
+  }
+  const std::optional<std::uint8_t> gripper{has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  if (gripper.has_value()) {
+    const double position{to_gripper_radians(gripper.value(), gripper_closed_, gripper_open_)};
+    const double velocity{
+      gripper_previous_valid_ && dt > 0.0 ? (position - gripper_previous_) / dt : 0.0};
+    gripper_previous_ = position;
+    gripper_previous_valid_ = true;
+    std::ignore = set_state(gripper_handles_.position, position, false);
+    std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
 }
 

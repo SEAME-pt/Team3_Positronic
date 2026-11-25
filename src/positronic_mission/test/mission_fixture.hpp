@@ -31,12 +31,17 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <vector>
+
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "mock_backend.hpp"
-#include "positronic_mission/mission_node.hpp"
-#include "positronic_mission/pose_validation.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+
+#include "positronic_interfaces/action/go_to_pose.hpp"
+#include "positronic_mission/mission_node.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission::test
 {
@@ -142,6 +147,26 @@ protected:
     return p;
   }
 
+  static std::vector<geometry_msgs::msg::Pose> valid_waypoint()
+  {
+    std::vector<geometry_msgs::msg::Pose> waypoints;
+    waypoints.reserve(2);
+
+    geometry_msgs::msg::Pose pose_1;
+    pose_1.position.x = 0.15;
+    pose_1.position.z = 0.20;
+    pose_1.orientation.w = 1.0;
+    waypoints.push_back(pose_1);
+
+    geometry_msgs::msg::Pose pose_2;
+    pose_2.position.x = 0.30;
+    pose_2.position.z = 0.205;
+    pose_2.orientation.w = 1.0;
+    waypoints.push_back(pose_2);
+
+    return waypoints;
+  }
+
   // Polls `pred` every 10 ms until it's true or `timeout` passes.
   // Use this instead of sleep_for: fast when things work, bounded when they don't.
   static bool wait_until(const std::function<bool()> & pred, std::chrono::milliseconds timeout = 2s)
@@ -167,24 +192,33 @@ protected:
   }
 
   // Sends a goal. Returns the goal handle, or nullptr if the goal was REJECTED.
-  std::shared_ptr<GoalHandleClient> send_goal(const PoseStamped & pose)
+  std::shared_ptr<GoalHandleClient> send_raw_goal(const GoToPose::Goal & goal)
   {
-    GoToPose::Goal goal;
-    goal.target_pose = pose;
-
-    auto options = rclcpp_action::Client<GoToPose>::SendGoalOptions();
-    options.feedback_callback = [this](
-      const GoalHandleClient::SharedPtr &,
-      const std::shared_ptr<const GoToPose::Feedback> &) {
-        ++feedback_count_;
-      };
-
-    auto future = action_client_->async_send_goal(goal, options);
+    auto future = action_client_->async_send_goal(goal);
     if (future.wait_for(2s) != std::future_status::ready) {
       ADD_FAILURE() << "Timed out waiting for goal response";
       return nullptr;
     }
     return future.get();
+  }
+
+  std::shared_ptr<GoalHandleClient> send_goal(const geometry_msgs::msg::PoseStamped & pose)
+  {
+    GoToPose::Goal goal{};
+    goal.target_pose = pose;
+    goal.mode = GoToPose::Goal::MODE_POSE;
+
+    return send_raw_goal(goal);
+  }
+
+  std::shared_ptr<GoalHandleClient> send_waypoint(
+    const std::vector<geometry_msgs::msg::Pose> & waypoints)
+  {
+    GoToPose::Goal goal{};
+    goal.cartesian_path = waypoints;
+    goal.mode = GoToPose::Goal::MODE_CARTESIAN;
+
+    return send_raw_goal(goal);
   }
 
   // Waits for the final result of a goal. nullopt on timeout.
@@ -266,13 +300,12 @@ protected:
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::thread spin_thread_;
 
-  // Written by subscription/feedback callbacks (executor thread), read by tests
+  // Written by the heartbeat subscription (executor thread), read by tests
   std::atomic<uint8_t> last_state_{255};  // 255 = no heartbeat yet
   std::atomic<bool> node_name_ok_{true};
   std::atomic<bool> last_stamp_ok_{true};
   std::atomic<int64_t> last_stamp_ns_{0};
   std::atomic<int> heartbeat_count_{0};
-  std::atomic<int> feedback_count_{0};
 };
 
 }  // namespace positronic_mission::test

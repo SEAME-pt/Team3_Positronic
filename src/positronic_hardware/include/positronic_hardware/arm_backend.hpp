@@ -39,6 +39,9 @@ using JointPositions = std::array<double, NUM_JOINTS>;
 /// The six servo temperatures in degC, J1 first, as the arm reports them (one byte each).
 using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 
+inline constexpr std::uint8_t GRIPPER_CLOSED_VALUE{0};
+inline constexpr std::uint8_t GRIPPER_OPEN_VALUE{100};
+
 /// The servo that tripped the over-temperature cut, and the reading that did it.
 struct Overheat
 {
@@ -88,6 +91,10 @@ public:
   /// replaces the previous command before it was sent. The plugin calls this only while
   /// active, so an implementation does not need to check that itself.
   virtual void write_angles(const JointPositions & angles) = 0;
+
+  virtual void write_gripper(std::uint8_t value) = 0;
+
+  [[nodiscard]] virtual std::optional<std::uint8_t> read_gripper() const = 0;
 
   /// How long halt() and power_on() may wait for the arm to acknowledge their request. Part of
   /// the contract, so the plugin can log the deadline without knowing which backend it holds.

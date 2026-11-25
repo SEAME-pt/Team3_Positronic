@@ -49,6 +49,10 @@
 #   The defaults of the driver's parameters now live only in the driver (HardwareConfig): the
 #   xacro writes a <param> only for an argument that is set. Check that no argument, or an
 #   empty one as the launch passes, writes no <param>.
+# Follow-up prompt (real wrist camera):
+#   The real xacro includes mycobot_280_jn_gripper_camera.urdf, so the real camera images can
+#   use camera_link as their frame_id. Check that camera_link is in the description and hangs
+#   under joint 6 (joint6_flange) through fixed joints only, for both backends.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -91,7 +95,7 @@ ARM_JOINTS = [
 
 
 def arm_block(robot):
-    """Return the <ros2_control> block of the arm (RobotSystem), not the gripper mock."""
+    """Return the <ros2_control> block of the arm and the gripper (RobotSystem)."""
     return robot.find("ros2_control[@name='positronic_arm']")
 
 
@@ -111,6 +115,22 @@ def revolute_joints(robot):
     return [
         j.get('name') for j in robot.findall('joint') if j.get('type') == 'revolute'
     ]
+
+
+def chain_to(robot, link, ancestor):
+    """
+    Return the joints from `ancestor` down to `link`, as (name, type), ancestor side first.
+
+    Fails the test if `link` does not hang under `ancestor`.
+    """
+    parent_joint = {joint.find('child').get('link'): joint for joint in robot.findall('joint')}
+    chain = []
+    while link != ancestor:
+        assert link in parent_joint, f'{link} does not hang under {ancestor}'
+        joint = parent_joint[link]
+        chain.insert(0, (joint.get('name'), joint.get('type')))
+        link = joint.find('parent').get('link')
+    return chain
 
 
 def hardware_params(robot):
@@ -158,33 +178,39 @@ def test_arguments_reach_the_plugin():
     params = hardware_params(
         expand(
             backend='fake',
+            fake_mode='measured',
             port='/dev/null',
             baud='115200',
             moving_period_ms='40',
             echo_timeout_ms='45',
+            pose_from_poll='false',
             servo_temp_limit_c='45',
             tracking_error_deg='6',
             tracking_error_ms='200',
+            supervisor_timeout_ms='300',
             send_speed='50',
         )
     )
     assert params == {
         'backend': 'fake',
+        'fake_mode': 'measured',
         'port': '/dev/null',
         'baud': '115200',
         'moving_period_ms': '40',
         'echo_timeout_ms': '45',
+        'pose_from_poll': 'false',
         'servo_temp_limit_c': '45',
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
+        'supervisor_timeout_ms': '300',
         'send_speed': '50',
     }
 
 
 def test_joints_are_the_urdf_revolute_joints_in_order():
-    """Check that the arm block has the six arm joints, J1 to J6, in URDF order."""
+    """Check that the arm block has J1 to J6 in URDF order, then the gripper joint."""
     joints = [joint.get('name') for joint in arm_block(expand()).findall('joint')]
-    assert joints == ARM_JOINTS
+    assert joints == ARM_JOINTS + ['gripper_controller']
     urdf_order = [j for j in revolute_joints(original_urdf()) if j in ARM_JOINTS]
     assert urdf_order == ARM_JOINTS
 
@@ -252,15 +278,22 @@ def test_supervisor_reads_the_names_of_this_description():
 
 
 @pytest.mark.parametrize('backend', ['serial', 'fake'])
-def test_gripper_is_a_fixed_mock_until_123(backend):
-    """Check the gripper block: one state-only joint at the SRDF "open" value."""
-    block = expand(backend=backend).find(
-        "ros2_control[@name='positronic_gripper_mock']"
-    )
-    assert block.find('hardware/plugin').text == 'mock_components/GenericSystem'
-    joints = block.findall('joint')
-    assert [joint.get('name') for joint in joints] == ['gripper_controller']
-    assert joints[0].findall('command_interface') == []
-    states = joints[0].findall('state_interface')
-    assert [state.get('name') for state in states] == ['position']
-    assert states[0].find("param[@name='initial_value']").text == '0.15'
+def test_the_gripper_is_served_by_the_arm_block(backend):
+    """Check that RobotSystem is the only <ros2_control> block, gripper included (#123)."""
+    blocks = expand(backend=backend).findall('ros2_control')
+    assert [block.get('name') for block in blocks] == ['positronic_arm']
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_camera_link_hangs_under_joint_6(backend):
+    """Check the frame_id of the real camera images is under joint 6, by fixed joints only."""
+    robot = expand(backend=backend)
+    assert 'camera_link' in [link.get('name') for link in robot.findall('link')]
+    # joint6_flange is the child of joint 6 (joint6output_to_joint6): the camera turns with it.
+    joint6 = [joint for joint in robot.findall('joint')
+              if joint.get('name') == 'joint6output_to_joint6']
+    assert len(joint6) == 1
+    flange = joint6[0].find('child').get('link')
+    chain = chain_to(robot, 'camera_link', flange)
+    assert chain  # at least one joint between the flange and the camera
+    assert all(kind == 'fixed' for _, kind in chain), chain

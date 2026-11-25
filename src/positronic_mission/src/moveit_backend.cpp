@@ -19,16 +19,30 @@
 // THE SOFTWARE.
 
 #include "positronic_mission/moveit_backend.hpp"
+
+#include <chrono>
 #include <memory>
+#include <thread>
+
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/utils/moveit_error_code.hpp>
 #include <rclcpp/duration.hpp>
+#include <rclcpp/node.hpp>
 #include <rclcpp/node_options.hpp>
+#include "moveit_msgs/msg/move_it_error_codes.hpp"
+#include "moveit_msgs/msg/robot_trajectory.hpp"
+
 #include "positronic_mission/motion_backend.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 namespace positronic_mission
 {
 using moveit::core::MoveItErrorCode;
+
+// Max distance in meters between interpolated points. For the endpoint
+static constexpr double EEF_STEP = 0.01;
+// How much of the Cartesian Path moveit could achieve. 1.0 is the whole path
+static constexpr double MIN_PLAN_FRACTION = 0.999;
 
 MoveitBackend::MoveitBackend(std::string group_name)
 : group_name_(std::move(group_name))
@@ -43,6 +57,10 @@ MoveitBackend::MoveitBackend(std::string group_name)
   spin_thread_ = std::thread([this]() {
         executor_->spin();
   });
+  // Wait until spinning, so a cancel from the destructor can’t be lost
+  while (!executor_->is_spinning() && rclcpp::ok()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 }
 
 MoveitBackend::~MoveitBackend()
@@ -94,6 +112,46 @@ MotionOutcome MoveitBackend::plan_and_execute(const geometry_msgs::msg::PoseStam
   return MotionOutcome::OK;
 }
 
+MotionOutcome MoveitBackend::plan_and_execute_cartesian(
+  const std::vector<geometry_msgs::msg::Pose> & waypoints)
+{
+  if (stop_requested_) {
+    return MotionOutcome::PREEMPTED;
+  }
+
+  if (!move_group_) {
+    return MotionOutcome::PLANNING_FAILED;
+  }
+
+  moveit_msgs::msg::MoveItErrorCodes error_code;
+  moveit_msgs::msg::RobotTrajectory trajectory;
+  const bool avoid_collisions = true;
+
+  if (
+    move_group_->computeCartesianPath(
+      waypoints, EEF_STEP, trajectory, avoid_collisions, &error_code) < MIN_PLAN_FRACTION)
+  {
+    return MotionOutcome::PLANNING_FAILED;
+  }
+  if (error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+    return MotionOutcome::PLANNING_FAILED;
+  }
+
+  if (stop_requested_) {
+    return MotionOutcome::PREEMPTED;
+  }
+
+  auto result = move_group_->execute(trajectory);
+  if (stop_requested_ || result == MoveItErrorCode::PREEMPTED) {
+    return MotionOutcome::PREEMPTED;
+  }
+  if (result != MoveItErrorCode::SUCCESS) {
+    return MotionOutcome::EXECUTION_FAILED;
+  }
+
+  return MotionOutcome::OK;
+}
+
 void MoveitBackend::stop()
 {
   stop_requested_ = true;
@@ -113,9 +171,36 @@ bool MoveitBackend::ready()
   if (move_group_) {
     return true;
   }
+  // These parameters will only exist if the launch file has them
+  // Which in our case is true. So it checks if the file was actually loaded
+  if (
+    !node_->has_parameter("robot_description") ||
+    !node_->has_parameter("robot_description_semantic"))
+  {
+    RCLCPP_WARN(node_->get_logger(), "Moveit parameters missing");
+    return false;
+  }
+
   try {
-    move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
+    // Make sure the move_group responds before returning true.
+    if (!check_client_) {
+      check_client_ =
+        rclcpp_action::create_client<moveit_msgs::action::MoveGroup>(node_, "move_action");
+    }
+    if (!check_client_->wait_for_action_server(std::chrono::seconds(2))) {
+      RCLCPP_WARN(node_->get_logger(), "move_group not answering on move_action");
+      return false;
+    }
+    auto temp_group = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
       node_, group_name_, nullptr, rclcpp::Duration::from_seconds(2.0));
+
+    // A Cartesian Path has no frame, so set here a default one.
+    temp_group->setPoseReferenceFrame(BASE_FRAME);
+    RCLCPP_INFO(
+      node_->get_logger(), "Planning frame: %s, Reference frame: %s",
+      temp_group->getPlanningFrame().c_str(), temp_group->getPoseReferenceFrame().c_str());
+    // Only assign move_group once every setup is fine
+    move_group_ = std::move(temp_group);
     return true;
   } catch (const std::exception & e) {
     RCLCPP_WARN(

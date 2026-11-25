@@ -133,6 +133,19 @@ Frame encode_get_servo_temps() noexcept
   return build_frame(CommandId::GET_SERVO_TEMPS, std::array<std::uint8_t, 0>{});
 }
 
+Frame encode_get_gripper_value() noexcept
+{
+  return build_frame(CommandId::GET_GRIPPER_VALUE, std::array<std::uint8_t, 0>{});
+}
+
+std::optional<Frame> encode_set_gripper_value(std::uint8_t value, std::uint8_t speed) noexcept
+{
+  if (value > GRIPPER_VALUE_MAX || speed < MIN_SPEED || speed > MAX_SPEED) {
+    return std::nullopt;
+  }
+  return build_frame(CommandId::SET_GRIPPER_VALUE, std::array<std::uint8_t, 2>{value, speed});
+}
+
 std::optional<Frame> encode_send_angles(const JointAngles & angles, std::uint8_t speed) noexcept
 {
   if (speed < MIN_SPEED || speed > MAX_SPEED) {

@@ -34,6 +34,8 @@
 #   started from at the end. Keep the step vectors in a pure function, keep argument parsing
 #   and the spin out of the tested code, and fail early when nothing publishes /joint_states
 #   or nothing subscribes to the command topic.
+#   #171: since #151 /joint_states has the gripper mock first, so take the six arm joints by
+#   name, in the controller's order, and fail loudly when one is missing instead of guessing.
 
 """Record one row per control loop cycle, and optionally step a joint (#39)."""
 
@@ -62,8 +64,8 @@ from std_msgs.msg import Float64MultiArray
 COMMAND_TOPIC = '/forward_position_controller/commands'
 STATE_TOPIC = '/joint_states'
 NUM_JOINTS = 6
-# The arm joints in protocol and command order, J1 first. /joint_states has the gripper mock too
-# (first, since #151) and its own order, so positions are picked by name (#133 spike).
+# The arm joints in the order of forward_position_controller (ros2_controllers.yaml), J1 first.
+# /joint_states has its own order and the gripper mock too (first, since #151): pick by name.
 ARM_JOINTS = ('joint2_to_joint1', 'joint3_to_joint2', 'joint4_to_joint3', 'joint5_to_joint4',
               'joint6_to_joint5', 'joint6output_to_joint6')
 NS_PER_S = 10 ** 9
@@ -74,6 +76,22 @@ STARTUP_TIMEOUT_S = 15.0
 def stamp_ns(stamp):
     """Return a message stamp as nanoseconds."""
     return stamp.sec * NS_PER_S + stamp.nanosec
+
+
+def arm_values(names, values):
+    """
+    Return the values of the six arm joints, J1 first, from one /joint_states field.
+
+    Raises ValueError when a joint is missing or the field does not match the names, so a
+    wrong message stops the run instead of commanding the wrong joints.
+    """
+    if len(values) != len(names):
+        raise ValueError(f'/joint_states has {len(names)} names and {len(values)} values')
+    missing = [name for name in ARM_JOINTS if name not in names]
+    if missing:
+        raise ValueError(f'/joint_states has no {", ".join(missing)} (names: {list(names)})')
+    index = {name: i for i, name in enumerate(names)}
+    return tuple(values[index[name]] for name in ARM_JOINTS)
 
 
 def step_targets(baseline, joint, delta, count):
@@ -121,13 +139,10 @@ class CycleRecorder(Node):
 
     def on_message(self, message):
         """Store the cycle this message was published in, the six arm joints by name."""
-        index = {name: i for i, name in enumerate(message.name)}
-        if not all(name in index for name in ARM_JOINTS):
-            return
         self.rows.append((
             self.get_clock().now().nanoseconds,
             stamp_ns(message.header.stamp),
-            tuple(message.position[index[name]] for name in ARM_JOINTS)))
+            arm_values(message.name, message.position)))
 
     def latest_positions(self):
         """Return the positions of the last message, or None when none arrived yet."""
@@ -231,6 +246,10 @@ def main(argv=None):  # pragma: no cover
             time.sleep(1.0)
     except (KeyboardInterrupt, ExternalShutdownException):
         code = 130
+    except ValueError as error:
+        # From arm_values(): stop here, the arm holds the last command it got.
+        node.get_logger().error(str(error))
+        code = 1
     rows = node.rows
     node.destroy_node()
     rclpy.try_shutdown()

@@ -25,9 +25,14 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "positronic_mission/motion_backend.hpp"
+#include "moveit_msgs/action/move_group.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/client.hpp"
+
+#include "positronic_mission/motion_backend.hpp"
 
 // Forwarding the class to the .cpp file
 namespace moveit::planning_interface
@@ -48,8 +53,12 @@ public:
   MoveitBackend(MoveitBackend &&) = delete;
   MoveitBackend & operator=(MoveitBackend &&) = delete;
 
-  // Blocking. Called from the execute thread.
+  // Blocking. Called from the execute thread. Execute a Pose.
   MotionOutcome plan_and_execute(const geometry_msgs::msg::PoseStamped & pose) override;
+
+  // Blocking. Called from the execute thread. Execute a Cartesian Path.
+  MotionOutcome plan_and_execute_cartesian(
+    const std::vector<geometry_msgs::msg::Pose> & waypoints) override;
 
   // Must be safe to call from any thread. Makes a running
   // plan_and_execute return PREEMPTED.
@@ -69,6 +78,7 @@ private:
   std::atomic<bool> stop_requested_{false};
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_{nullptr};
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_{nullptr};
+  rclcpp_action::Client<moveit_msgs::action::MoveGroup>::SharedPtr check_client_{nullptr};
 };
 }  // namespace positronic_mission
 

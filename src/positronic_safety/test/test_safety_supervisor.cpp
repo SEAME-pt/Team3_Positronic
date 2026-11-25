@@ -35,15 +35,33 @@
 //   a halt; the supervisor stays stopped until it is activated again; it resumes after a driver
 //   fault once the driver cleared it; a person deactivating the supervisor halts the arm.
 //   Every test uses its own namespace, so tests running at the same time do not hear each other.
+// Follow-up prompt (#136):
+//   The supervisor publishes ~/heartbeat at every check for the driver's dead-man check, and
+//   halt_before_exit() is main()'s Ctrl+C hook. Test that the heartbeat arrives while STOPPED
+//   and while MONITORING; that the hook, called from another thread while the test spins,
+//   sends "hardware inactive" while MONITORING and returns; and that it sends nothing while
+//   STOPPED.
+// Follow-up prompt (#136 review):
+//   Test that the hook returns after halt_step_timeout_ms when the controller manager never
+//   answers, and that a supervisor shut down while monitoring stops its heartbeat.
+// Follow-up prompt (#136, PR review):
+//   The heartbeat now goes out only while the supervisor answers for the arm: RESUMING,
+//   MONITORING and HALTING, never STOPPED. Change the heartbeat test: none after configure
+//   (once the fake hears the publisher), at least 5 in 500 ms while monitoring, state MOVING.
+//   Add: it goes out while RESUMING, before the hardware request is answered; and while
+//   HALTING after a deactivate with an unanswered hardware request (lifecycle INACTIVE, still
+//   beating), then stops once STOPPED.
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "control_msgs/action/follow_joint_trajectory.hpp"
@@ -112,6 +130,22 @@ public:
     return goal_ != nullptr;
   }
 
+  /// The controller manager crashed: its two services are gone. Returns once this node no
+  /// longer sees them, so the supervisor (same process, same graph) does not either.
+  bool controller_manager_gone(milliseconds timeout)
+  {
+    hardware_service_.reset();
+    switch_service_.reset();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (hardware_probe_->service_is_ready() || switch_probe_->service_is_ready()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(milliseconds{10});
+    }
+    return true;
+  }
+
   /// What the supervisor asked for, in the order it arrived: "hardware:active",
   /// "hardware:inactive", "cancel", "controllers:on", "controllers:off".
   Calls calls;
@@ -120,6 +154,16 @@ public:
   Calls deactivated;
   /// Every status the supervisor published, oldest first.
   std::vector<SafetyStatus> statuses;
+  /// How many heartbeats of the supervisor arrived (#136), and the state of the last one.
+  std::size_t supervisor_heartbeats{0};
+  std::uint8_t supervisor_heartbeat_state{Heartbeat::STATE_IDLE};
+
+  /// True once the supervisor's ~/heartbeat publisher is matched: before that, no heartbeat
+  /// proves nothing.
+  bool hears_supervisor() const
+  {
+    return supervisor_heartbeat_subscription_->get_publisher_count() > 0;
+  }
 
   bool publish_heartbeat{true};
   bool publish_fault_data{true};
@@ -131,6 +175,11 @@ public:
   /// Where a failed deactivation leaves the hardware component. UNCONFIGURED is what the
   /// driver does on a link fault.
   std::uint8_t state_after_failed_deactivation{State::PRIMARY_STATE_UNCONFIGURED};
+  /// True: for STALE_WINDOW after answering an activation, every other message has fault
+  /// code 1 and a stamp from before the activation, like messages still on their way from
+  /// before the driver cleared its fault.
+  bool stale_fault_after_activation{false};
+  static constexpr milliseconds STALE_WINDOW{500};
 
 private:
   void create_topics()
@@ -147,6 +196,12 @@ private:
       "safety_supervisor/status", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local(),
       [this](const SafetyStatus & status) {
         statuses.push_back(status);
+      });
+    supervisor_heartbeat_subscription_ = create_subscription<Heartbeat>(
+      "safety_supervisor/heartbeat", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+      [this](const Heartbeat & heartbeat) {
+        ++supervisor_heartbeats;
+        supervisor_heartbeat_state = heartbeat.state;
       });
   }
 
@@ -183,6 +238,9 @@ private:
       create_service<SwitchController>("controller_manager/switch_controller", on_switch);
 
     stop_client_ = create_client<Trigger>("safety_supervisor/stop");
+    hardware_probe_ =
+      create_client<SetHardwareComponentState>("controller_manager/set_hardware_component_state");
+    switch_probe_ = create_client<SwitchController>("controller_manager/switch_controller");
   }
 
   void create_action()
@@ -220,6 +278,10 @@ private:
         activation_succeeds ? State::PRIMARY_STATE_ACTIVE : State::PRIMARY_STATE_UNCONFIGURED;
       if (activation_succeeds) {
         fault_code = 0.0;  // the driver clears its latched fault when it activates
+        if (stale_fault_after_activation) {
+          stale_stamp_ = now() - rclcpp::Duration{milliseconds{50}};
+          stale_until_ = now() + rclcpp::Duration{STALE_WINDOW};
+        }
       }
     } else {
       response.ok = deactivation_succeeds;
@@ -246,6 +308,13 @@ private:
       message.header.stamp = now();
       message.joint_names = {"driver"};
       message.interface_values = {driver};
+      // In the stale window every other tick sends the stale message instead: the supervisor
+      // keeps only the newest message, so two in one tick would hide one of them. A fresh one
+      // still comes every 20 ms, well inside the fault timeout.
+      if (now() < stale_until_ && (++stale_tick_ % 2) == 0) {
+        message.header.stamp = stale_stamp_;
+        message.interface_values.front().values = {1.0};
+      }
       joint_states_publisher_->publish(message);
     }
   }
@@ -253,9 +322,15 @@ private:
   rclcpp::Publisher<Heartbeat>::SharedPtr heartbeat_publisher_;
   rclcpp::Publisher<DynamicJointState>::SharedPtr joint_states_publisher_;
   rclcpp::Subscription<SafetyStatus>::SharedPtr status_subscription_;
+  rclcpp::Subscription<Heartbeat>::SharedPtr supervisor_heartbeat_subscription_;
   rclcpp::Service<SetHardwareComponentState>::SharedPtr hardware_service_;
   rclcpp::Service<SwitchController>::SharedPtr switch_service_;
   rclcpp::Client<Trigger>::SharedPtr stop_client_;
+  rclcpp::Client<SetHardwareComponentState>::SharedPtr hardware_probe_;
+  rclcpp::Client<SwitchController>::SharedPtr switch_probe_;
+  rclcpp::Time stale_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time stale_until_{0, 0, RCL_ROS_TIME};
+  std::uint64_t stale_tick_{0};
   rclcpp_action::Server<FollowJointTrajectory>::SharedPtr trajectory_server_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr trajectory_client_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
@@ -583,6 +658,229 @@ TEST_F(SafetySupervisorTest, DeactivatingTheSupervisorHalts)
 
   EXPECT_EQ(fake_->calls, HALT);
   EXPECT_TRUE(fake_->statuses.back().hardware_stopped);
+}
+
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review S1-S3. S1: a shutdown requested while MONITORING must send "hardware
+//   inactive". S2: after a resume from a driver fault, messages
+//   stamped before the activation and still carrying the old code must not halt again, while a
+//   new fault still does. S3: with the controller manager gone, a halt must end STOPPED at once
+//   and report the hardware as not stopped.
+
+TEST_F(SafetySupervisorTest, ShutdownWhileMonitoringSendsHardwareInactive)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // A shutdown request from ACTIVE. In the installed rclcpp_lifecycle this runs on_deactivate
+  // before on_shutdown (found by deleting on_shutdown's halt: this test still passed, with
+  // "HALT (DEACTIVATED)" from on_deactivate). on_shutdown's own halt is a second guard for a
+  // version that would not. The test checks the outcome, whichever callback gives it.
+  EXPECT_EQ(supervisor_->shutdown().id(), State::PRIMARY_STATE_FINALIZED);
+
+  // Step 1 is the one that stops the arm: it must leave even though the node is finalizing.
+  ASSERT_TRUE(spin_until([this]() {
+      return !fake_->calls.empty() && fake_->calls.front() == "hardware:inactive";
+  }));
+}
+
+TEST_F(SafetySupervisorTest, StaleFaultCodeAfterAResumeDoesNotHaltButANewOneDoes)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+  fake_->fault_code = 1.0;
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
+
+  // Resume. For 500 ms after it activates the hardware, every other message from the fake has
+  // code 1 and a stamp from before the activation. Without the filter, the first one seen in
+  // MONITORING halts.
+  fake_->stale_fault_after_activation = true;
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
+  spin_for(FakeArmSide::STALE_WINDOW + milliseconds{100});  // the whole stale window, and more
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_MONITORING)) << "A stale fault code halted the arm";
+  EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_ACTIVE);
+
+  // The filter is not too wide: a fault stamped after the activation still halts.
+  fake_->calls.clear();
+  fake_->fault_code = 1.0;
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DRIVER_FAULT);
+  }));
+  EXPECT_EQ(fake_->calls, HALT);
+}
+
+TEST_F(SafetySupervisorTest, HaltWithTheControllerManagerGoneEndsAtOnceAndSaysNotStopped)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // The controller manager crashed (and the driver with it: no stop was sent).
+  ASSERT_TRUE(fake_->controller_manager_gone(milliseconds{5000}));
+
+  const auto start = std::chrono::steady_clock::now();
+  fake_->call_stop();
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_STOP_SERVICE);
+  }));
+
+  // Every step failed at once ("not available"): no waiting for the 200 ms step timeouts.
+  EXPECT_LT(std::chrono::steady_clock::now() - start, milliseconds{200});
+  EXPECT_TRUE(fake_->calls.empty());  // nothing reached the (gone) controller manager
+  // The honest report: the supervisor could not stop the arm.
+  EXPECT_FALSE(fake_->statuses.back().hardware_stopped);
+  EXPECT_EQ(supervisor_state(), State::PRIMARY_STATE_INACTIVE);
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatIsSilentWhileStoppedAndGoesOutWhileMonitoring)
+{
+  // #136: STOPPED after configure. Silent, so an activate the supervisor did not ask for finds
+  // no heartbeat at the driver. Checked once the fake is matched to the publisher.
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->hears_supervisor();
+  }));
+  spin_for(milliseconds{300});  // 15 checks of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, 0U);
+
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_MONITORING);
+  }));
+  const std::size_t before = fake_->supervisor_heartbeats;
+  // 20 ms period: 500 ms holds about 25, so 5 leaves room for a slow runner.
+  spin_for(milliseconds{500});
+  EXPECT_GE(fake_->supervisor_heartbeats, before + 5);
+  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_MOVING);
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileResuming)
+{
+  // The driver's on_activate waits for a heartbeat, so the resume must beat before its
+  // hardware request is answered. Here it never is: RESUMING for resume_step_timeout_ms (500).
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return fake_->hears_supervisor();
+  }));
+  fake_->answer_hardware = false;
+  ASSERT_TRUE(spin_until([this]() {
+      return try_activate();
+  }));
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_RESUMING);
+  }));
+
+  const std::size_t before = fake_->supervisor_heartbeats;
+  // 200 ms holds about 10; 3 leaves room for a slow runner, and 200 ms is far inside the 500.
+  spin_for(milliseconds{200});
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_RESUMING));
+  EXPECT_GE(fake_->supervisor_heartbeats, before + 3);
+  EXPECT_EQ(fake_->supervisor_heartbeat_state, Heartbeat::STATE_STOPPED);
+}
+
+TEST_F(SafetySupervisorTest, HeartbeatGoesOutWhileHaltingAndStopsOnceStopped)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // A person deactivates the supervisor: INACTIVE at once, while the halt waits for its first
+  // step, never answered here, for halt_step_timeout_ms (200). It must still beat: the driver
+  // is active until that step lands.
+  fake_->answer_hardware = false;
+  EXPECT_EQ(supervisor_->deactivate().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_TRUE(spin_until([this]() {
+      return mode_is(SafetyStatus::MODE_HALTING);
+  }));
+  const std::size_t at_deactivate = fake_->supervisor_heartbeats;
+  // 120 ms holds about 6; 2 leaves room for a slow runner, and 120 ms is inside the 200.
+  spin_for(milliseconds{120});
+  EXPECT_TRUE(mode_is(SafetyStatus::MODE_HALTING));
+  EXPECT_GE(fake_->supervisor_heartbeats, at_deactivate + 2);
+
+  ASSERT_TRUE(spin_until([this]() {
+      return stopped_because(SafetyStatus::REASON_DEACTIVATED);
+  }));
+  spin_for(milliseconds{100});  // heartbeats already sent arrive
+  const std::size_t once_stopped = fake_->supervisor_heartbeats;
+  spin_for(milliseconds{300});  // 15 checks of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, once_stopped);
+}
+
+TEST_F(SafetySupervisorTest, ExitWhileMonitoringSendsHardwareInactiveFirst)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // As rclcpp's signal thread does on Ctrl+C, while the executor (here the test) still spins.
+  std::atomic<bool> returned{false};
+  std::thread hook{[this, &returned]() {
+      supervisor_->halt_before_exit();
+      returned = true;
+    }};
+  const bool done = spin_until([&returned]() {
+        return returned.load();
+  });
+  hook.join();
+
+  ASSERT_TRUE(done);
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
+}
+
+TEST_F(SafetySupervisorTest, ExitWhileStoppedSendsNothing)
+{
+  ASSERT_EQ(supervisor_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  spin_for(milliseconds{100});
+
+  // Returns at once: nothing to wait for, so no thread and no spinning needed.
+  supervisor_->halt_before_exit();
+  spin_for(milliseconds{100});
+  EXPECT_TRUE(fake_->calls.empty());
+}
+
+TEST_F(SafetySupervisorTest, ExitReturnsAfterTheStepTimeoutWhenNobodyAnswers)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+  fake_->answer_hardware = false;
+
+  std::atomic<bool> returned{false};
+  const auto start = std::chrono::steady_clock::now();
+  std::thread hook{[this, &returned]() {
+      supervisor_->halt_before_exit();
+      returned = true;
+    }};
+  const bool done = spin_until([&returned]() {
+        return returned.load();
+  });
+  const auto waited = std::chrono::steady_clock::now() - start;
+  hook.join();
+
+  ASSERT_TRUE(done);
+  // halt_step_timeout_ms is 200 in this fixture. The hook never returns before it: the request
+  // was not answered. 500 ms over it is the margin for a loaded runner, not a requirement.
+  EXPECT_GE(waited, milliseconds{200});
+  EXPECT_LT(waited, milliseconds{700});
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
+}
+
+TEST_F(SafetySupervisorTest, ShutDownSupervisorStopsItsHeartbeat)
+{
+  ASSERT_NO_FATAL_FAILURE(start_monitoring());
+
+  // From ACTIVE straight to FINALIZED: it halts the arm, then must go silent for the driver,
+  // even though the process (here the executor) keeps spinning it.
+  EXPECT_EQ(supervisor_->shutdown().id(), State::PRIMARY_STATE_FINALIZED);
+  spin_for(milliseconds{100});  // heartbeats already sent arrive
+  const std::size_t after_shutdown = fake_->supervisor_heartbeats;
+  spin_for(milliseconds{300});  // 15 periods of 20 ms
+  EXPECT_EQ(fake_->supervisor_heartbeats, after_shutdown);
+  ASSERT_FALSE(fake_->calls.empty());
+  EXPECT_EQ(fake_->calls.front(), "hardware:inactive");
 }
 
 int main(int argc, char ** argv)

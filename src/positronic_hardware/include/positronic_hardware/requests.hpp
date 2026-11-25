@@ -41,12 +41,13 @@ enum class Expect : std::uint8_t
   REPLY
 };
 
-/// How long perform() waits for the ack of a stop or power_on. On the bench (16 Nov 2026, 259
-/// stops and 69 power_on) a stop is acknowledged in 37 to 41 ms when the arm is not moving, up to
-/// 45 ms right after a send_angles, once 86 ms mid-move. A power_on takes 58 to 60 ms. 80 ms
-/// covers all of that but the one 86 ms, plus the 2 ms read backoff, and keeps a request turn
-/// under the 200 ms link watchdog (~130 ms of silence at worst). No ack by then: the frame goes
-/// out again next turn (#103). That is what the 86 ms ack costs, a second stop one turn later.
+/// How long perform() waits for the ack of a stop or power_on. On the bench (16 Nov 2026, 259 stops
+/// and 69 power_on) a stop is acknowledged in 37 to 41 ms when the arm is not moving, up to 45 ms
+/// right after a send_angles, once 86 ms mid-move. A power_on takes 58 to 60 ms. 80 ms covers all
+/// of that but the one 86 ms, plus the 2 ms read backoff, and keeps a request turn under the 200 ms
+/// link watchdog (~140 ms of silence at worst, LATE_REPLY_DRAIN included). No ack by then: the
+/// frame goes out again next turn (#103). That is what the 86 ms ack costs, a second stop one turn
+/// later.
 inline constexpr std::chrono::milliseconds ACK_TIMEOUT{80};
 
 /// How long perform() waits for the reply of a request that answers with data. The same 50 ms
@@ -83,7 +84,6 @@ inline Request power_on_request()
     ACK_TIMEOUT};
 }
 
-/// Powers the servos off. The arm answers nothing: the overheat cut repeats it once a period.
 /// #133 step zero: fresh mode 1, so each send_angles replaces the target before it (#20: in mode
 /// 0 the targets queue and streaming collapses). Sent before every power_on. The spec lists no
 /// reply for 0x16, but the Atom acks power_on, which the spec also lists without one: whether it
@@ -96,11 +96,14 @@ inline Request set_fresh_mode_request()
     Expect::ACK, ACK_TIMEOUT};
 }
 
+/// Powers the servos off. Acknowledged (FE FE 03 11 01 FA, 62 ms after the frame on 24 Nov
+/// 2026), after which the arm answers nothing until a power on. The overheat cut repeats it once
+/// a period, and at once when its ack does not come.
 inline Request power_off_request()
 {
   return {
-    positronic_protocol::CommandId::POWER_OFF, positronic_protocol::encode_power_off(),
-    Expect::NONE, std::chrono::milliseconds{0}};
+    positronic_protocol::CommandId::POWER_OFF, positronic_protocol::encode_power_off(), Expect::ACK,
+    ACK_TIMEOUT};
 }
 
 /// Asks the six servo temperatures. Answered with a reply frame.

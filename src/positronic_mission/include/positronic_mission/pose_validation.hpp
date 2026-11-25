@@ -21,15 +21,24 @@
 #ifndef POSITRONIC_MISSION__POSE_VALIDATION_HPP_
 #define POSITRONIC_MISSION__POSE_VALIDATION_HPP_
 
+#include <memory>
 #include <string>
+#include <vector>
+
+#include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "positronic_interfaces/action/go_to_pose.hpp"
 
 namespace positronic_mission
 {
 inline constexpr const char * BASE_FRAME = "g_base";
+using positronic_interfaces::action::GoToPose;
 
 // Empty string if valid, otherwise returns the reason
+std::string validate_input(const std::shared_ptr<const GoToPose::Goal> & goal);
 std::string validate_pose(const geometry_msgs::msg::PoseStamped & pose);
+std::string validate_waypoints(const std::vector<geometry_msgs::msg::Pose> & waypoints);
+
 }  // namespace positronic_mission
 
 #endif  // POSITRONIC_MISSION__POSE_VALIDATION_HPP_
