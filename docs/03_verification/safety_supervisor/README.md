@@ -84,6 +84,23 @@ Also seen: in test 9 trial 3 the supervisor exited after the hardware stop and b
 `arm_controller` off. The Ctrl+C hook only waits for the hardware stop, so this is as designed: the
 component was inactive and the goal cancelled.
 
+### Re-run, 2026-11-25
+
+On the PR's final code (`dev` merged in, heartbeat only while the supervisor resumes, monitors or
+halts), same script and trajectory. Raw: `2026-11-25_deadman.csv`.
+
+| # | Trials | Result |
+|---|---|---|
+| 8 | 2 | fault 4 520-532 ms after the last heartbeat; travel ≤ 0.18°; each resumed with one activate |
+| 9 | 1 | hardware inactive 86 ms after the signal (59 ms after the halt started); travel 0.08°; no fault 4 |
+
+What differs from 11-23: gripper on the arm (camera off), the arm started near pose 0 instead of
+folded, and both supervisor bench timeouts at 1000 ms from the start. No attempt halted for
+another reason. In test 9 the travel stops at the resume: the resume's `power_on` let J4 settle
+under the gripper (0.97° at pose 0), which is not motion after the halt. As in trial 3 of 11-23,
+the supervisor exited before switching the controllers off; at the resume the controller manager
+logged them as already active, and the arm held its pose.
+
 ## Gazebo, 2026-11-13
 
 `gazebo.launch.py`, the mission node, and the supervisor with `-p fault_topic:=/sim_fault`; a

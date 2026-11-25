@@ -400,10 +400,10 @@ logs once and returns ERROR.
 - **Timing.** 500 ms is 25 heartbeats, both nodes on the Jetson (ADR 0006), no Wi-Fi in between.
   The stop leaves within the timeout, plus one control period (33 ms), plus the turn the serial
   thread is in: about 27 ms usually, up to ~160 ms at worst (a lost reply, 50 ms, an overdue
-  temperature request, 50 ms, and a late sync-write, 60 ms). On the arm: fault 4 509-528 ms after
-  the last heartbeat (`docs/03_verification/safety_supervisor/`, test 8). Stalls of ~350 ms were
-  seen on the Nano when a ros2 CLI starts, so 500 ms leaves ~150 ms: raise it if false fault 4s
-  show up.
+  temperature request, 50 ms, and a late sync-write, 60 ms). On the arm: fault 4 509-532 ms after
+  the last heartbeat (`docs/03_verification/safety_supervisor/`, test 8, 11-23 and 11-25).
+  Stalls of ~350 ms were seen on the Nano when a ros2 CLI starts, so 500 ms leaves ~150 ms: raise
+  it if false fault 4s show up.
 - **Off.** `supervisor_timeout_ms` = 0, for a run without the supervisor: `driver.launch.py`
   alone (bench, `sweep.sh`, the HIL tests). `on_init` logs a warning saying so. Gazebo runs
   `gz_ros2_control`, not this plugin, so the check does not apply there.
