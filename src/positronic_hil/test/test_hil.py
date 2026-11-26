@@ -6,7 +6,8 @@
 
 import math
 
-from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, describe, JOINTS, MAX_DRIFT, max_drift
+from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, describe, drift_limit, JOINTS
+from conftest import MAX_DRIFT, max_drift
 from lifecycle_msgs.msg import State
 
 MIN_RATE_HZ = 28.0
@@ -54,6 +55,9 @@ def test_stop_and_resume(arm):
     samples = arm.record(2.0)
 
     assert samples, 'no /joint_states after the cycles'
+    # One send of the current pose per activate (#175).
+    limit = drift_limit(sends=CYCLES)
     drift, joint = max_drift(samples, reference)
-    assert drift <= MAX_DRIFT, \
-        f'{joint} moved {math.degrees(drift):.2f} deg; ' + ' | '.join(steps)
+    assert drift <= limit, (
+        f'{joint} moved {math.degrees(drift):.2f} deg (limit {math.degrees(limit):.2f}); '
+        f'{" | ".join(steps)}')

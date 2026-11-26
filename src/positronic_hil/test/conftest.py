@@ -23,6 +23,10 @@ JOINTS = [
     'joint5_to_joint4', 'joint6_to_joint5', 'joint6output_to_joint6',
 ]
 MAX_DRIFT = math.radians(0.5)
+# #175: each send_angles of the pose the arm already has can leave a joint lower (J4 drops 1.06 to
+# 1.23 deg per send on the Jetson, 2026-11-26), and the driver sends the pose again at every
+# activate, so the drop adds up over stop/resume cycles. Every joint gets this much per send.
+DROP_PER_SEND = math.radians(1.25)
 ARM_CONTROLLER = 'arm_controller'
 CONTROLLER_TIMEOUT_S = 30.0
 
@@ -122,6 +126,10 @@ def max_drift(samples, reference):
     per_joint = drift_per_joint(samples, reference)
     joint = max(per_joint, key=lambda name: abs(per_joint[name]))
     return abs(per_joint[joint]), joint
+
+
+def drift_limit(sends):
+    return MAX_DRIFT + sends * DROP_PER_SEND
 
 
 def describe(samples, reference):

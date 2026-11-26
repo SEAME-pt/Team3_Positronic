@@ -7,7 +7,8 @@
 import math
 
 from builtin_interfaces.msg import Duration
-from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, describe, JOINTS, MAX_DRIFT, max_drift
+from conftest import ARM_CONTROLLER, CONTROLLER_TIMEOUT_S, describe, drift_limit, JOINTS
+from conftest import max_drift
 from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectoryPoint
@@ -38,7 +39,10 @@ def test_hold_trajectory(arm):
 
     samples = arm.record(2.0)
 
+    # The goal is one send of the current pose (#175).
+    limit = drift_limit(sends=1)
     drift, joint = max_drift(samples, reference)
-    assert drift <= MAX_DRIFT, (
-        f'{joint} moved {math.degrees(drift):.2f} deg; before the goal: {before} | '
+    assert drift <= limit, (
+        f'{joint} moved {math.degrees(drift):.2f} deg (limit {math.degrees(limit):.2f}); '
+        f'before the goal: {before} | '
         f'after: {describe(samples, reference)}')
