@@ -23,6 +23,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_joint_states_rate test/test_joint_states_rate.py)
   # main() of the rate script, alone: it initialises rclpy itself, so it needs its own process.
   ament_add_pytest_test(test_joint_states_rate_main test/test_joint_states_rate_main.py)
+  # The wrist camera node: calibration file, rotation, messages, with a fake camera.
+  ament_add_pytest_test(test_wrist_camera test/test_wrist_camera.py)
 endif()
 
 # Copy the folders to install/.
@@ -30,6 +32,7 @@ install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
 # Scripts go to lib/, where `ros2 run` looks for executables.
 install(PROGRAMS scripts/joint_states_delay.py scripts/joint_states_rate.py
+  scripts/wrist_camera.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

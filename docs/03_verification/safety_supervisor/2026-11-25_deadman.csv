@@ -1,0 +1,4 @@
+test,trial,counted,trigger,goal_to_trigger_s,trigger_to_event_ms,heartbeat_to_fault4_ms,halt_to_inactive_ms,j1_speed_deg_s,travel_deg,note
+8,1,1,kill -9,3.56,534.4,531.5,,1.82,0.09,
+8,2,1,kill -9,3.55,515.8,519.8,,1.85,0.18,
+9,1,1,SIGINT,3.63,86.1,,58.5,0.46,0.08,travel up to the resume: its power_on 40 s later let J4 settle 0.97 deg under the gripper at pose 0

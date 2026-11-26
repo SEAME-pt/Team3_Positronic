@@ -18,11 +18,13 @@ safety_supervisor:
     controllers_to_start:
       - joint_state_broadcaster
       - arm_controller
+      - gripper_action_controller
     # A halt deactivates these: EVERY controller of jetson_controllers.yaml that writes a
     # command interface. One left active writes its old target again as soon as the hardware
     # component is activated, and the arm moves to it.
     controllers_to_stop:
       - arm_controller
+      - gripper_action_controller
       - forward_position_controller
 
     # Chosen from the heartbeat link campaign (docs/03_verification/heartbeat_link): the

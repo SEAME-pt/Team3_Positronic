@@ -23,12 +23,15 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -36,43 +39,28 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/echo_timeout_report.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/fault_code.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
+#include "positronic_hardware/link_watchdog.hpp"
 #include "positronic_hardware/parameters.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/tracking_check.hpp"
 #include "positronic_hardware/velocity_estimator.hpp"
+#include "positronic_interfaces/msg/heartbeat.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace positronic_hardware
 {
 
-/// What the driver reports in its fault state interface (#35), as a whole number in a double.
-/// The supervisor (#45) stops the arm on any value other than NONE, so a new fault needs no
-/// change there. The values are part of the interface: add new ones at the end, never reuse or
-/// renumber one.
-enum class FaultCode : std::uint8_t
-{
-  /// No fault: the link is alive (or the component is not active).
-  NONE = 0,
-  /// No valid reply from the arm for LinkWatchdog::DEFAULT_TIMEOUT while active. Latched until
-  /// the next activate.
-  LINK_TIMEOUT = 1,
-  /// A joint further than tracking_error_deg from the last target on the wire for longer than
-  /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
-  /// the next activate, targets held meanwhile, like the link timeout.
-  TRACKING_ERROR = 2,
-  /// A servo reached servo_temp_limit_c on two readings in a row: the serial thread has already
-  /// stopped the arm and powered its servos off. read() also returns ERROR. Latched until the
-  /// next activate.
-  OVERHEAT = 3,
-};
-
 /// The <gpio> of the <ros2_control> block that carries the fault, and its one state interface.
 /// The supervisor reads "driver/fault_code".
 inline constexpr std::string_view FAULT_GPIO{"driver"};
 inline constexpr std::string_view FAULT_STATE{"fault_code"};
+
+/// Where the safety supervisor publishes its heartbeat (#136), every check of its timer.
+inline constexpr std::string_view SUPERVISOR_HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
 
 class RobotSystem : public hardware_interface::SystemInterface
 {
@@ -117,9 +105,21 @@ private:
   bool load_limits(const hardware_interface::HardwareInfo & info);
 
   /// Latches `code` (#35): stores it, asks the backend to stop the arm, and logs a link timeout
-  /// once (an overheat is logged by check_temperatures(), which knows the joint and the value).
+  /// once (an overheat is logged by check_temperatures(), which knows the joint and the value,
+  /// a supervisor loss by read()).
   /// Only the first fault is kept; on_activate clears it. No allocation: safe from read().
   void raise_fault(FaultCode code);
+
+  /// The driver's status on /diagnostics (#121): OK for no fault, ERROR with the name and the
+  /// reason of the latched one. Runs on the executor that spins the component's node, beside a
+  /// transition that may be replacing arm_: it reads fault_ only.
+  void diagnose(diagnostic_updater::DiagnosticStatusWrapper & status);
+  /// on_init's part of #121: the Updater on the component's node, with diagnose() and the timer
+  /// that publishes a new fault at once. Nothing without a node (most tests).
+  void start_diagnostics(const std::string & hardware_id);
+  /// on_activate's wait for a link that died after the first reply (#35, #121): true once the
+  /// arm answers again before `deadline`, false with one log line if it stays silent.
+  bool link_alive_by(std::chrono::steady_clock::time_point deadline);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
@@ -142,6 +142,16 @@ private:
   /// with how many since the last one, at most every EchoTimeoutReport::DEFAULT_PERIOD, so turns
   /// that got slow do not go unseen.
   void report_echo_timeouts();
+  /// on_init's part of the dead-man check (#136): one log line with the mode, and when it is on,
+  /// the subscription to the supervisor's heartbeat. False, with the reason logged, when the
+  /// check is on but the component has no ROS node to subscribe with.
+  bool start_supervisor_check();
+  /// on_activate's part: waits up to supervisor_timeout_ms for a heartbeat. True at once when
+  /// the check is off.
+  bool supervisor_allows_activation();
+  /// True when the check is on and no heartbeat came for longer than supervisor_timeout_ms.
+  /// One atomic load and one clock read: safe from read().
+  [[nodiscard]] bool supervisor_silent() const;
   /// True while the component is ACTIVE: the only state in which targets go out and faults count.
   [[nodiscard]] bool is_active() const;
 
@@ -168,6 +178,8 @@ private:
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
+  /// The sum of the periods read() got, in ns: the clock of FakeArm (#122).
+  std::atomic<std::int64_t> control_time_ns_{0};
 
   /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
   /// whose count starts at zero.
@@ -176,6 +188,31 @@ private:
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
   PositionLimits limits_{};
+
+  bool has_gripper_{false};
+  double gripper_closed_{0.0};
+  double gripper_open_{0.0};
+  JointHandles gripper_handles_{};
+  double gripper_previous_{0.0};
+  bool gripper_previous_valid_{false};
+
+  /// The time of the supervisor's last heartbeat (#136), the same lock-free watchdog as the
+  /// link's: the subscription callback writes it on an executor thread, read() reads it on the
+  /// control loop. Empty while the check is off.
+  std::optional<LinkWatchdog> supervisor_watchdog_;
+  /// Created once in on_init and kept until the plugin is destroyed: a subscription made again
+  /// at each configure would have to be discovered again before on_activate. Declared after the
+  /// watchdog, so it goes first and its callback never sees the watchdog gone.
+  rclcpp::Subscription<positronic_interfaces::msg::Heartbeat>::SharedPtr heartbeat_subscription_;
+
+  // #121, last so they go first: their callbacks read the members above. Both run on the
+  // node's default callback group, never at the same time, so diagnosed_ needs no atomic.
+  /// The fault diagnose() last published.
+  FaultCode diagnosed_{FaultCode::NONE};
+  /// Null without a node: a resource manager loaded without an executor (most tests).
+  std::unique_ptr<diagnostic_updater::Updater> diagnostics_;
+  /// Publishes a new fault at once instead of at the next once-a-second status.
+  rclcpp::TimerBase::SharedPtr fault_watch_;
 };
 
 }  // namespace positronic_hardware

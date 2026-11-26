@@ -23,7 +23,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -31,10 +30,8 @@
 
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/node_options.hpp"
-#include "rclcpp/rate.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/service.hpp"
-#include "rclcpp_action/client.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp_action/server.hpp"
 #include "rclcpp_action/server_goal_handle.hpp"
@@ -87,6 +84,7 @@ public:
   CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & /* state */) override;
+  CallbackReturn on_error(const rclcpp_lifecycle::State & /* state */) override;
 
   // Backend interface (mock or moveit)
   void set_backend(std::shared_ptr<MotionBackend> backend)
@@ -97,7 +95,6 @@ public:
 private:
   void reset_ptrs();
   void heart_beat();
-  // bool validate_pose(const std::shared_ptr<const GoToPose::Goal> & goal);
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid, const std::shared_ptr<const GoToPose::Goal> & goal);
   rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & goal_handle);
@@ -109,6 +106,10 @@ private:
   void handle_emergency_stop(
     const std::shared_ptr<StateTrigger::Request> & request,
     const std::shared_ptr<StateTrigger::Response> & response);
+
+  // Run the backend inside a try/catch block
+  MotionOutcome run_backend(
+    const std::shared_ptr<const positronic_interfaces::action::GoToPose::Goal> & goal);
 
   // Mission Node action server
   rclcpp_action::Server<GoToPose>::SharedPtr mission_server_{nullptr};

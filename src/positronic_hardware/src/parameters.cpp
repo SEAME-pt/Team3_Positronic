@@ -51,8 +51,9 @@ using Parameters = std::unordered_map<std::string, std::string>;
 constexpr int MAX_MOVING_PERIOD_MS{static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count() / 2)};
 
 /// #150: the wait for the sync-write is the first part of the silence after a send. With two
-/// lost replies (2 x 50 ms) and a late reply (20 ms) after it, 80 ms fills the 200 ms link
-/// timeout exactly; the default 60 leaves 20 ms. Below 20 ms almost every sync-write would be
+/// lost replies (2 x 50 ms, each followed by the 8 ms LATE_REPLY_DRAIN) and a late reply (20 ms)
+/// after it, the default 60 comes to ~196 ms, under the 200 ms link timeout; at 80 two lost
+/// replies trip it. Below 20 ms almost every sync-write would be
 /// late (it ends 19 ms after the send at p50).
 constexpr int MIN_ECHO_TIMEOUT_MS{20};
 constexpr int MAX_ECHO_TIMEOUT_MS{80};
@@ -72,12 +73,13 @@ struct NumericParameter
 // The two timings of the serial thread that the URDF sets (#32, #150): a period above the arm's
 // own busy time and at most half the #35 link timeout, and the longest wait for the Atom's
 // sync-write after a send. The echo timeout may be longer than the period: it only counts when
-// the Atom is late. The settle of the overheat cut is a constant since #150, when the moving
-// turn stopped using it (SerialTiming::send_settle). servo_temp_limit_c only goes
+// the Atom is late. The settle is a constant since #150, when the moving turn stopped using it
+// (SerialTiming::send_settle), and only the gripper's set waits it. servo_temp_limit_c only goes
 // down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
-// controller's trajectory tolerance (#103).
+// controller's trajectory tolerance (#103). supervisor_timeout_ms starts at 0, which turns the
+// dead-man check off (#136); 5 s is already far longer than any halt should wait.
 constexpr std::array NUMERIC_PARAMETERS{
   NumericParameter{
     "moving_period_ms", 20, MAX_MOVING_PERIOD_MS, true,
@@ -104,12 +106,21 @@ constexpr std::array NUMERIC_PARAMETERS{
     [](HardwareConfig & config, double value) {
       config.tracking_error_ms = static_cast<int>(value);
     }},
+  NumericParameter{
+    "supervisor_timeout_ms", 0, MAX_SUPERVISOR_TIMEOUT_MS, true,
+    [](HardwareConfig & config, double value) {
+      config.supervisor_timeout_ms = static_cast<int>(value);
+    }},
 };
 
 /// The <param> names that are not a number in a range, each with its own rule in read_special().
 constexpr std::array SPECIAL_NAMES{
-  std::string_view{"backend"}, std::string_view{"port"}, std::string_view{"baud"},
-  std::string_view{"velocity_filter_alpha"}};
+  std::string_view{"backend"},
+  std::string_view{"fake_mode"},
+  std::string_view{"port"},
+  std::string_view{"baud"},
+  std::string_view{"velocity_filter_alpha"},
+  std::string_view{"pose_from_poll"}};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(const Parameters & parameters, std::string_view key)
@@ -162,7 +173,7 @@ std::string read_numeric(
          std::to_string(std::lround(parameter.max)) + "].";
 }
 
-/// The four SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
+/// The six SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
 std::string read_special(const Parameters & parameters, HardwareConfig & config)
 {
   if (const std::string * backend{find_parameter(parameters, "backend")}) {
@@ -172,6 +183,15 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
     config.backend = Backend::FAKE;
     if (*backend == "serial") {
       config.backend = Backend::SERIAL;
+    }
+  }
+  if (const std::string * mode{find_parameter(parameters, "fake_mode")}) {
+    if (*mode != "instant" && *mode != "measured") {
+      return "Parameter 'fake_mode' is '" + *mode + "'; use 'instant' or 'measured'.";
+    }
+    config.fake_mode = FakeMode::INSTANT;
+    if (*mode == "measured") {
+      config.fake_mode = FakeMode::MEASURED;
     }
   }
   if (const std::string * port{find_parameter(parameters, "port")}) {
@@ -195,6 +215,13 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
       return "Parameter 'velocity_filter_alpha' is '" + *alpha + "'; use a number in (0, 1].";
     }
     config.velocity_filter_alpha = value;
+  }
+  if (const std::string * poll{find_parameter(parameters, "pose_from_poll")}) {
+    // #170: the pose from the Atom's poll and the write-triggered turn, or the #150 turn.
+    if (*poll != "true" && *poll != "false") {
+      return "Parameter 'pose_from_poll' is '" + *poll + "'; use 'true' or 'false'.";
+    }
+    config.timing.pose_from_poll = (*poll == "true");
   }
   return {};
 }
@@ -269,14 +296,22 @@ std::string describe(const HardwareConfig & config)
   std::string backend{"fake"};
   if (config.backend == Backend::SERIAL) {
     backend = "serial";
+  } else if (config.fake_mode == FakeMode::MEASURED) {
+    backend = "fake' in mode 'measured";
+  }
+  std::string poll{"off"};
+  if (config.timing.pose_from_poll) {
+    poll = "on";
   }
   std::ostringstream line;
   line << std::fixed << "Backend '" << backend << "', port " << config.port << " at " << config.baud
        << " baud, velocity filter alpha " << std::setprecision(3) << config.velocity_filter_alpha
        << ", moving period " << config.timing.moving_period.count() << " ms, echo timeout "
-       << config.timing.echo_timeout.count() << " ms, servo temperature limit "
-       << config.servo_temp_limit_c << " degC, tracking error " << std::setprecision(1)
-       << config.tracking_error_deg << " deg for " << config.tracking_error_ms << " ms.";
+       << config.timing.echo_timeout.count() << " ms, pose from poll " << poll
+       << ", servo temperature limit " << config.servo_temp_limit_c << " degC, tracking error "
+       << std::setprecision(1) << config.tracking_error_deg << " deg for "
+       << config.tracking_error_ms << " ms, supervisor timeout " << config.supervisor_timeout_ms
+       << " ms.";
   return line.str();
 }
 

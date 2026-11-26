@@ -98,6 +98,37 @@
 // Follow-up prompt (#150):
 //   echo_timeout_ms replaces send_settle_ms as the parameter: the old name is refused, a value
 //   out of 20 to 80 is refused, and an echo timeout longer than the period loads.
+// Follow-up prompt (#170):
+//   pose_from_poll 'false' loads; a value that is not 'true' or 'false' is refused.
+// Follow-up prompt (#122 part 1):
+//   fake_mode=measured reaches the fake arm and its time is the sum of the periods read() gets:
+//   a J1 step reported unmoved by a read of period 0 and 1 - 1/e of the way after a read of one
+//   lag time constant, without a sleep. A fake_mode that is neither instant nor measured is
+//   refused.
+// Follow-up prompt (#122 part 2):
+//   One test feeds the plugin, at the 30 Hz control rate, the points of a 3-point trajectory
+//   (hold, +10 deg, +20 deg) on J1 and the wrist J5 with fake_mode=measured, and checks the
+//   largest error between command and state: under the controller's 0.087 rad trajectory
+//   tolerance at 10 deg/s, over it at 30 deg/s.
+// Follow-up prompt (#136):
+//   The dead-man check: with supervisor_timeout_ms > 0 the plugin subscribes to the supervisor's
+//   heartbeat through the node ros2_control gives it, which needs an executor. Give the fixture
+//   an executor spun on a thread and a stand-in supervisor that publishes the heartbeat, and
+//   keep every other test at supervisor_timeout_ms = 0. Test: the heartbeat stops while active,
+//   then read() returns ERROR, the stop leaves for the arm and fault 4 is latched; an activate
+//   with the heartbeat back clears it and targets go out again; activate is refused without a
+//   heartbeat; nothing happens at 0; on_init refuses the check without a node; and a link
+//   timeout that came first keeps fault 1.
+// Follow-up prompt (#136, PR review):
+//   The supervisor now beats only from its resume on, so the first heartbeat reaches the driver
+//   while on_activate already waits. Test that a heartbeat that starts after activate() was
+//   called still activates.
+// Follow-up prompt (#121):
+//   With an executor in the resource manager params, as the controller manager gives it, the
+//   component gets a node and publishes its fault on /diagnostics. With the once-a-second status
+//   set to an hour, so a status that comes is a change: a silent arm gives ERROR LINK_TIMEOUT
+//   with its reason at once, and an activate right after the arm answers again brings OK back:
+//   activate waits for the link to come back, as for the first reply, instead of refusing.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -114,6 +145,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -125,12 +157,15 @@
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "hardware_interface/resource_manager.hpp"
 #include "hardware_interface/types/lifecycle_state_names.hpp"
 #include "hardware_interface/types/resource_manager_params.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "positronic_hardware/arm_backend.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_interfaces/msg/heartbeat.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
@@ -171,6 +206,11 @@ constexpr double NO_FAULT{0.0};
 constexpr double LINK_TIMEOUT_FAULT{1.0};
 constexpr double OVERHEAT_FAULT{3.0};
 constexpr double TRACKING_ERROR_FAULT{2.0};
+constexpr double SUPERVISOR_LOST_FAULT{4.0};
+
+/// Where the supervisor publishes its heartbeat and the driver listens (#136), written out for
+/// the same reason.
+constexpr std::string_view HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
 
 /// One <joint> entry of the <ros2_control> block, with the given interface tags.
 std::string joint_block(const std::string & name, std::string_view interfaces)
@@ -229,16 +269,22 @@ constexpr std::string_view FAKE_BACKEND{"<param name=\"backend\">fake</param>"};
 
 /// `description` (the arm's URDF by default) with a <ros2_control> block that uses RobotSystem
 /// for `joint_blocks`, with `parameters` in its <hardware> tag and `gpio` after the joints.
+/// Unless `parameters` set supervisor_timeout_ms, it is 0: the tests have no supervisor, so the
+/// dead-man check (#136) is off except in the tests about it.
 std::string urdf_with(
   const std::string & joint_blocks, std::string_view parameters = FAKE_BACKEND,
   const std::string & description = read_description(), std::string_view gpio = FAULT_GPIO)
 {
   std::string urdf{description};
+  std::string hardware_parameters{parameters};
+  if (parameters.find("supervisor_timeout_ms") == std::string_view::npos) {
+    hardware_parameters += param("supervisor_timeout_ms", "0");
+  }
   const std::string ros2_control{
     std::string{"<ros2_control name=\""} + std::string{HARDWARE_NAME} +
     "\" type=\"system\">"
     "<hardware><plugin>positronic_hardware/RobotSystem</plugin>" +
-    std::string{parameters} + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
+    hardware_parameters + "</hardware>" + joint_blocks + std::string{gpio} + "</ros2_control>"};
   urdf.insert(urdf.rfind("</robot>"), ros2_control);
   return urdf;
 }
@@ -303,18 +349,18 @@ std::vector<std::uint8_t> parse_hex(std::string_view hex)
   return bytes;
 }
 
-/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until
-/// stopped: a stand-in for the arm with the real traffic. A get_angles gets the recorded poll
-/// of the servos and then RECORDED_REPLY, a stop or power_on gets the arm's ack
-/// (FE FE 03 <id> 01 FA) after `ack_delay` (1.8 ms on the bench, 58 ms seen once for a
-/// power_on), a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later,
-/// as the arm does it, a get_servo_temps gets the temperatures set with set_temperature() (all
-/// six servos alike) unless set_answer_temperatures(false), anything else nothing. With
-/// ack_requests off the stop and power_on frames are taken and never answered. With
-/// set_silent_after_power_off(true) it answers nothing once a power_off has arrived, like the
-/// real arm with its servos off. Frames are cut like the arm does it: FE FE <len> ..., len + 3
-/// bytes, resynchronised on FE FE, with a carry across reads. It keeps every byte it receives,
-/// so a test can check what the driver put on the wire.
+/// Answers the driver on the controller side of a pseudo-terminal, frame by frame, until stopped: a
+/// stand-in for the arm with the real traffic. A get_angles gets the recorded poll of the servos
+/// and then RECORDED_REPLY, a stop or power_on gets the arm's ack (FE FE 03 <id> 01 FA) after
+/// `ack_delay` (1.8 ms on the bench, 58 ms seen once for a power_on), a power_off its ack at once,
+/// a send_angles gets its ack, the poll and the recorded sync-write ~20 ms later, as the arm does
+/// it, a get_servo_temps gets the temperatures set with set_temperature() (all six servos alike)
+/// unless set_answer_temperatures(false), anything else nothing. With ack_requests off the stop and
+/// power_on frames are taken and never answered. With set_silent_after_power_off(true) it acks the
+/// first power_off and answers nothing after it, like the real arm with its servos off. Frames are
+/// cut like the arm does it: FE FE <len> ..., len + 3 bytes, resynchronised on FE FE, with a carry
+/// across reads. It keeps every byte it receives, so a test can check what the driver put on the
+/// wire.
 class ReplyingArm
 {
 public:
@@ -469,10 +515,13 @@ private:
     static const std::vector<std::uint8_t> poll{parse_hex(RECORDED_POLL)};
     static const std::vector<std::uint8_t> sync_write{parse_hex(RECORDED_SYNC_WRITE)};
     const std::uint8_t id{frame[3]};
-    if (id == 0x11 && silent_after_power_off_.load()) {
-      powered_off_.store(true);
-    }
     if (powered_off_.load()) {
+      return;
+    }
+    if (id == 0x11) {
+      // The arm acks a power off (62 ms after it on 24 Nov 2026), then answers nothing more.
+      put(controller, {0xFE, 0xFE, 0x03, 0x11, 0x01, 0xFA});
+      powered_off_.store(silent_after_power_off_.load());
       return;
     }
     if (id == 0xE5) {
@@ -557,16 +606,73 @@ protected:
     rclcpp::shutdown();
   }
 
+  void TearDown() override
+  {
+    stop_spinning();
+  }
+
   /// Loads `urdf` into a fresh ResourceManager, as the controller manager does at start-up.
-  hardware_interface::ResourceManager & load(const std::string & urdf)
+  /// Without `executor` the component gets no ROS node, as in every test but the #136 and #121
+  /// ones; with it, as the controller manager gives it, the component gets its node.
+  hardware_interface::ResourceManager & load(
+    const std::string & urdf, const rclcpp::Executor::SharedPtr & executor = nullptr)
   {
     hardware_interface::ResourceManagerParams params;
     params.robot_description = urdf;
     params.clock = std::make_shared<rclcpp::Clock>();
     params.logger = rclcpp::get_logger("test_load_robot_system");
+    params.executor = executor;
     resource_manager_ = std::make_unique<hardware_interface::ResourceManager>(params, false);
     loaded_ = resource_manager_->load_and_initialize_components(params);
     return *resource_manager_;
+  }
+
+  /// load() with an executor spun on a thread of its own, as the controller manager does it, so
+  /// the component gets the node the dead-man check (#136) subscribes with. The same executor
+  /// spins a stand-in for the supervisor, which publishes a heartbeat every 20 ms, like the real
+  /// one, while beating_ is true.
+  void load_with_node(const std::string & urdf)
+  {
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    supervisor_ = std::make_shared<rclcpp::Node>("fake_safety_supervisor");
+    heartbeat_ = supervisor_->create_publisher<positronic_interfaces::msg::Heartbeat>(
+      std::string{HEARTBEAT_TOPIC}, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
+    beat_timer_ = supervisor_->create_wall_timer(std::chrono::milliseconds{20}, [this]() {
+          if (beating_) {
+            heartbeat_->publish(positronic_interfaces::msg::Heartbeat{});
+          }
+    });
+    executor_->add_node(supervisor_);
+    load(urdf, executor_);
+    spinner_ = std::thread{[this]() {
+        executor_->spin();
+      }};
+  }
+
+  /// True once the driver's subscription has matched the stand-in's publisher: before that, a
+  /// heartbeat would be lost to discovery, not to a dead supervisor. Waits at most 5 s.
+  bool driver_listens()
+  {
+    const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+    while (heartbeat_->get_subscription_count() == 0) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return true;
+  }
+
+  /// Stops the executor of load_with_node(), if any. Before the resource manager goes: the
+  /// heartbeat callback must not run while the plugin is destroyed.
+  void stop_spinning()
+  {
+    if (executor_ != nullptr) {
+      executor_->cancel();
+      if (spinner_.joinable()) {
+        spinner_.join();
+      }
+    }
   }
 
   /// Lifecycle state id of the component, or PRIMARY_STATE_UNKNOWN if it is not listed.
@@ -607,14 +713,16 @@ protected:
   /// (that is configure). The controller side is in controller_, for a ReplyingArm to answer
   /// on, or for a test to close. False when the terminal could not be opened or the plugin did
   /// not load.
-  [[nodiscard]] bool load_on_pseudo_terminal()
+  [[nodiscard]] bool load_on_pseudo_terminal(const rclcpp::Executor::SharedPtr & executor = nullptr)
   {
     std::array<char, 128> port{};
     controller_ = open_pseudo_terminal(port);
     if (controller_ < 0) {
       return false;
     }
-    load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+    load(
+      urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())),
+      executor);
     return loaded_;
   }
 
@@ -665,6 +773,78 @@ protected:
   bool loaded_{false};
   /// The controller side of the pseudo-terminal of load_on_pseudo_terminal(), or -1.
   int controller_{-1};
+
+  // load_with_node() (#136); FaultDiagnostics spins it itself (#121).
+  rclcpp::Executor::SharedPtr executor_;
+  std::thread spinner_;
+  rclcpp::Node::SharedPtr supervisor_;
+  rclcpp::Publisher<positronic_interfaces::msg::Heartbeat>::SharedPtr heartbeat_;
+  rclcpp::TimerBase::SharedPtr beat_timer_;
+  std::atomic<bool> beating_{false};
+};
+
+/// #121: the component's node on an executor, as the controller manager gives it, and a listener
+/// that keeps the component's statuses on /diagnostics. The once-a-second status is set to once
+/// an hour, so a status that comes is a change the fault watch sent. Nothing runs until a test
+/// spins, so every callback runs on the test's thread.
+class FaultDiagnostics : public LoadRobotSystem
+{
+protected:
+  static void SetUpTestSuite()
+  {
+    const std::array<const char *, 4> arguments{
+      "test_load_robot_system", "--ros-args", "-p", "diagnostic_updater.period:=3600.0"};
+    rclcpp::init(static_cast<int>(arguments.size()), arguments.data());
+  }
+
+  void SetUp() override
+  {
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    listener_ = std::make_shared<rclcpp::Node>("diagnostics_listener");
+    subscription_ = listener_->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+      "/diagnostics", rclcpp::QoS(10),
+      [this](const diagnostic_msgs::msg::DiagnosticArray & message) {
+        for (const auto & status : message.status) {
+          if (status.hardware_id == HARDWARE_NAME) {
+            statuses_.push_back(status);
+          }
+        }
+      });
+    executor_->add_node(listener_);
+  }
+
+  /// Spins until `done`, for at most `timeout`. False at the timeout.
+  template<typename Done>
+  bool spin_until(const Done & done, std::chrono::milliseconds timeout)
+  {
+    const auto deadline{std::chrono::steady_clock::now() + timeout};
+    while (!done()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      executor_->spin_once(std::chrono::milliseconds{10});
+    }
+    return true;
+  }
+
+  /// The newest status's message once it has `level`, within 2 s (the fault watch looks every
+  /// 50 ms); "" at the timeout.
+  [[nodiscard]] std::string newest(std::uint8_t level)
+  {
+    const bool arrived{spin_until(
+        [this, level]() {
+          return !statuses_.empty() && statuses_.back().level == level;
+      },
+      std::chrono::seconds{2})};
+    if (!arrived) {
+      return "";
+    }
+    return statuses_.back().message;
+  }
+
+  rclcpp::Node::SharedPtr listener_;
+  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr subscription_;
+  std::vector<diagnostic_msgs::msg::DiagnosticStatus> statuses_;
 };
 
 }  // namespace
@@ -771,7 +951,7 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -796,10 +976,12 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"echo_timeout_ms", "100"},         // two lost replies after it would pass the #35 timeout
     {"echo_timeout_ms", "slow"},        // not a number
     {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
+    {"pose_from_poll", "maybe"},        // true or false only (#170)
     {"servo_temp_limit_c", "61"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
+    {"fake_mode", "slow"},              // only instant or measured (#122)
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -892,6 +1074,98 @@ TEST_F(LoadRobotSystem, WriteSendsTheCommandToTheFakeArm)
   EXPECT_DOUBLE_EQ(
     state(JOINTS.at(1), "position").value_or(std::nan("")),
     positronic_hardware::FakeArm::START_POSE.at(1));
+}
+
+// #122: the measured fake arm lags, and its clock is the sum of the periods read() gets, so
+// the test moves it without sleeping.
+TEST_F(LoadRobotSystem, MeasuredFakeModeLagsOnThePeriodsOfRead)
+{
+  using positronic_hardware::FakeArm;
+  load(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+  ASSERT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE),
+    hardware_interface::return_type::OK);
+
+  const double step{0.1};
+  const double rest_error{FakeArm::REST_ERROR_DEG.at(0) * 3.14159265358979323846 / 180.0};
+  const auto read_after{[this](double seconds) {
+      return resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(seconds)).result;
+    }};
+  ASSERT_TRUE(command(JOINTS.at(0), FakeArm::START_POSE.at(0) + step));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_after(0.0), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")), FakeArm::START_POSE.at(0) - rest_error,
+    1e-12);
+
+  ASSERT_EQ(read_after(FakeArm::LAG_TIME_CONSTANT_S), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(JOINTS.at(0), "position").value_or(std::nan("")),
+    FakeArm::START_POSE.at(0) + step * (1.0 - std::exp(-1.0)) - rest_error, 1e-9);
+}
+
+// #122: what the measured fake arm is for. The controller's trajectory tolerance
+// (jetson_controllers.yaml, 0.087 rad) holds at 10 deg/s on the arm and fails at 30 (#33); the
+// instant fake arm would pass both. J1 and the wrist J5 move together through three points,
+// fed at the 30 Hz control rate; the time is the periods passed to read(), so no sleep.
+TEST_F(LoadRobotSystem, MeasuredFakeArmKeepsTheToleranceAt10DegPerSecondNotAt30)
+{
+  using positronic_hardware::FakeArm;
+  constexpr double DEG{3.14159265358979323846 / 180.0};
+  constexpr double TOLERANCE_RAD{0.087};
+  constexpr double PERIOD_S{1.0 / 30.0};
+  static constexpr std::array<std::size_t, 2> MOVING{0, 4};
+
+  const auto largest_error_rad{[this](double deg_per_s) {
+      load(urdf_with(all_good_joints(),
+        std::string{FAKE_BACKEND} + param("fake_mode", "measured")));
+      EXPECT_EQ(
+      go_to(
+        lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+        hardware_interface::lifecycle_state_names::ACTIVE),
+      hardware_interface::return_type::OK);
+      const auto cycle{[this]() {
+          EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+          EXPECT_EQ(
+        resource_manager_->read(clock_.now(), rclcpp::Duration::from_seconds(PERIOD_S)).result,
+        hardware_interface::return_type::OK);
+        }};
+    // on_activate commands the pose it read, START_POSE less the rest error. Two seconds
+    // holding it, so the arm has settled one rest error below before the trajectory starts.
+      for (int i{0}; i < 60; ++i) {
+        cycle();
+      }
+    // Points 0, 1 and 2 at hold, hold + 10 deg and hold + 20 deg, at `deg_per_s` between them,
+    // then one second holding point 2.
+      const double span{20.0 * DEG};
+      const double duration{span / (deg_per_s * DEG)};
+      double largest{0.0};
+      for (int i{1}; i * PERIOD_S <= duration + 1.0; ++i) {
+        const double travelled{std::min(deg_per_s * DEG * i * PERIOD_S, span)};
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          EXPECT_TRUE(command(JOINTS.at(joint), hold + travelled));
+        }
+        cycle();
+        for (const std::size_t joint : MOVING) {
+          const double hold{FakeArm::START_POSE.at(joint) - FakeArm::REST_ERROR_DEG.at(joint) *
+            DEG};
+          const double error{hold + travelled - state(JOINTS.at(joint), "position").value_or(0.0)};
+          largest = std::max(largest, std::abs(error));
+        }
+      }
+      return largest;
+    }};
+
+  const double slow{largest_error_rad(10.0)};
+  EXPECT_LT(slow, TOLERANCE_RAD);
+  const double fast{largest_error_rad(30.0)};
+  EXPECT_GT(fast, TOLERANCE_RAD);
+  RecordProperty("largest_error_10_deg_per_s_rad", std::to_string(slow));
+  RecordProperty("largest_error_30_deg_per_s_rad", std::to_string(fast));
 }
 
 TEST_F(LoadRobotSystem, WriteSendsACommandExactlyAtTheLimit)
@@ -1248,7 +1522,7 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
 
   // No read() while the arm heats: wait for the power off on the wire, then let the silence run
   // past the 200 ms link timeout. 400 ms is twice that, a margin for a loaded test machine; the
-  // cut is recorded right after the power off is written, well inside it.
+  // cut is recorded once the stop is acknowledged, before the power off, well inside it.
   // One copy of the bytes per look: two calls to received() can see different lengths.
   const auto powered_off{[&arm]() {
       const std::vector<std::uint8_t> sent{arm->received()};
@@ -1266,6 +1540,36 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
   EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
   ASSERT_EQ(configure(), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), OVERHEAT_FAULT);
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+// AI-generated (Claude, Anthropic).
+// Prompt:
+//   #46 test review H1: on a clean exit the controller manager takes the component from ACTIVE
+//   straight to FINALIZED; check that a stop reaches the arm on the way.
+
+TEST_F(LoadRobotSystem, ShutdownFromActiveSendsAStop)
+{
+  // A clean exit (Ctrl+C, launch stopped): the controller manager's pre-shutdown callback takes
+  // every component to FINALIZED. From ACTIVE, ros2_control runs on_deactivate (which sends the
+  // stop and waits for its ack) and then on_shutdown (which closes the port). Our safety on exit
+  // depends on that order in code we do not own: this test locks it in.
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  const std::size_t stops_before{arm->received_requests(0x29)};
+
+  EXPECT_EQ(
+    go_to(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED,
+      hardware_interface::lifecycle_state_names::FINALIZED),
+    hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED);
+  // halt() returns only once the arm acknowledged the stop, so it has already arrived.
+  EXPECT_GT(arm->received_requests(0x29), stops_before) << "No stop reached the arm on shutdown";
 
   resource_manager_.reset();
   arm.reset();
@@ -1553,4 +1857,330 @@ TEST_F(LoadRobotSystem, InitRejectsABadTrackingParameter)
     EXPECT_FALSE(loaded_) << name << "=" << value;
     EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) << name;
   }
+}
+
+namespace
+{
+
+constexpr char GRIPPER[]{"gripper_controller"};
+constexpr double GRIPPER_CLOSED{-0.74};
+constexpr double GRIPPER_OPEN{0.15};
+constexpr std::string_view GRIPPER_LIMIT{
+  R"(<limit effort="10.0" lower="-0.74" upper="0.15" velocity="1.0"/>)"};
+
+std::string read_gripper_description()
+{
+  const std::string path{
+    ament_index_cpp::get_package_share_directory("positronic_description") +
+    "/urdf/mycobot_280_jn_sim/mycobot_280_jn_gripper_camera.urdf"};
+  const std::ifstream file{path};
+  std::stringstream content;
+  content << file.rdbuf();
+  return content.str();
+}
+
+std::string urdf_with_gripper(const std::string & description = read_gripper_description())
+{
+  return urdf_with(all_good_joints() + good_joint(GRIPPER), FAKE_BACKEND, description);
+}
+
+}  // namespace
+
+TEST_F(LoadRobotSystem, GripperDescriptionHasTheGripperLimit)
+{
+  EXPECT_NE(read_gripper_description().find(GRIPPER_LIMIT), std::string::npos);
+}
+
+TEST_F(LoadRobotSystem, InitAcceptsTheGripperAsASeventhJoint)
+{
+  auto & resource_manager{load(urdf_with_gripper())};
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  const std::string gripper{GRIPPER};
+  const auto states{resource_manager.state_interface_keys()};
+  EXPECT_NE(std::find(states.begin(), states.end(), gripper + "/position"), states.end());
+  EXPECT_NE(std::find(states.begin(), states.end(), gripper + "/velocity"), states.end());
+  const auto commands{resource_manager.command_interface_keys()};
+  EXPECT_NE(std::find(commands.begin(), commands.end(), gripper + "/position"), commands.end());
+}
+
+TEST_F(LoadRobotSystem, InitRejectsAGripperWithSwappedLimits)
+{
+  load(urdf_with_gripper(replaced(
+    read_gripper_description(), GRIPPER_LIMIT,
+    R"(<limit effort="10.0" lower="0.15" upper="-0.74" velocity="1.0"/>)")));
+  EXPECT_FALSE(loaded_);
+}
+
+TEST_F(LoadRobotSystem, GripperStartsAtItsMeasuredValue)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(state(GRIPPER, "position").value_or(std::nan("")), GRIPPER_OPEN);
+  EXPECT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(state(GRIPPER, "position").value_or(std::nan("")), GRIPPER_OPEN);
+  EXPECT_EQ(state(GRIPPER, "velocity").value_or(std::nan("")), 0.0);
+}
+
+TEST_F(LoadRobotSystem, GripperTargetsReachTheFakeArm)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  for (const double target : {GRIPPER_CLOSED, (GRIPPER_CLOSED + GRIPPER_OPEN) / 2.0,
+      GRIPPER_OPEN})
+  {
+    ASSERT_TRUE(command(GRIPPER, target));
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK) << target;
+    ASSERT_EQ(read_once(), hardware_interface::return_type::OK) << target;
+    EXPECT_NEAR(state(GRIPPER, "position").value_or(std::nan("")), target, 1e-9) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, GripperVelocityFollowsThePosition)
+{
+  load(urdf_with_gripper());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  ASSERT_TRUE(command(GRIPPER, GRIPPER_CLOSED));
+  ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_NEAR(
+    state(GRIPPER, "velocity").value_or(std::nan("")), (GRIPPER_CLOSED - GRIPPER_OPEN) / 0.01,
+    1e-6);
+}
+
+TEST_F(LoadRobotSystem, WriteRefusesAGripperTargetPastItsLimits)
+{
+  for (const double target :
+    {GRIPPER_OPEN + 5.0 * DEG, GRIPPER_CLOSED - 5.0 * DEG, std::nan(""),
+      std::numeric_limits<double>::infinity()})
+  {
+    load(urdf_with_gripper());
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+    ASSERT_TRUE(command(GRIPPER, target));
+    EXPECT_EQ(write_once(), hardware_interface::return_type::ERROR) << target;
+    EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, WriteSendsAGripperTargetExactlyAtItsLimits)
+{
+  for (const double target : {GRIPPER_CLOSED, GRIPPER_OPEN}) {
+    load(urdf_with_gripper());
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+    ASSERT_TRUE(command(GRIPPER, target));
+    EXPECT_EQ(write_once(), hardware_interface::return_type::OK) << target;
+  }
+}
+
+TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
+{
+  std::array<char, 128> port{};
+  const int controller{open_pseudo_terminal(port)};
+  ASSERT_GE(controller, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller)};
+
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_LT(find_request(arm->received(), 0x65), arm->received().size());
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller);
+}
+
+// #136, the dead-man check. The tests sleep because the plugin reads the real clock; the exact
+// boundary of the timeout is LinkWatchdog's, tested without sleeps in test_link_watchdog.cpp.
+// A 200 ms timeout, and 400 ms of silence before the read() that must see it: the last
+// heartbeat may still arrive up to 20 ms after beating_ turns false, and the margin left covers
+// a loaded CI runner being late by as much as the timeout itself.
+constexpr std::string_view SUPERVISED{"<param name=\"supervisor_timeout_ms\">200</param>"};
+constexpr std::chrono::milliseconds PAST_THE_SUPERVISOR_TIMEOUT{400};
+
+TEST_F(LoadRobotSystem, SupervisorSilenceHaltsTheArmAndLatchesFault4UntilTheNextActivate)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  load_with_node(urdf_with(
+    all_good_joints(),
+    param("backend", "serial") + param("port", port.data()) + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  beating_ = true;
+  ASSERT_TRUE(driver_listens());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const std::size_t before_silence{arm->received().size()};
+
+  // The supervisor dies (kill -9: no halt from it). The next read() past the timeout halts.
+  beating_ = false;
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  // request_halt(): the serial thread sends the stop at its next turn, without waiting for it.
+  bool stopped{false};
+  for (int turn{0}; turn < 50 && !stopped; ++turn) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    const std::vector<std::uint8_t> sent{arm->received()};
+    stopped = find_request(sent, 0x29, before_silence) < sent.size();
+  }
+  EXPECT_TRUE(stopped);
+
+  // Latched: a configure shows fault 4, and with no heartbeat activate is refused.
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), SUPERVISOR_LOST_FAULT);
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+
+  // The supervisor is back: its resume configures and activates, which clears the fault, and
+  // targets go out again.
+  beating_ = true;
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const double j1{state(JOINTS.at(0), "position").value_or(0.0)};
+  ASSERT_TRUE(command(JOINTS.at(0), j1 + 0.1));
+  bool sent{false};
+  for (int cycle{0}; cycle < 20 && !sent; ++cycle) {
+    ASSERT_EQ(write_once(), hardware_interface::return_type::OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    sent = arm->received_send_angles();
+  }
+  EXPECT_TRUE(sent);
+
+  stop_spinning();
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, ActivateWaitsForTheSupervisorHeartbeat)
+{
+  load_with_node(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(driver_listens());
+
+  // No supervisor: refused after waiting the timeout, before the servos get torque.
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  beating_ = true;
+  EXPECT_EQ(activate(), hardware_interface::return_type::OK);
+}
+
+TEST_F(LoadRobotSystem, ActivateHearsAHeartbeatThatStartsWhileItWaits)
+{
+  // As the supervisor's resume does: silent while STOPPED, it starts beating just before it
+  // asks for the activate. 1000 ms of wait for a heartbeat that starts after 100 ms: the 900 ms
+  // left is the margin for a loaded runner, not a requirement.
+  load_with_node(urdf_with(
+    all_good_joints(), std::string{FAKE_BACKEND} + param("supervisor_timeout_ms", "1000")));
+  ASSERT_TRUE(loaded_);
+  ASSERT_TRUE(driver_listens());
+
+  std::thread resume{[this]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+      beating_ = true;
+    }};
+  const hardware_interface::return_type result{activate()};
+  resume.join();
+  EXPECT_EQ(result, hardware_interface::return_type::OK);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, NoSupervisorCheckAtZero)
+{
+  // With a node, so the check is off because of the 0 and not because it cannot subscribe.
+  load_with_node(
+    urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + param("supervisor_timeout_ms", "0")));
+  ASSERT_TRUE(loaded_);
+
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
+TEST_F(LoadRobotSystem, InitRefusesTheSupervisorCheckWithoutANode)
+{
+  // No executor, so no node to subscribe with: the check must never be skipped silently.
+  load(urdf_with(all_good_joints(), std::string{FAKE_BACKEND} + std::string{SUPERVISED}));
+
+  EXPECT_FALSE(loaded_);
+}
+
+TEST_F(LoadRobotSystem, ALinkTimeoutKeepsItsFaultWhenTheSupervisorGoesSilentAfter)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  load_with_node(urdf_with(
+    all_good_joints(),
+    param("backend", "serial") + param("port", port.data()) + std::string{SUPERVISED}));
+  ASSERT_TRUE(loaded_);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  beating_ = true;
+  ASSERT_TRUE(driver_listens());
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+
+  // The arm goes silent first (300 ms against the 200 ms link timeout, as in the #35 test).
+  arm.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+
+  // Then the supervisor: still ERROR, nobody is left to act on the fault, but the fault stays
+  // the cause, 1.
+  beating_ = false;
+  std::this_thread::sleep_for(PAST_THE_SUPERVISOR_TIMEOUT);
+  EXPECT_EQ(read_once(), hardware_interface::return_type::ERROR);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), LINK_TIMEOUT_FAULT);
+
+  stop_spinning();
+  resource_manager_.reset();
+  ::close(controller_);
+}
+
+TEST_F(FaultDiagnostics, ALinkTimeoutIsOnDiagnosticsAtOnceAndActivateBringsOkBack)
+{
+  using diagnostic_msgs::msg::DiagnosticStatus;
+  ASSERT_TRUE(load_on_pseudo_terminal(executor_));
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  // A status sent before the listener matches the component's publisher is lost; 5 s is far
+  // above what discovery takes on one machine.
+  ASSERT_TRUE(spin_until(
+      [this]() {
+        return subscription_->get_publisher_count() > 0;
+    },
+    std::chrono::seconds{5}));
+
+  // Silent for longer than the 200 ms link timeout, with a margin for a loaded machine.
+  arm.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(
+    newest(DiagnosticStatus::ERROR), "LINK_TIMEOUT: no valid reply from the arm; targets held");
+
+  // The arm answers again and a person reactivates at once: activate waits for a fresh reply
+  // (the requests queued while it was silent get late answers, which the driver drops).
+  arm = std::make_unique<ReplyingArm>(controller_);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  EXPECT_EQ(newest(DiagnosticStatus::OK), "NONE: no fault");
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
 }

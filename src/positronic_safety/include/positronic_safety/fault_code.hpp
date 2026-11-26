@@ -25,9 +25,12 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "control_msgs/msg/dynamic_joint_state.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 
 namespace positronic_safety
 {
@@ -56,6 +59,25 @@ namespace positronic_safety
         return entry.values[j];
       }
     }
+  }
+  return std::nullopt;
+}
+
+/// Why the driver faulted, from a /diagnostics message (#121): the message of the status of the
+/// hardware component `hardware_id` when its level is not OK, and "" when it is OK. Empty when
+/// the message has no status of that component: the controller manager publishes there too, as
+/// "ros2_control", and a starting status has no hardware id.
+[[nodiscard]] inline std::optional<std::string> find_fault_reason(
+  const diagnostic_msgs::msg::DiagnosticArray & message, std::string_view hardware_id)
+{
+  for (const auto & status : message.status) {
+    if (status.hardware_id != hardware_id) {
+      continue;
+    }
+    if (status.level == diagnostic_msgs::msg::DiagnosticStatus::OK) {
+      return std::string{};
+    }
+    return status.message;
   }
   return std::nullopt;
 }

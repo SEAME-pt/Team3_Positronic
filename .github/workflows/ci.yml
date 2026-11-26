@@ -211,12 +211,10 @@ jobs:
       #   Counted:  C++ and Python under src/, including files no test runs (at 0 %)
       #   Excluded: */test/* (tests covering themselves), */launch/* (configuration, checked in
       #             the simulation), */setup.py (packaging), see .coveragerc
-      # Report-only until #46 (Sprint 03): a package below 80 % marks this step red, but the job
-      # still passes. Remove continue-on-error then.
+      # Blocking since #46 (Sprint 03): a package below 80 % fails the job, so the PR can't merge.
       # The gate writes its table to GITHUB_STEP_SUMMARY. The container can't see the runner's
       # file, so it writes into coverage/ (the repo is mounted at /ws) and a step below copies it.
-      - name: Coverage (report-only)
-        continue-on-error: true
+      - name: Coverage
         run: >-
           make coverage
           RUN="docker compose run --rm -T -e GITHUB_STEP_SUMMARY=/ws/coverage/summary.md
