@@ -258,7 +258,7 @@ says which one.
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |
 | `tracking_error_ms`     | `300`          | 50 to 5000           | Milliseconds a joint may stay over `tracking_error_deg`, while active, before fault 2: the arm did not follow the command (#103) |
 | `supervisor_timeout_ms` | `500`          | 0 to 5000            | Dead-man check (#136): no heartbeat from the safety supervisor for this long, while active, is fault 4. 0 turns the check off. See Dead-man check |
-| `send_speed`            | `30`           | 1 to 100             | Speed byte of every `send_angles`: a speed cap, 1.5 deg/s per unit and never below 26.4 deg/s ([#133](../../docs/03_verification/speed_sweep/README.md)). Fixed while the driver runs: another speed is another launch. Before every `power_on` the driver also sends fresh mode 1 (`0x16 01`), so the arm streams whatever mode it woke up in |
+| `send_speed`            | `30`           | 1 to 100             | Speed byte of every `send_angles`: a speed cap, 1.5 deg/s per unit and never below 26.4 deg/s ([ADR 0008](../../docs/02_architecture/adr/0008-send-speed-default-30.md)). Fixed while the driver runs: another speed is another launch. Before every `power_on` the driver also sends fresh mode 1 (`0x16 01`), so the arm streams whatever mode it woke up in |
 
 The default backend is `serial` on purpose: a URDF that forgets the parameter on the robot fails
 loudly if the port cannot be opened, instead of silently showing a fake arm that stands still.

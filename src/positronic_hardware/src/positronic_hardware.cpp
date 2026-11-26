@@ -509,7 +509,6 @@ CallbackReturn RobotSystem::on_deactivate(const rclcpp_lifecycle::State & /*prev
   // the next activate. halt() waits for the arm to acknowledge the stop, so SUCCESS means the
   // arm confirmed it, not only that the frame left or the component changed state (#103).
   if (arm_->halt()) {
-    log_temperatures("deactivate");
     return CallbackReturn::SUCCESS;
   }
   // The arm never confirmed the stop: nobody knows what it is doing. FAILURE would keep the
@@ -643,21 +642,6 @@ void RobotSystem::report_power_on() const
   RCLCPP_INFO(
     get_logger(), "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged.",
     fresh.sent, fresh.acked);
-  log_temperatures("activate");
-}
-
-void RobotSystem::log_temperatures(const char * when) const
-{
-  // The six servo temperatures the serial thread read last, at each activate and deactivate:
-  // a long arm session sees how hot the servos are without handing the port to pymycobot (#133).
-  const std::optional<ServoTemperatures> t{arm_->read_temperatures()};
-  if (!t.has_value()) {
-    RCLCPP_INFO(get_logger(), "Servo temperatures at %s: no reading yet.", when);
-    return;
-  }
-  RCLCPP_INFO(
-    get_logger(), "Servo temperatures at %s: J1 %d, J2 %d, J3 %d, J4 %d, J5 %d, J6 %d degC.", when,
-    int{t->at(0)}, int{t->at(1)}, int{t->at(2)}, int{t->at(3)}, int{t->at(4)}, int{t->at(5)});
 }
 
 bool RobotSystem::temperatures_allow_activation()

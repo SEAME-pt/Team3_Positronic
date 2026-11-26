@@ -51,8 +51,7 @@
   <!-- The dead-man check (#136): no heartbeat from the safety supervisor for this many ms while
        active halts the arm. 0 turns it off, for a run without the supervisor. -->
   <xacro:arg name="supervisor_timeout_ms" default=""/>
-  <!-- Speed byte of every send_angles, 1 to 100: a speed cap, measured in #133 (see
-       docs/03_verification/speed_sweep). -->
+  <!-- Speed byte of every send_angles, 1 to 100: a speed cap. Default 30, see ADR 0008. -->
   <xacro:arg name="send_speed" default=""/>
 
   <!-- One driver <param>, written only when its argument is set. -->
