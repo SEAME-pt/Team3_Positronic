@@ -68,7 +68,14 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(LaunchConfiguration('planning_scene')),
     )
-    return [move_group, planning_scene, rviz]
+    thermal_park = Node(
+        package='positronic_moveit_config',
+        executable='thermal_park.py',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(LaunchConfiguration('thermal_park')),
+    )
+    return [move_group, planning_scene, thermal_park, rviz]
 
 
 def generate_launch_description():
@@ -79,6 +86,10 @@ def generate_launch_description():
             DeclareLaunchArgument('rviz', default_value='true', description='Start RViz2'),
             DeclareLaunchArgument('planning_scene', default_value='true',
                                   description='Load the workcell obstacles (#42) into move_group'),
+            DeclareLaunchArgument('thermal_park', default_value='true',
+                                  description='Park the arm (straight to arm_controller) when a '
+                                              'servo reaches 63 degC, before the driver cuts it '
+                                              'at 65'),
             OpaqueFunction(function=launch_setup),
         ]
     )
