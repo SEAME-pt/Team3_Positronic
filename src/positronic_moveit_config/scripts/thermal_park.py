@@ -5,7 +5,8 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
 
-"""Park the arm when a servo gets hot, before the driver's cut.
+"""
+Park the arm when a servo gets hot, before the driver's cut.
 
 The driver publishes each servo's temperature on /diagnostics, once a second, as
 "temperature_c/<joint>" in its "positronic_arm" status. When one servo stays at or above
@@ -30,6 +31,7 @@ One park per hot spell: the node parks again only after every servo went under
 rearm_below_c.
 """
 
+import math
 import sys
 
 from builtin_interfaces.msg import Duration
@@ -52,10 +54,9 @@ ARM_JOINTS = [
     'joint6output_to_joint6',
 ]
 
-# The folded rest pose, rad, measured on the arm on 25 Nov 2026 (/joint_states with the arm
-# folded by hand). Same values as the "rest" group_state of positronic.srdf.
-# <Check J2: /joint_states gave exactly 0.0 for joint3_to_joint2 while every other joint had
-# decimals; confirm with pymycobot get_angles() before the first run.>
+# The folded rest pose, rad, measured on the arm on 26 Nov 2026 with pymycobot get_angles()
+# (degrees: 147.83, 0.87, -126.65, -16.08, -14.58, 107.88). Same values as the "rest"
+# group_state of positronic.srdf.
 REST_POSITIONS = [2.5801, 0.0152, -2.2105, -0.2806, -0.2545, 1.8829]
 
 # Kept where they are at the warning, not moved to REST_POSITIONS.
@@ -63,6 +64,13 @@ KEEP_JOINTS = ['joint2_to_joint1', 'joint6output_to_joint6']
 
 # Shortest park, s: a trajectory point the controller reaches at once would be a jump.
 MIN_PARK_S = 2.0
+
+# The working speed limit of arm_controller, rad/s (15 deg/s, positronic_bringup/config).
+MAX_SPEED_RAD_S = 0.26
+
+# The driver's default over-temperature cut, degC (SERVO_TEMP_LIMIT_C): the park must come
+# before it.
+DRIVER_CUT_C = 65
 
 
 def temperatures_from(message, hardware_id):
@@ -83,7 +91,8 @@ def temperatures_from(message, hardware_id):
 
 
 class HotWatch:
-    """Says when to park: one servo at or above warn_c for hot_for_s, once per hot spell.
+    """
+    Say when to park: one servo at or above warn_c for hot_for_s, once per hot spell.
 
     Each servo has its own clock, as in the driver: J1 gives false hot readings, each one
     alone, and they must not park the arm. A reading under warn_c, or a missing one, stops
@@ -120,13 +129,16 @@ class HotWatch:
 
 
 def park_targets(current, rest=None, keep=None):
-    """Return the 6 target positions: the rest pose, with the kept joints at `current`.
+    """
+    Return the 6 target positions: the rest pose, with the kept joints at `current`.
 
-    `current` is {joint: rad}. None if any arm joint is not in it: the move time needs them.
+    `current` is {joint: rad}. None if any arm joint is missing or not finite: the driver
+    publishes NaN until its first pose, and a NaN would pass into the target (J1, J6) or hide
+    in the move time (max() skips it), giving a long move in MIN_PARK_S.
     """
     rest = REST_POSITIONS if rest is None else rest
     keep = KEEP_JOINTS if keep is None else keep
-    if any(joint not in current for joint in ARM_JOINTS):
+    if any(joint not in current or not math.isfinite(current[joint]) for joint in ARM_JOINTS):
         return None
     return [float(current[joint]) if joint in keep else float(position)
             for joint, position in zip(ARM_JOINTS, rest)]
@@ -140,7 +152,8 @@ def park_duration_s(current, targets, speed_rad_s):
 
 
 def build_trajectory(targets, duration_s):
-    """Return a one-point JointTrajectory to `targets`, reached after duration_s.
+    """
+    Return a one-point JointTrajectory to `targets`, reached after duration_s.
 
     The controller interpolates from where the arm is to the point; the empty stamp means
     "start now".
@@ -185,6 +198,11 @@ class ThermalPark(Node):
             param('warn_c').value, param('hot_for_s').value, param('rearm_below_c').value)
         self._hardware_id = param('hardware_id').value
         self._speed_rad_s = param('speed_rad_s').value
+        if not 0.0 < self._speed_rad_s <= MAX_SPEED_RAD_S:
+            raise ValueError(
+                f'speed_rad_s must be in (0, {MAX_SPEED_RAD_S}] rad/s, the arm_controller limit')
+        if not self._watch.warn_c < DRIVER_CUT_C:
+            raise ValueError(f'warn_c must be under the driver cut ({DRIVER_CUT_C} degC)')
         self._tolerance_rad = param('arrived_tolerance_rad').value
         self._margin_s = param('arrive_margin_s').value
         self._stop_after_park = param('stop_after_park').value
@@ -246,7 +264,8 @@ class ThermalPark(Node):
         """Ask the supervisor to halt: the arm holds with torque, no goal until activated."""
         if not self._stop_after_park:
             return
-        if not self._stop_client.wait_for_service(timeout_sec=1.0):
+        # No wait: this runs in a callback, and a blocking wait would hold /diagnostics.
+        if not self._stop_client.service_is_ready():
             self.get_logger().warn(
                 'No safety supervisor stop service: the arm stays active. Wait for it to cool '
                 'before sending goals.')

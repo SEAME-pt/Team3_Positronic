@@ -20,6 +20,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_planning_scene test/test_planning_scene.py TIMEOUT 60)
   ament_add_pytest_test(test_planning_scene_node test/test_planning_scene_node.py TIMEOUT 60)
   ament_add_pytest_test(test_thermal_park test/test_thermal_park.py TIMEOUT 60)
+  ament_add_pytest_test(test_thermal_park_node test/test_thermal_park_node.py TIMEOUT 60)
 endif()
 
 ament_package()

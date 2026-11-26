@@ -12,17 +12,26 @@
 #   has stayed at warn_c for hot_for_s, not for one hot reading alone, not when the reading in
 #   between is cool or missing, once per hot spell, and again only after every servo went
 #   under rearm_below_c; park_targets() keeps J1 and J6 at their current values and refuses
-#   without them; build_goal() asks to plan and execute the six joint targets on the arm group
-#   at the given scaling; and REST_POSITIONS match the "rest" group_state of positronic.srdf.
+#   without them; and REST_POSITIONS match the "rest" group_state of positronic.srdf.
 #
 # Follow-up prompt (park without MoveIt):
 #   The park no longer goes through move_group: one trajectory straight to arm_controller.
-#   Replace the build_goal() test: park_targets() needs all six joints; park_duration_s() is
+#   park_targets() needs all six joints; park_duration_s() is
 #   the furthest joint's travel at the given speed, never under MIN_PARK_S; build_trajectory()
 #   is one point with the six arm joints in the controller's order, zero velocities, reached
 #   after the given time; arrived() is True only with every joint within the tolerance.
 #   Test _check_arrival() on a stand-in for the node: at the rest pose it stops, before the
 #   deadline away from it it waits, after the deadline it stops anyway.
+#
+# Follow-up prompt (CI):
+#   On the real messages the trajectory test failed: rclpy gives float64[] fields as
+#   array.array('d'), which never equals a list. Compare them as lists.
+#
+# Follow-up prompt (review of the PR):
+#   park_targets() refuses a NaN or infinite position, on a moved joint and on a kept one;
+#   _park(), on a stand-in for the node, sends nothing without /joint_states or with a NaN in
+#   them, and otherwise one trajectory, with the deadline at now + move time + margin. The
+#   stand-in client now answers service_is_ready(), as _stop() no longer waits.
 #
 # Follow-up prompt (supervisor stop after the park):
 #   Test _stop() on a stand-in for the node: it calls the supervisor's stop when the service
@@ -131,6 +140,12 @@ def test_park_targets_keep_j1_and_j6():
     assert targets[1:5] == MOD.REST_POSITIONS[1:5]
 
 
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+@pytest.mark.parametrize('joint', ['joint3_to_joint2', 'joint2_to_joint1'])
+def test_park_targets_refuse_a_position_that_is_not_finite(joint, bad):
+    assert MOD.park_targets(_current(**{joint: bad})) is None
+
+
 def test_park_targets_need_every_joint():
     current = _current()
     del current['joint4_to_joint3']
@@ -149,8 +164,9 @@ def test_build_trajectory_is_one_point_with_the_six_joints():
     trajectory = MOD.build_trajectory(targets, 12.5)
     assert trajectory.joint_names == MOD.ARM_JOINTS
     (point,) = trajectory.points
-    assert point.positions == pytest.approx(targets)
-    assert point.velocities == [0.0] * 6
+    # float64[] fields are array.array('d') in rclpy, not lists.
+    assert list(point.positions) == pytest.approx(targets)
+    assert list(point.velocities) == [0.0] * 6
     assert point.time_from_start.sec == 12
     assert point.time_from_start.nanosec == 500_000_000
 
@@ -178,7 +194,7 @@ class _Client:
         self.available = available
         self.calls = 0
 
-    def wait_for_service(self, timeout_sec):
+    def service_is_ready(self):
         return self.available
 
     def call_async(self, request):
@@ -249,3 +265,41 @@ def test_check_arrival_waits_then_stops_anyway_after_the_deadline():
     MOD.ThermalPark._check_arrival(node)
     assert node.stops == [True]
     assert node._targets is None
+
+
+class _Publisher:
+
+    def __init__(self):
+        self.sent = []
+
+    def publish(self, message):
+        self.sent.append(message)
+
+
+def _parker(joints):
+    logger = _Logger()
+    return SimpleNamespace(
+        _joints=joints, _speed_rad_s=0.078, _margin_s=5.0, _targets=None, _deadline_s=None,
+        _now_s=lambda: 100.0, _publisher=_Publisher(), get_logger=lambda: logger)
+
+
+def test_park_without_joint_states_sends_nothing():
+    node = _parker({})
+    MOD.ThermalPark._park(node, 'joint5_to_joint4', 63)
+    assert node._publisher.sent == []
+    assert node._targets is None
+
+
+def test_park_with_a_nan_position_sends_nothing():
+    node = _parker(_current(joint4_to_joint3=float('nan')))
+    MOD.ThermalPark._park(node, 'joint5_to_joint4', 63)
+    assert node._publisher.sent == []
+    assert node._targets is None
+
+
+def test_park_sends_one_trajectory_and_sets_the_deadline():
+    node = _parker(_current())
+    MOD.ThermalPark._park(node, 'joint5_to_joint4', 63)
+    assert len(node._publisher.sent) == 1
+    duration_s = MOD.park_duration_s(_current(), node._targets, 0.078)
+    assert node._deadline_s == pytest.approx(100.0 + duration_s + 5.0)
