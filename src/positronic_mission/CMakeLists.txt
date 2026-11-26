@@ -86,6 +86,7 @@ if(BUILD_TESTING)
     target_link_libraries(${test_name} mission_node_component)
     ament_target_dependencies(${test_name} ${dependencies})
   endforeach()
+  set_tests_properties(test_moveit_backend PROPERTIES TIMEOUT 30)
 endif()
 
 ament_package()

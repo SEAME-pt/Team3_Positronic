@@ -31,6 +31,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -38,6 +39,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "positronic_hardware/echo_timeout_report.hpp"
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/fault_code.hpp"
 #include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
 #include "positronic_hardware/parameters.hpp"
@@ -51,33 +53,6 @@
 
 namespace positronic_hardware
 {
-
-/// What the driver reports in its fault state interface (#35), as a whole number in a double.
-/// The supervisor (#45) stops the arm on any value other than NONE, so a new fault needs no
-/// change there. The values are part of the interface: add new ones at the end, never reuse or
-/// renumber one.
-enum class FaultCode : std::uint8_t
-{
-  /// No fault: the link is alive (or the component is not active).
-  NONE = 0,
-  /// No valid reply from the arm for LinkWatchdog::DEFAULT_TIMEOUT while active. Latched until
-  /// the next activate.
-  LINK_TIMEOUT = 1,
-  /// A joint further than tracking_error_deg from the last target on the wire for longer than
-  /// tracking_error_ms while active (#103): the arm did not follow the command. Latched until
-  /// the next activate, targets held meanwhile, like the link timeout.
-  TRACKING_ERROR = 2,
-  /// A servo stayed at or above servo_temp_limit_c for 1 s, no reading of it more than 1 degC
-  /// under: the serial thread has already stopped the arm and powered its servos off. read()
-  /// also returns ERROR. Latched until the next activate.
-  OVERHEAT = 3,
-  /// No heartbeat from the safety supervisor for supervisor_timeout_ms while active (#136): it
-  /// died, hangs or was killed, and nobody would stop the arm. Targets held, like the link
-  /// timeout, and read() returns ERROR, like the overheat: with no supervisor left to act on
-  /// the fault, the controller manager takes the controllers and the component out of ACTIVE.
-  /// Latched until the next activate.
-  SUPERVISOR_LOST = 4,
-};
 
 /// The <gpio> of the <ros2_control> block that carries the fault, and its one state interface.
 /// The supervisor reads "driver/fault_code".
@@ -140,6 +115,17 @@ private:
   /// a supervisor loss by read()).
   /// Only the first fault is kept; on_activate clears it. No allocation: safe from read().
   void raise_fault(FaultCode code);
+
+  /// The driver's status on /diagnostics (#121): OK for no fault, ERROR with the name and the
+  /// reason of the latched one. Runs on the executor that spins the component's node, beside a
+  /// transition that may be replacing arm_: it reads fault_ only.
+  void diagnose(diagnostic_updater::DiagnosticStatusWrapper & status);
+  /// on_init's part of #121: the Updater on the component's node, with diagnose() and the timer
+  /// that publishes a new fault at once. Nothing without a node (most tests).
+  void start_diagnostics(const std::string & hardware_id);
+  /// on_activate's wait for a link that died after the first reply (#35, #121): true once the
+  /// arm answers again before `deadline`, false with one log line if it stays silent.
+  bool link_alive_by(std::chrono::steady_clock::time_point deadline);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
@@ -230,6 +216,15 @@ private:
   /// at each configure would have to be discovered again before on_activate. Declared after the
   /// watchdog, so it goes first and its callback never sees the watchdog gone.
   rclcpp::Subscription<positronic_interfaces::msg::Heartbeat>::SharedPtr heartbeat_subscription_;
+
+  // #121, last so they go first: their callbacks read the members above. Both run on the
+  // node's default callback group, never at the same time, so diagnosed_ needs no atomic.
+  /// The fault diagnose() last published.
+  FaultCode diagnosed_{FaultCode::NONE};
+  /// Null without a node: a resource manager loaded without an executor (most tests).
+  std::unique_ptr<diagnostic_updater::Updater> diagnostics_;
+  /// Publishes a new fault at once instead of at the next once-a-second status.
+  rclcpp::TimerBase::SharedPtr fault_watch_;
 };
 
 }  // namespace positronic_hardware

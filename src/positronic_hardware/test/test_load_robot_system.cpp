@@ -129,6 +129,12 @@
 //   it is exported; it is NaN after configure and 0 after a read on the fake arm; a URDF
 //   without it still loads and runs, with no such interface; on the pseudo-terminal arm it is
 //   finite and small while the arm answers, and well past a turn once the arm goes quiet.
+// Follow-up prompt (#121):
+//   With an executor in the resource manager params, as the controller manager gives it, the
+//   component gets a node and publishes its fault on /diagnostics. With the once-a-second status
+//   set to an hour, so a status that comes is a change: a silent arm gives ERROR LINK_TIMEOUT
+//   with its reason at once, and an activate right after the arm answers again brings OK back:
+//   activate waits for the link to come back, as for the first reply, instead of refusing.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -157,6 +163,8 @@
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "hardware_interface/resource_manager.hpp"
 #include "hardware_interface/types/lifecycle_state_names.hpp"
 #include "hardware_interface/types/resource_manager_params.hpp"
@@ -614,7 +622,8 @@ protected:
   }
 
   /// Loads `urdf` into a fresh ResourceManager, as the controller manager does at start-up.
-  /// Without `executor` the component gets no ROS node, as in every test but the #136 ones.
+  /// Without `executor` the component gets no ROS node, as in every test but the #136 and #121
+  /// ones; with it, as the controller manager gives it, the component gets its node.
   hardware_interface::ResourceManager & load(
     const std::string & urdf, const rclcpp::Executor::SharedPtr & executor = nullptr)
   {
@@ -714,14 +723,16 @@ protected:
   /// (that is configure). The controller side is in controller_, for a ReplyingArm to answer
   /// on, or for a test to close. False when the terminal could not be opened or the plugin did
   /// not load.
-  [[nodiscard]] bool load_on_pseudo_terminal()
+  [[nodiscard]] bool load_on_pseudo_terminal(const rclcpp::Executor::SharedPtr & executor = nullptr)
   {
     std::array<char, 128> port{};
     controller_ = open_pseudo_terminal(port);
     if (controller_ < 0) {
       return false;
     }
-    load(urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())));
+    load(
+      urdf_with(all_good_joints(), param("backend", "serial") + param("port", port.data())),
+      executor);
     return loaded_;
   }
 
@@ -773,13 +784,77 @@ protected:
   /// The controller side of the pseudo-terminal of load_on_pseudo_terminal(), or -1.
   int controller_{-1};
 
-  // load_with_node() (#136).
+  // load_with_node() (#136); FaultDiagnostics spins it itself (#121).
   rclcpp::Executor::SharedPtr executor_;
   std::thread spinner_;
   rclcpp::Node::SharedPtr supervisor_;
   rclcpp::Publisher<positronic_interfaces::msg::Heartbeat>::SharedPtr heartbeat_;
   rclcpp::TimerBase::SharedPtr beat_timer_;
   std::atomic<bool> beating_{false};
+};
+
+/// #121: the component's node on an executor, as the controller manager gives it, and a listener
+/// that keeps the component's statuses on /diagnostics. The once-a-second status is set to once
+/// an hour, so a status that comes is a change the fault watch sent. Nothing runs until a test
+/// spins, so every callback runs on the test's thread.
+class FaultDiagnostics : public LoadRobotSystem
+{
+protected:
+  static void SetUpTestSuite()
+  {
+    const std::array<const char *, 4> arguments{
+      "test_load_robot_system", "--ros-args", "-p", "diagnostic_updater.period:=3600.0"};
+    rclcpp::init(static_cast<int>(arguments.size()), arguments.data());
+  }
+
+  void SetUp() override
+  {
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    listener_ = std::make_shared<rclcpp::Node>("diagnostics_listener");
+    subscription_ = listener_->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+      "/diagnostics", rclcpp::QoS(10),
+      [this](const diagnostic_msgs::msg::DiagnosticArray & message) {
+        for (const auto & status : message.status) {
+          if (status.hardware_id == HARDWARE_NAME) {
+            statuses_.push_back(status);
+          }
+        }
+      });
+    executor_->add_node(listener_);
+  }
+
+  /// Spins until `done`, for at most `timeout`. False at the timeout.
+  template<typename Done>
+  bool spin_until(const Done & done, std::chrono::milliseconds timeout)
+  {
+    const auto deadline{std::chrono::steady_clock::now() + timeout};
+    while (!done()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      executor_->spin_once(std::chrono::milliseconds{10});
+    }
+    return true;
+  }
+
+  /// The newest status's message once it has `level`, within 2 s (the fault watch looks every
+  /// 50 ms); "" at the timeout.
+  [[nodiscard]] std::string newest(std::uint8_t level)
+  {
+    const bool arrived{spin_until(
+        [this, level]() {
+          return !statuses_.empty() && statuses_.back().level == level;
+      },
+      std::chrono::seconds{2})};
+    if (!arrived) {
+      return "";
+    }
+    return statuses_.back().message;
+  }
+
+  rclcpp::Node::SharedPtr listener_;
+  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr subscription_;
+  std::vector<diagnostic_msgs::msg::DiagnosticStatus> statuses_;
 };
 
 }  // namespace
@@ -2144,5 +2219,39 @@ TEST_F(LoadRobotSystem, ALinkTimeoutKeepsItsFaultWhenTheSupervisorGoesSilentAfte
 
   stop_spinning();
   resource_manager_.reset();
+  ::close(controller_);
+}
+
+TEST_F(FaultDiagnostics, ALinkTimeoutIsOnDiagnosticsAtOnceAndActivateBringsOkBack)
+{
+  using diagnostic_msgs::msg::DiagnosticStatus;
+  ASSERT_TRUE(load_on_pseudo_terminal(executor_));
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  // A status sent before the listener matches the component's publisher is lost; 5 s is far
+  // above what discovery takes on one machine.
+  ASSERT_TRUE(spin_until(
+      [this]() {
+        return subscription_->get_publisher_count() > 0;
+    },
+    std::chrono::seconds{5}));
+
+  // Silent for longer than the 200 ms link timeout, with a margin for a loaded machine.
+  arm.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{300});
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_EQ(
+    newest(DiagnosticStatus::ERROR), "LINK_TIMEOUT: no valid reply from the arm; targets held");
+
+  // The arm answers again and a person reactivates at once: activate waits for a fresh reply
+  // (the requests queued while it was silent get late answers, which the driver drops).
+  arm = std::make_unique<ReplyingArm>(controller_);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  EXPECT_EQ(newest(DiagnosticStatus::OK), "NONE: no fault");
+
+  resource_manager_.reset();
+  arm.reset();
   ::close(controller_);
 }

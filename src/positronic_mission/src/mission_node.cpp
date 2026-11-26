@@ -18,9 +18,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "positronic_mission/mission_node.hpp"
 #include <rclcpp/logging.hpp>
+#include <rclcpp_action/server.hpp>
+
 #include "positronic_interfaces/action/go_to_pose.hpp"
+#include "positronic_mission/mission_node.hpp"
 #include "positronic_mission/motion_backend.hpp"
 #include "positronic_mission/moveit_backend.hpp"
 
@@ -86,6 +88,15 @@ void positronic_mission::MissionNode::handle_emergency_stop(
     (state_now == State::ERROR) ? "Stopped. State kept as ERROR" : "Emergency Stop activated";
 }
 
+void positronic_mission::MissionNode::reset_ptrs()
+{
+  mission_server_ = nullptr;
+  publisher_ = nullptr;
+  reset_state_ = nullptr;
+  emergency_stop_ = nullptr;
+  timer_ = nullptr;
+}
+
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure(
   const rclcpp_lifecycle::State & /* state */)
 {
@@ -132,15 +143,6 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_configure
   return CallbackReturn::SUCCESS;
 }
 
-void positronic_mission::MissionNode::reset_ptrs()
-{
-  mission_server_ = nullptr;
-  publisher_ = nullptr;
-  reset_state_ = nullptr;
-  emergency_stop_ = nullptr;
-  timer_ = nullptr;
-}
-
 positronic_mission::CallbackReturn positronic_mission::MissionNode::on_cleanup(
   const rclcpp_lifecycle::State & /* state */)
 {
@@ -180,7 +182,7 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_deactivat
 
   // Get the current State
   // Check if it's not ERROR. Then check if it didn't change from the last check
-  // If it changed, retry with new value. If it didn't, set state_ = STOPPED and exits loop
+  // If it changed, retry with new value. If it didn't, set state_ = INACTIVE and exits loop
   // Using _weak because it can be faster on loops.
   // Don't use it for single checks since it can spuriously fail!
   State state_now = state_.load();
@@ -212,7 +214,23 @@ positronic_mission::CallbackReturn positronic_mission::MissionNode::on_shutdown(
   if (exec_thread_.joinable()) {
     exec_thread_.join();
   }
+  reset_ptrs();
 
+  return CallbackReturn::SUCCESS;
+}
+
+positronic_mission::CallbackReturn positronic_mission::MissionNode::on_error(
+  const rclcpp_lifecycle::State & /* state */)
+{
+  RCLCPP_INFO(get_logger(), "IN on_error");
+
+  state_ = State::INACTIVE;
+  if (backend_) {
+    backend_->stop();
+  }
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
   reset_ptrs();
 
   return CallbackReturn::SUCCESS;
@@ -233,19 +251,26 @@ void positronic_mission::MissionNode::heart_beat()
 rclcpp_action::GoalResponse positronic_mission::MissionNode::handle_goal(
   const rclcpp_action::GoalUUID & /* uuid */, const std::shared_ptr<const GoToPose::Goal> & goal)
 {
+  if (goal == nullptr) {
+    RCLCPP_WARN(get_logger(), "Rejected, No goal");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     RCLCPP_WARN(get_logger(), "Rejected, node is not activated");
     return rclcpp_action::GoalResponse::REJECT;
   }
-  const std::string reason = validate_pose(goal->target_pose);
+
+  // Decide if a pose or path is sent
+  // Parse them and return an error string if there is any
+  const std::string reason = validate_input(goal);
   if (!reason.empty()) {
     RCLCPP_WARN(get_logger(), "Rejected, %s", reason.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
-  // This is a weird one
-  // compare_exchange_strong does
-  // if equals to first param, change value to second param, return true
-  // if different, set expected to old value, return false
+
+  // If state_ == expected, set state_ to State::MOVING
+  // Else, set expected to state_
   State expected = State::IDLE;
   if (!state_.compare_exchange_strong(expected, State::MOVING)) {
     RCLCPP_WARN(get_logger(), "Rejected, arm is not idle");
@@ -281,6 +306,34 @@ void positronic_mission::MissionNode::handle_accepted(
   exec_thread_ = std::thread(exec_function);
 }
 
+positronic_mission::MotionOutcome positronic_mission::MissionNode::run_backend(
+  const std::shared_ptr<const positronic_interfaces::action::GoToPose::Goal> & goal)
+{
+  try {
+    // Blocking call made to Moveit
+    switch (goal->mode) {
+      case (GoToPose::Goal::MODE_POSE):
+        return backend_->plan_and_execute(goal->target_pose);
+        break;
+      case (GoToPose::Goal::MODE_CARTESIAN):
+        return backend_->plan_and_execute_cartesian(goal->cartesian_path);
+        break;
+      default:
+        RCLCPP_WARN(get_logger(), "Invalid Goal Mode. Arm is back to IDLE");
+        return MotionOutcome::PLANNING_FAILED;
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Backend threw: %s", e.what());
+    backend_->stop();
+    return MotionOutcome::EXECUTION_FAILED;
+  } catch (...) {
+    // Backup catch for unknown throws
+    RCLCPP_ERROR(get_logger(), "Unknown Throw. Treated as execution failed");
+    backend_->stop();
+    return MotionOutcome::EXECUTION_FAILED;
+  }
+}
+
 void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> & goal_handle)
 {
   RCLCPP_INFO(get_logger(), "Executing");
@@ -294,8 +347,8 @@ void positronic_mission::MissionNode::execute(const std::shared_ptr<GoalHandle> 
   feedback->stage = "executing";
   goal_handle->publish_feedback(feedback);
 
-  // Blocking call made to Moveit
-  const MotionOutcome outcome = backend_->plan_and_execute(goal->target_pose);
+  // Throws are rare but can happen. Treating them as execution error
+  const MotionOutcome outcome = run_backend(goal);
 
   if (!rclcpp::ok()) {
     // Protection for the lower checks. If mission_node is shutdown
