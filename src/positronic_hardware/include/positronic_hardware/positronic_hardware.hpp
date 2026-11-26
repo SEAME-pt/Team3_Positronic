@@ -62,6 +62,11 @@ inline constexpr std::string_view FAULT_STATE{"fault_code"};
 /// Prefix of the key of each servo temperature on /diagnostics, followed by the joint name
 /// ("temperature_c/joint2_to_joint1"), value in whole degC. thermal_park.py reads them.
 inline constexpr std::string_view TEMPERATURE_KEY_PREFIX{"temperature_c/"};
+/// #120: the age of the pose read() publishes, in seconds (SI), on the same gpio: the time from the
+/// arrival of the reply that carried the pose to the read() that publishes it. NaN until the
+/// first pose. Optional: exported only when the <gpio name="driver"> declares it, as
+/// positronic_real.urdf.xacro does; nothing reads it yet.
+inline constexpr std::string_view POSE_AGE_STATE{"pose_age_s"};
 
 /// Where the safety supervisor publishes its heartbeat (#136), every check of its timer.
 inline constexpr std::string_view SUPERVISOR_HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
@@ -169,8 +174,12 @@ private:
   };
 
   /// Asks the arm where the joints are, estimates the velocity from the change since the last
-  /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
+  /// call `dt` seconds ago, and stores both in the state interfaces, with the age of that pose
+  /// (#120). No allocation, no blocking.
   void update_states(double dt);
+
+  /// Writes `age` to driver/pose_age_s in seconds, NaN for nullopt, when the URDF declares it.
+  void set_pose_age(std::optional<std::chrono::steady_clock::duration> age);
 
   HardwareConfig config_{};
   std::unique_ptr<ArmBackend> arm_;
@@ -179,6 +188,8 @@ private:
   std::array<JointHandles, NUM_JOINTS> handles_{};
   /// "driver/fault_code", looked up once like the joint handles.
   hardware_interface::StateInterface::SharedPtr fault_handle_;
+  /// "driver/pose_age_s" (#120), or null when the URDF does not declare it.
+  hardware_interface::StateInterface::SharedPtr pose_age_handle_;
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};

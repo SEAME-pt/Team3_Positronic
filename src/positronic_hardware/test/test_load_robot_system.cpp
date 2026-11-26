@@ -123,6 +123,12 @@
 //   The supervisor now beats only from its resume on, so the first heartbeat reaches the driver
 //   while on_activate already waits. Test that a heartbeat that starts after activate() was
 //   called still activates.
+// Follow-up prompt (#120):
+//   The driver gpio may also declare driver/pose_age_s, the age in seconds of the pose read()
+//   publishes, NaN until the first pose. FAULT_GPIO now declares it, as the xacro does. Test:
+//   it is exported; it is NaN after configure and 0 after a read on the fake arm; a URDF
+//   without it still loads and runs, with no such interface; on the pseudo-terminal arm it is
+//   finite and small while the arm answers, and well past a turn once the arm goes quiet.
 // Follow-up prompt (#121):
 //   With an executor in the resource manager params, as the controller manager gives it, the
 //   component gets a node and publishes its fault on /diagnostics. With the once-a-second status
@@ -202,8 +208,12 @@ constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
 constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
 /// ros2_control's clamping limiter off, as in positronic_real.urdf.xacro (#34).
 constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
-/// The fault <gpio> the supervisor reads (#35), exactly as in positronic_real.urdf.xacro.
-constexpr std::string_view FAULT_GPIO{
+/// The driver <gpio>, exactly as in positronic_real.urdf.xacro: the fault the supervisor reads
+/// (#35) and the age of the pose (#120).
+constexpr std::string_view FAULT_GPIO{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+  R"(<state_interface name="pose_age_s"/></gpio>)"};
+/// The driver <gpio> as before #120: the fault alone. The pose age is optional.
+constexpr std::string_view FAULT_ONLY_GPIO{
   R"(<gpio name="driver"><state_interface name="fault_code"/></gpio>)"};
 /// The values of FaultCode the supervisor relies on: written out here, not taken from the
 /// header, so the test fails if someone renumbers them.
@@ -884,18 +894,19 @@ TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesAndTheFaultCode)
+TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesTheFaultCodeAndThePoseAge)
 {
   auto & resource_manager{load(urdf_with(all_good_joints()))};
   ASSERT_TRUE(loaded_);
 
   std::vector<std::string> expected;
-  expected.reserve(2 * JOINTS.size() + 1);
+  expected.reserve(2 * JOINTS.size() + 2);
   for (const auto & joint : JOINTS) {
     expected.push_back(joint + "/position");
     expected.push_back(joint + "/velocity");
   }
   expected.emplace_back("driver/fault_code");
+  expected.emplace_back("driver/pose_age_s");
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
   std::sort(expected.begin(), expected.end());
@@ -1622,6 +1633,66 @@ TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
 
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+}
+
+// #120: the fake pose is computed at the read() that publishes it, so its age is 0, and NaN
+// ("unknown") before any read, like the joints.
+TEST_F(LoadRobotSystem, PoseAgeIsUnknownAfterConfigureAndZeroOnTheFakeArm)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_TRUE(std::isnan(state("driver", "pose_age_s").value_or(0.0)));
+
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
+}
+
+// #120: the pose age is optional. A URDF without it, as before, loads and runs, and the plugin
+// exports no such interface.
+TEST_F(LoadRobotSystem, RunsWithoutThePoseAge)
+{
+  auto & resource_manager{
+    load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), FAULT_ONLY_GPIO))};
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const auto keys{resource_manager.state_interface_keys()};
+  EXPECT_EQ(std::count(keys.begin(), keys.end(), "driver/pose_age_s"), 0);
+}
+
+// #120, end to end on the pseudo-terminal arm. While it answers, a reply comes every turn (10 ms
+// at rest), so the pose read() publishes is young. Once the arm is quiet, the pose stays the last
+// one and its age grows with the silence; the link fault does not reset it. One bound splits the
+// two, half the silence: far above a turn, so a loaded CI runner stays under it while the arm
+// answers, and far below the silence, so a reply still on the line at the cut stays over it.
+TEST_F(LoadRobotSystem, PoseAgeIsSmallWhileTheArmAnswersAndGrowsWhenItGoesQuiet)
+{
+  constexpr std::chrono::milliseconds QUIET_FOR{300};
+  const double split_s{std::chrono::duration<double>{QUIET_FOR}.count() / 2.0};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const double alive{state("driver", "pose_age_s").value_or(std::nan(""))};
+  EXPECT_TRUE(std::isfinite(alive));
+  EXPECT_GE(alive, 0.0);
+  EXPECT_LT(alive, split_s);
+
+  arm.reset();
+  std::this_thread::sleep_for(QUIET_FOR);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const double quiet{state("driver", "pose_age_s").value_or(std::nan(""))};
+  EXPECT_GE(quiet, split_s);
+  EXPECT_GT(quiet, alive);
+
+  resource_manager_.reset();
+  ::close(controller_);
 }
 
 TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)
