@@ -75,7 +75,7 @@ struct NumericParameter
 // sync-write after a send. The echo timeout may be longer than the period: it only counts when
 // the Atom is late. The settle is a constant since #150, when the moving turn stopped using it
 // (SerialTiming::send_settle), and only the gripper's set waits it. servo_temp_limit_c only goes
-// down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
+// down from 65: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
 // controller's trajectory tolerance (#103). supervisor_timeout_ms starts at 0, which turns the

@@ -156,7 +156,7 @@ TEST(Parameters, TheEndsOfEveryRangeAreAccepted)
   EXPECT_TRUE(accepted(Parameters{{"echo_timeout_ms", "20"}}));
   EXPECT_TRUE(accepted(Parameters{{"echo_timeout_ms", "80"}}));
   EXPECT_TRUE(accepted(Parameters{{"servo_temp_limit_c", "30"}}));
-  EXPECT_TRUE(accepted(Parameters{{"servo_temp_limit_c", "60"}}));
+  EXPECT_TRUE(accepted(Parameters{{"servo_temp_limit_c", "65"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_deg", "1"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_deg", "45"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_ms", "50"}}));
@@ -183,10 +183,10 @@ TEST(Parameters, OneStepOutsideARangeIsRefusedWithTheRange)
     "Parameter 'echo_timeout_ms' is '81'; use a whole number in [20, 80].");
   EXPECT_EQ(
     refusal("servo_temp_limit_c", "29"),
-    "Parameter 'servo_temp_limit_c' is '29'; use a whole number in [30, 60].");
+    "Parameter 'servo_temp_limit_c' is '29'; use a whole number in [30, 65].");
   EXPECT_EQ(
-    refusal("servo_temp_limit_c", "61"),
-    "Parameter 'servo_temp_limit_c' is '61'; use a whole number in [30, 60].");
+    refusal("servo_temp_limit_c", "66"),
+    "Parameter 'servo_temp_limit_c' is '66'; use a whole number in [30, 65].");
   EXPECT_EQ(
     refusal("tracking_error_deg", "0.9"),
     "Parameter 'tracking_error_deg' is '0.9'; use a number in [1, 45].");
@@ -266,7 +266,7 @@ TEST(Parameters, TheInfoLineHasEveryValue)
   EXPECT_EQ(
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
-    "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 60 degC, "
+    "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 65 degC, "
     "tracking error 8.0 deg for 300 ms, supervisor timeout 500 ms.");
 }
 

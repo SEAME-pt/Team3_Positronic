@@ -49,7 +49,7 @@ over the driver's and hide a change made there.
   echo_timeout_ms:=           ms the thread waits at most for the arm's sync-write after a send
   pose_from_poll:=true|false  the pose from the arm's own poll of its servos, the send on the
                               controller's write (#170); false gives a get_angles every turn
-  servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
+  servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 65
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
   supervisor_timeout_ms:=0    ms without the safety supervisor's heartbeat that halt the arm
@@ -120,7 +120,7 @@ def generate_launch_description():
     # The over-temperature cut. Only lower it, for the hardware test of the cut.
     servo_temp_limit_c = DeclareLaunchArgument(
         'servo_temp_limit_c', default_value='',
-        description='degC at which a servo stops the arm and powers it off (30 to 60).')
+        description='degC at which a servo stops the arm and powers it off (30 to 65).')
     # The unfollowed-command fault (#103). Arguments so the bench can try other values.
     tracking_error_deg = DeclareLaunchArgument(
         'tracking_error_deg', default_value='',

@@ -38,6 +38,10 @@
 //   reading one degree under the limit neither starts nor stops the clock (59 and 60 in turn
 //   trip on a 60 after 1 s, a 58 stops it). One clock per servo: J4 held at 59 does not keep
 //   alive a clock J1's false readings start, the trip names J4; J1 and J4 together name J1.
+//
+// Follow-up prompt (cut at 65 degC):
+//   The default cut goes from 60 to 65 degC. The detector cases keep their readings around 60,
+//   now as an explicit 60 degC limit (LIMIT_60): they test the detector, not the default.
 
 #include <gtest/gtest.h>
 
@@ -64,6 +68,8 @@ using positronic_hardware::ServoTemperatures;
 constexpr ServoTemperatures COOL{31, 33, 35, 30, 29, 28};
 /// J3 at the limit, the rest cool.
 constexpr ServoTemperatures J3_AT_LIMIT{31, 33, 60, 30, 29, 28};
+/// The limit the detector cases are written for: the old default, a lowered limit now.
+constexpr int LIMIT_60{60};
 /// J2 above the limit, J3 at it: J2 is the hottest.
 constexpr ServoTemperatures J2_HOTTEST{31, 62, 60, 30, 29, 28};
 /// One slot reads 0: what an unanswered servo looks like.
@@ -80,7 +86,7 @@ OverheatDetector::Clock::time_point at_ms(std::int64_t ms)
 
 TEST(ServoTemperature, Constants)
 {
-  EXPECT_EQ(SERVO_TEMP_LIMIT_C, 60);
+  EXPECT_EQ(SERVO_TEMP_LIMIT_C, 65);
   EXPECT_LT(MIN_SERVO_TEMP_LIMIT_C, SERVO_TEMP_LIMIT_C);
   EXPECT_EQ(ACTIVATE_COOLDOWN_C, 5);
   EXPECT_EQ(HOT_FOR, std::chrono::milliseconds{1000});
@@ -117,7 +123,7 @@ TEST(ServoTemperature, ActivationNeedsTheCoolDownMargin)
 
 TEST(OverheatDetector, CoolReadingsNeverTrip)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   for (std::int64_t i{0}; i < 100; ++i) {
     EXPECT_FALSE(detector.update(COOL, at_ms(i * 1000)).has_value());
   }
@@ -125,7 +131,7 @@ TEST(OverheatDetector, CoolReadingsNeverTrip)
 
 TEST(OverheatDetector, OneHotReadingIsNotEnough)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J3_AT_LIMIT, at_ms(0)).has_value());
   EXPECT_FALSE(detector.update(COOL, at_ms(1000)).has_value());
   // 2 s after the first hot reading, but the cool one started the count again.
@@ -136,7 +142,7 @@ TEST(OverheatDetector, OneHotReadingIsNotEnough)
 TEST(OverheatDetector, TwoRequestsASecondApartTrip)
 {
   // At rest the thread asks once a second: two hot readings in a row, as before the frames.
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J3_AT_LIMIT, at_ms(0)).has_value());
   // Exactly HOT_FOR later counts. The trip names J3, whose clock ran out, not J2, hotter in this
   // reading but at the limit only since it.
@@ -148,7 +154,7 @@ TEST(OverheatDetector, TwoRequestsASecondApartTrip)
 
 TEST(OverheatDetector, ConstantlyHotPollsTripAtOneSecond)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   // Polls 0 to 30 are 0 to 990 ms after the first: not yet. Poll 31, at 1023 ms, trips.
   for (std::int64_t i{0}; i <= 30; ++i) {
     ASSERT_FALSE(detector.update(J3_AT_LIMIT, at_ms(i * POLL_MS)).has_value()) << i;
@@ -160,7 +166,7 @@ TEST(OverheatDetector, OneDegreeUnderTheLimitNeitherStartsNorStopsTheClock)
 {
   // A servo crossing the limit reads 59 and 60 in turn for seconds (J4 and J6 on the arm).
   constexpr ServoTemperatures J3_UNDER{31, 33, 59, 30, 29, 28};
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J3_UNDER, at_ms(0)).has_value());        // does not start it
   EXPECT_FALSE(detector.update(J3_AT_LIMIT, at_ms(500)).has_value());   // starts it
   EXPECT_FALSE(detector.update(J3_UNDER, at_ms(1000)).has_value());     // 1 s after the 59
@@ -171,7 +177,7 @@ TEST(OverheatDetector, OneDegreeUnderTheLimitNeitherStartsNorStopsTheClock)
   EXPECT_EQ(trip.value_or(Overheat{}).celsius, 60);
 
   // 58 is more than the band under the limit: it stops the clock.
-  OverheatDetector edge{SERVO_TEMP_LIMIT_C};
+  OverheatDetector edge{LIMIT_60};
   EXPECT_FALSE(edge.update(J3_AT_LIMIT, at_ms(0)).has_value());
   EXPECT_FALSE(edge.update(ServoTemperatures{31, 33, 58, 30, 29, 28}, at_ms(500)).has_value());
   EXPECT_FALSE(edge.update(J3_AT_LIMIT, at_ms(1000)).has_value());
@@ -185,7 +191,7 @@ TEST(OverheatDetector, EachServoHasItsOwnClock)
   constexpr ServoTemperatures J4_59_J1_FALSE{76, 34, 32, 59, 32, 35};
   constexpr ServoTemperatures J4_59{41, 34, 32, 59, 32, 35};
   constexpr ServoTemperatures J4_60{41, 34, 32, 60, 32, 35};
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J4_59_J1_FALSE, at_ms(0)).has_value());
   for (std::int64_t ms{POLL_MS}; ms < 2000; ms += POLL_MS) {
     ASSERT_FALSE(detector.update(J4_59, at_ms(ms)).has_value()) << ms;
@@ -204,7 +210,7 @@ TEST(OverheatDetector, J1IsWatchedAndNamedFirst)
   // J1 is joint 0, the first of the loop. At the limit as long as J4, the trip names J1: the
   // J1 side first.
   constexpr ServoTemperatures J1_AND_J4_AT_LIMIT{60, 33, 35, 61, 29, 28};
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J1_AND_J4_AT_LIMIT, at_ms(0)).has_value());
   const std::optional<Overheat> trip{detector.update(J1_AND_J4_AT_LIMIT, at_ms(1000))};
   ASSERT_TRUE(trip.has_value());
@@ -214,20 +220,20 @@ TEST(OverheatDetector, J1IsWatchedAndNamedFirst)
 
 TEST(OverheatDetector, WithNoWaitOneReadingAloneStillDoesNotTrip)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C, std::chrono::milliseconds{0}};
+  OverheatDetector detector{LIMIT_60, std::chrono::milliseconds{0}};
   EXPECT_FALSE(detector.update(J3_AT_LIMIT, at_ms(0)).has_value());
   EXPECT_TRUE(detector.update(J3_AT_LIMIT, at_ms(0)).has_value());
 }
 
 TEST(OverheatDetector, AnImplausibleReadingNeitherCountsNorResets)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   EXPECT_FALSE(detector.update(J3_AT_LIMIT, at_ms(0)).has_value());
   EXPECT_FALSE(detector.update(ONE_ZERO, at_ms(500)).has_value());
   EXPECT_TRUE(detector.update(J3_AT_LIMIT, at_ms(1000)).has_value());
 
   // And an implausible hot-looking reading alone never trips.
-  OverheatDetector other{SERVO_TEMP_LIMIT_C};
+  OverheatDetector other{LIMIT_60};
   const ServoTemperatures garbage{200, 200, 200, 200, 200, 200};
   EXPECT_FALSE(other.update(garbage, at_ms(0)).has_value());
   EXPECT_FALSE(other.update(garbage, at_ms(1000)).has_value());
@@ -235,7 +241,7 @@ TEST(OverheatDetector, AnImplausibleReadingNeitherCountsNorResets)
 
 TEST(OverheatDetector, TheTripStaysAfterTheServosCool)
 {
-  OverheatDetector detector{SERVO_TEMP_LIMIT_C};
+  OverheatDetector detector{LIMIT_60};
   static_cast<void>(detector.update(J3_AT_LIMIT, at_ms(0)));
   ASSERT_TRUE(detector.update(J3_AT_LIMIT, at_ms(1000)).has_value());
   const std::optional<Overheat> later{detector.update(COOL, at_ms(2000))};
