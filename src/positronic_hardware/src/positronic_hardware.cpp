@@ -39,6 +39,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "urdf/model.h"
 
@@ -107,6 +108,10 @@ constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
+
+/// How often the component's node looks for a new fault to put on /diagnostics at once (#121).
+/// The supervisor halts on the code; the reason follows within this.
+constexpr std::chrono::milliseconds FAULT_WATCH_PERIOD{50};
 
 /// Logs a refused check (#34) as "<what>: joint '<name>' = <rad> rad (<deg> deg), <fault>
 /// [<lower>, <upper>] rad.", the joint name and value the issue asks for.
@@ -210,6 +215,9 @@ CallbackReturn RobotSystem::on_init(
   if (!read_parameters(info.hardware_parameters)) {
     return CallbackReturn::ERROR;
   }
+
+  start_diagnostics(info.name);
+
   if (!start_supervisor_check()) {
     return CallbackReturn::ERROR;
   }
@@ -448,11 +456,8 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
-  // #35: has_sample() stays true once the arm has answered, so it says nothing about a link that
-  // died later. Never activate on a silent link: read() would raise the fault again at once.
-  if (arm_->link_timed_out()) {
-    RCLCPP_ERROR(
-      get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+  // #35: never activate on a silent link; one that comes back before the deadline is waited for.
+  if (!link_alive_by(deadline)) {
     return CallbackReturn::ERROR;
   }
 
@@ -830,6 +835,49 @@ void RobotSystem::raise_fault(FaultCode code)
       "activate.",
       static_cast<int>(code), static_cast<int>(LinkWatchdog::DEFAULT_TIMEOUT.count()));
   }
+}
+
+void RobotSystem::start_diagnostics(const std::string & hardware_id)
+{
+  // On the node the controller manager gives the component and spins on its executor, never on
+  // the control loop.
+  if (get_node() == nullptr) {
+    return;
+  }
+  diagnostics_ = std::make_unique<diagnostic_updater::Updater>(get_node());
+  diagnostics_->setHardwareID(hardware_id);
+  diagnostics_->add("driver", this, &RobotSystem::diagnose);
+  fault_watch_ = get_node()->create_wall_timer(FAULT_WATCH_PERIOD, [this]() {
+        if (fault_.load() != diagnosed_) {
+          diagnostics_->force_update();
+        }
+  });
+}
+
+bool RobotSystem::link_alive_by(std::chrono::steady_clock::time_point deadline)
+{
+  // has_sample() stays true once the arm has answered, so it says nothing about a link that died
+  // later, and read() would raise the fault again at once. An arm that answers again before the
+  // deadline (reactivated right after its link came back) is waited for, like its first reply.
+  while (arm_->link_timed_out()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
+{
+  diagnosed_ = fault_.load();
+  std::uint8_t level{diagnostic_msgs::msg::DiagnosticStatus::ERROR};
+  if (diagnosed_ == FaultCode::NONE) {
+    level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  }
+  status.summary(level, std::string{describe_fault(diagnosed_)});
 }
 
 void RobotSystem::refuse(const CommandCheck & check)
