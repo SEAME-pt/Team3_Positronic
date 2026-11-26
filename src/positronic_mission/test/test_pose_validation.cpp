@@ -19,6 +19,8 @@
 // THE SOFTWARE.
 
 #include "mission_fixture.hpp"
+#include "positronic_interfaces/action/go_to_pose.hpp"
+#include "positronic_mission/pose_validation.hpp"
 
 using geometry_msgs::msg::PoseStamped;
 using positronic_mission::GoToPose;
@@ -36,6 +38,26 @@ geometry_msgs::msg::PoseStamped valid_pose()
   p.pose.orientation.w = 1.0;
   return p;
 }
+
+std::vector<geometry_msgs::msg::Pose> valid_waypoints()
+{
+  std::vector<geometry_msgs::msg::Pose> waypoints;
+  waypoints.reserve(2);
+
+  geometry_msgs::msg::Pose pose_1;
+  pose_1.position.x = 0.15;
+  pose_1.position.z = 0.20;
+  pose_1.orientation.w = 1.0;
+  waypoints.push_back(pose_1);
+
+  geometry_msgs::msg::Pose pose_2;
+  pose_2.position.x = 0.30;
+  pose_2.position.z = 0.205;
+  pose_2.orientation.w = 1.0;
+  waypoints.push_back(pose_2);
+
+  return waypoints;
+}
 }  // namespace
 
 TEST(PoseValidation, FrameValidation)
@@ -50,6 +72,11 @@ TEST(PoseValidation, FrameValidation)
   EXPECT_EQ(positronic_mission::validate_pose(p), "invalid frame_id");
   EXPECT_EQ(positronic_mission::validate_pose(q), "invalid frame_id");
   EXPECT_EQ(positronic_mission::validate_pose(r), "");
+
+  auto goal = std::make_shared<GoToPose::Goal>();
+  goal->mode = GoToPose::Goal::MODE_POSE;
+  goal->target_pose.header.frame_id = "";
+  EXPECT_EQ(positronic_mission::validate_input(goal), "invalid frame_id");
 }
 
 TEST(PoseValidation, QuaternionValidation)
@@ -87,4 +114,60 @@ TEST(PoseValidation, NonFiniteValidation)
   EXPECT_EQ(positronic_mission::validate_pose(p), "non numeric pose value");
   EXPECT_EQ(positronic_mission::validate_pose(q), "non numeric pose value");
   EXPECT_EQ(positronic_mission::validate_pose(r), "non numeric pose value");
+}
+
+TEST(PoseValidation, InvalidGoal)
+{
+  auto goal = std::make_shared<GoToPose::Goal>();
+  goal->mode = 99;
+
+  EXPECT_EQ(positronic_mission::validate_input(goal), "invalid mode");
+
+  goal->mode = GoToPose::Goal::MODE_CARTESIAN;
+  goal->cartesian_path = std::vector<geometry_msgs::msg::Pose>();
+
+  EXPECT_EQ(positronic_mission::validate_input(goal), "empty waypoints");
+}
+
+TEST(PoseValidation, WaypointValidation)
+{
+  const int i = 1;
+  auto p = valid_waypoints();
+  auto q = valid_waypoints();
+
+  q[i].orientation.w = 0;
+
+  EXPECT_EQ(positronic_mission::validate_waypoints(p), "");
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(q),
+    "invalid quaternion on waypoint: " + std::to_string(i));
+}
+
+TEST(PoseValidation, NonFiniteValues)
+{
+  int i = 1;
+  auto p = valid_waypoints();
+  auto q = valid_waypoints();
+  auto r = valid_waypoints();
+
+  p[i].orientation.x = NAN;
+  q[i].position.x = INFINITY;
+  r[i].position.z = NAN;
+
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(p),
+    "non numeric pose value on waypoint: " + std::to_string(i));
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(q),
+    "non numeric pose value on waypoint: " + std::to_string(i));
+  EXPECT_EQ(
+    positronic_mission::validate_waypoints(r),
+    "non numeric pose value on waypoint: " + std::to_string(i));
+}
+
+TEST(PoseValidation, EmptyInput)
+{
+  const std::vector<geometry_msgs::msg::Pose> p;
+
+  EXPECT_EQ(positronic_mission::validate_waypoints(p), "empty waypoints");
 }

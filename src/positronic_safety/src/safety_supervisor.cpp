@@ -159,6 +159,7 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_configure(
   heartbeat_watchdog_ = DeadlineWatchdog{config_.heartbeat_timeout};
   fault_watchdog_ = DeadlineWatchdog{config_.fault_timeout};
   fault_code_ = std::numeric_limits<double>::quiet_NaN();
+  driver_reason_.clear();
 
   // Only the newest message matters, and one that was lost is not worth sending again: the
   // next one is already on its way. Best effort also matches the mission node's publisher (a
@@ -171,6 +172,10 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_configure(
   fault_subscription_ = create_subscription<DynamicJointState>(
     config_.fault_topic, newest_only, [this](const DynamicJointState & message) {
       on_joint_states(message);
+    });
+  diagnostics_subscription_ = create_subscription<DiagnosticArray>(
+    "/diagnostics", rclcpp::QoS(10), [this](const DiagnosticArray & message) {
+      on_diagnostics(message);
     });
 
   // Latched: whoever subscribes later still gets the current status.
@@ -263,6 +268,7 @@ SafetySupervisor::CallbackReturn SafetySupervisor::on_cleanup(
   timer_.reset();
   heartbeat_subscription_.reset();
   fault_subscription_.reset();
+  diagnostics_subscription_.reset();
   stop_service_.reset();
   hardware_client_.reset();
   switch_client_.reset();
@@ -303,6 +309,18 @@ void SafetySupervisor::on_joint_states(const DynamicJointState & message)
       get_logger(), "The driver reports a fault: %s/%s = %.0f.", config_.fault_gpio.c_str(),
       config_.fault_interface.c_str(), *code);
     begin_halt(Reason::DRIVER_FAULT);
+  }
+}
+
+void SafetySupervisor::on_diagnostics(const DiagnosticArray & message)
+{
+  const std::optional<std::string> reason = find_fault_reason(message, config_.hardware_component);
+  if (!reason.has_value() || *reason == driver_reason_) {
+    return;
+  }
+  driver_reason_ = *reason;
+  if (!driver_reason_.empty()) {
+    RCLCPP_ERROR(get_logger(), "The driver says why: %s.", driver_reason_.c_str());
   }
 }
 

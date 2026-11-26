@@ -39,6 +39,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "urdf/model.h"
 
@@ -91,6 +92,16 @@ bool has_fault_gpio(const hardware_interface::HardwareInfo & info)
   return false;
 }
 
+/// True if the <gpio> named FAULT_GPIO declares a POSE_AGE_STATE state interface (#120). It is
+/// optional, so its absence is no error: the plugin then exports no pose age.
+bool declares_pose_age(const hardware_interface::HardwareInfo & info)
+{
+  return std::any_of(
+    info.gpios.begin(), info.gpios.end(), [](const hardware_interface::ComponentInfo & gpio) {
+      return gpio.name == FAULT_GPIO && has_interface(gpio.state_interfaces, POSE_AGE_STATE);
+    });
+}
+
 /// A FaultCode as the value of the fault state interface: a small whole number, exact in a double.
 constexpr double to_state(FaultCode code)
 {
@@ -107,6 +118,10 @@ constexpr std::chrono::milliseconds FIRST_TEMPERATURE_TIMEOUT{2000};
 
 /// For the log lines only: people read degrees faster than radians.
 constexpr double RAD_TO_DEG{180.0 / 3.14159265358979323846};
+
+/// How often the component's node looks for a new fault to put on /diagnostics at once (#121).
+/// The supervisor halts on the code; the reason follows within this.
+constexpr std::chrono::milliseconds FAULT_WATCH_PERIOD{50};
 
 /// Logs a refused check (#34) as "<what>: joint '<name>' = <rad> rad (<deg> deg), <fault>
 /// [<lower>, <upper>] rad.", the joint name and value the issue asks for.
@@ -210,6 +225,9 @@ CallbackReturn RobotSystem::on_init(
   if (!read_parameters(info.hardware_parameters)) {
     return CallbackReturn::ERROR;
   }
+
+  start_diagnostics(info.name);
+
   if (!start_supervisor_check()) {
     return CallbackReturn::ERROR;
   }
@@ -381,6 +399,12 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     }
     fault_handle_ =
       get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{FAULT_STATE});
+    // #120: only when the URDF declares it; without it read() publishes no pose age.
+    pose_age_handle_.reset();
+    if (declares_pose_age(info_)) {
+      pose_age_handle_ =
+        get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{POSE_AGE_STATE});
+    }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
@@ -390,6 +414,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   for (const auto & [name, description] : joint_state_interfaces_) {
     set_state(name, std::numeric_limits<double>::quiet_NaN());
   }
+  // #120: no pose yet, so no age.
+  set_pose_age(std::nullopt);
   // #35: a fault latched before an on_error stays visible; only on_activate clears it.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), true);
   return CallbackReturn::SUCCESS;
@@ -447,11 +473,8 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
-  // #35: has_sample() stays true once the arm has answered, so it says nothing about a link that
-  // died later. Never activate on a silent link: read() would raise the fault again at once.
-  if (arm_->link_timed_out()) {
-    RCLCPP_ERROR(
-      get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+  // #35: never activate on a silent link; one that comes back before the deadline is waited for.
+  if (!link_alive_by(deadline)) {
     return CallbackReturn::ERROR;
   }
 
@@ -809,6 +832,49 @@ void RobotSystem::raise_fault(FaultCode code)
   }
 }
 
+void RobotSystem::start_diagnostics(const std::string & hardware_id)
+{
+  // On the node the controller manager gives the component and spins on its executor, never on
+  // the control loop.
+  if (get_node() == nullptr) {
+    return;
+  }
+  diagnostics_ = std::make_unique<diagnostic_updater::Updater>(get_node());
+  diagnostics_->setHardwareID(hardware_id);
+  diagnostics_->add("driver", this, &RobotSystem::diagnose);
+  fault_watch_ = get_node()->create_wall_timer(FAULT_WATCH_PERIOD, [this]() {
+        if (fault_.load() != diagnosed_) {
+          diagnostics_->force_update();
+        }
+  });
+}
+
+bool RobotSystem::link_alive_by(std::chrono::steady_clock::time_point deadline)
+{
+  // has_sample() stays true once the arm has answered, so it says nothing about a link that died
+  // later, and read() would raise the fault again at once. An arm that answers again before the
+  // deadline (reactivated right after its link came back) is waited for, like its first reply.
+  while (arm_->link_timed_out()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
+{
+  diagnosed_ = fault_.load();
+  std::uint8_t level{diagnostic_msgs::msg::DiagnosticStatus::ERROR};
+  if (diagnosed_ == FaultCode::NONE) {
+    level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  }
+  status.summary(level, std::string{describe_fault(diagnosed_)});
+}
+
 void RobotSystem::refuse(const CommandCheck & check)
 {
   // Going silent does not stop the arm: it keeps going to its last target. request_halt() is
@@ -825,9 +891,14 @@ void RobotSystem::update_states(double dt)
   // No reply from the arm yet: keep the states NaN ("unknown") rather than publish the
   // placeholder pose, and keep the velocity estimator from using it as a baseline.
   if (!arm_->has_sample()) {
+    set_pose_age(std::nullopt);
     return;
   }
-  const JointPositions angles{arm_->read_angles()};
+  // #120: the pose and its age from one read of the backend, so the age is the one of the pose
+  // published below, measured up to this read().
+  const PoseSample sample{arm_->read_pose()};
+  const JointPositions & angles{sample.angles};
+  set_pose_age(sample.age);
   const JointPositions velocities{velocity_estimator_.update(angles, dt)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_set = false: never block on a controller that is reading the handle.
@@ -844,6 +915,20 @@ void RobotSystem::update_states(double dt)
     std::ignore = set_state(gripper_handles_.position, position, false);
     std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
+}
+
+void RobotSystem::set_pose_age(std::optional<std::chrono::steady_clock::duration> age)
+{
+  if (pose_age_handle_ == nullptr) {
+    return;
+  }
+  // Seconds, as every ROS interface (CONTRIBUTING, Units).
+  double age_s{std::numeric_limits<double>::quiet_NaN()};
+  if (age.has_value()) {
+    age_s = std::chrono::duration<double>{age.value()}.count();
+  }
+  // wait_until_set = false, as for the joints: never block on a controller reading the handle.
+  std::ignore = set_state(pose_age_handle_, age_s, false);
 }
 
 }  // namespace positronic_hardware
