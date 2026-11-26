@@ -2252,7 +2252,7 @@ TEST_F(FaultDiagnostics, ALinkTimeoutIsOnDiagnosticsAtOnceAndActivateBringsOkBac
   for (const auto & joint : JOINTS) {
     const auto & values{statuses_.back().values};
     const auto found{std::find_if(
-        values.begin(), values.end(), [&joint](const diagnostic_msgs::msg::KeyValue & value) {
+      values.begin(), values.end(), [&joint](const diagnostic_msgs::msg::KeyValue & value) {
           return value.key == "temperature_c/" + joint;
       })};
     ASSERT_NE(found, values.end()) << joint;
