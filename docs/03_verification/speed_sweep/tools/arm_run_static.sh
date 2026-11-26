@@ -26,6 +26,11 @@
 #   in three tip setups. Lift the 70 cap safely: high bytes step up only, each only after the
 #   stop distance at the byte before it was measured in the same setup (step_up_check.py), a
 #   byte above 70 is typed twice, and the rest pose's J4 is given for every setup but the first.
+# Follow-up prompt (Felipe, 26 Nov, the rest of #133 on camera + gripper):
+#   Add the issue's missing runs: `limit`, T8 and T10 (22.5 and 20 deg/s, the speeds #33 saw
+#   abort at 30) 3 times each; `loop`, T6 back to back for LOOP_S (600) with the servo
+#   temperatures after every goal, ended early and sent to rest at LOOP_STOP_C (54, under the
+#   driver's 60 degC cut that powers the arm off); and STEPS for 10 latency samples.
 #
 # Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
 # terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
@@ -45,7 +50,9 @@
 #   bash $T/arm_run_static.sh base           MOVES: T3, T6, T4 (J1+J2, 10/15/20 deg/s), 3 each
 #   bash $T/arm_run_static.sh wrist          MOVES: T11, T12, T13 (J3-J6, 10/15/17.5), 3 each
 #   bash $T/arm_run_static.sh stops          MOVES: 5 x J1 at 15 deg/s, stopped mid-way
-#   bash $T/arm_run_static.sh steps          MOVES: 6 x J1 5 deg step and back (#39 steps run)
+#   bash $T/arm_run_static.sh steps          MOVES: STEPS (6) x J1 5 deg step (#39 steps run)
+#   bash $T/arm_run_static.sh limit          MOVES: T8 (J1+J2 22.5 deg/s), T10 (J3-J6 20), 3 each
+#   bash $T/arm_run_static.sh loop           MOVES: T6 back to back, LOOP_S (600 s), temps logged
 #   bash $T/arm_run_static.sh down           bag, driver, tap stopped; summary printed
 #   bash $T/arm_run_static.sh state          component, controllers, last summary (no motion)
 #
@@ -138,7 +145,8 @@ def retime(name, base, seg):
     text = re.sub(r'time_from_start: \{[^}]*\}', sub, text)
     open(f'{out}/{name}.yaml', 'w').write(text)
 for name, base, seg in (('T3', 'T3', 2.0), ('T6', 'T3', 20 / 15), ('T4', 'T3', 1.0),
-                        ('T11', 'T11', 2.0), ('T12', 'T11', 20 / 15), ('T13', 'T11', 20 / 17.5)):
+                        ('T11', 'T11', 2.0), ('T12', 'T11', 20 / 15), ('T13', 'T11', 20 / 17.5),
+                        ('T8', 'T3', 20 / 22.5), ('T10', 'T11', 1.0)):
     retime(name, base, seg)
 # TS: J1 40 deg out at 15 deg/s (2.67 s) and back, for the stops. Start pose of the #33 files.
 start = [0.2822, 0.0061, -0.0106, -0.2330, 0.0075, -0.0106]
@@ -179,7 +187,7 @@ to_rest() { send "$ROOT/traj/REST.yaml" "$(mode_dir)/move_rest_$1.txt"; }
 # The last servo temperatures in the tap (the driver's get_servo_temps replies, every few s).
 tap_temps() {
   grep -o "fefe08e5[0-9a-f]\{12\}" "$(mode_dir)/tap.csv" 2> /dev/null | tail -1 \
-    | python3 -c "import sys; h=sys.stdin.read().strip()[8:]; print(*[int(h[i:i+2], 16) for i in range(0, 12, 2)])"
+    | python3 -c "import sys; h=sys.stdin.read().strip()[8:]; h and print(*[int(h[i:i+2], 16) for i in range(0, 12, 2)])"
 }
 
 # Before a goal, at rest: if a servo is at HOT_C or more, wait there until all are at COOL_C or
@@ -431,7 +439,7 @@ PY
     # run_rt_profile.sh checks the controllers with the ros2 CLI, which sometimes answers empty
     # on the Jetson right after the switch; a refused check moves nothing, so try up to 3 times.
     for attempt in 1 2 3; do
-      STEPS=6 RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps 2>&1 | tee -a "$(mode_dir)/steps.log"
+      STEPS=${STEPS:-6} RUN=steps OUT="$(mode_dir)/rt" bash "$RT" steps 2>&1 | tee -a "$(mode_dir)/steps.log"
       [ -s "$(mode_dir)/rt/steps/steps.csv" ] && break
       echo ">>> steps attempt $attempt refused by a check, trying again" | tee -a "$(mode_dir)/steps.log"
       sleep 3
@@ -440,6 +448,55 @@ PY
     ros2 control set_controller_state arm_controller active
     # run_rt_profile.sh refuses on a failed check (stderr) without moving: say so here.
     [ -s "$(mode_dir)/rt/steps/steps.csv" ] || { echo "!!! no steps recorded, see $(mode_dir)/steps.log" >&2; exit 1; }
+    ;;
+  limit)
+    # #33's limit goals: they aborted on the trajectory tolerance at 30. An abort is the result;
+    # the JTC holds where it stopped and the arm goes back to rest from there.
+    need_mode
+    need_first
+    for name in T8 T10; do
+      for run in 1 2 3; do
+        cool_wait
+        countdown "MOVES: start pose, $name run $run (T8: J1+J2 20 deg at 22.5 deg/s; T10: J3-J6 20 deg at 20 deg/s, J3 UP), rest"
+        goal "$name" "$run" || exit 1
+      done
+    done
+    ;;
+  loop)
+    # The issue's temperature check: the servo temperatures after LOOP_S of a trajectory loop.
+    # T6 (J1+J2 20 deg at 15 deg/s, the working limit) back to back from the start pose, no rest
+    # between: that is the load. Ends early, at rest, when a servo reaches LOOP_STOP_C, well
+    # under the driver's 60 degC cut (which powers the servos off, and a raised arm drops), or
+    # when a goal does not succeed (the next T6 would jump from wherever it stopped).
+    need_mode
+    need_first
+    cool_wait
+    LOOP_S=${LOOP_S:-600}
+    LOOP_STOP_C=${LOOP_STOP_C:-54}
+    CSV="$(mode_dir)/loop_temps.csv"
+    countdown "MOVES: start pose, then T6 back to back for $((LOOP_S / 60)) min (ends at $LOOP_STOP_C degC), then rest"
+    to_start loop || exit 1
+    echo "t_s,goal,ok,j1,j2,j3,j4,j5,j6" > "$CSV"
+    echo "0,0,1,$(tap_temps | tr ' ' ',')" >> "$CSV"
+    start=$SECONDS
+    n=0
+    reason="$LOOP_S s done"
+    while [ $((SECONDS - start)) -lt "$LOOP_S" ]; do
+      n=$((n + 1))
+      ok=1
+      send "$ROOT/traj/T6.yaml" "$(mode_dir)/loop_T6_$n.txt" > /dev/null || ok=0
+      temps=$(tap_temps)
+      echo "$((SECONDS - start)),$n,$ok,$(echo "$temps" | tr ' ' ',')" >> "$CSV"
+      [ "$ok" = 1 ] || { reason="goal $n did not succeed"; break; }
+      max=$(echo "$temps" | tr ' ' '\n' | sort -n | tail -1)
+      if [ -n "$max" ] && [ "$max" -ge "$LOOP_STOP_C" ]; then
+        reason="a servo reached $max degC"
+        break
+      fi
+    done
+    echo "loop: $n T6 goals in $((SECONDS - start)) s, ended: $reason; temps degC $(tap_temps)" \
+      | tee "$(mode_dir)/loop_summary.txt"
+    to_rest loop || exit 1
     ;;
   down)
     need_mode
@@ -477,7 +534,9 @@ PY
         base) what="T3 T6 T4 x3, J1+J2 20 deg, each from and back to rest, ~5 min" ;;
         wrist) what="T11 T12 T13 x3, J3-J6 20 deg, J3 goes UP, each from and back to rest, ~5 min" ;;
         stops) what="5 stops at 15 deg/s on J1 40 deg, each from and back to rest, ~4 min" ;;
-        steps) what="6 x J1 5 deg step and back, from rest, ~1 min" ;;
+        steps) what="${STEPS:-6} x J1 5 deg step, from rest, ~1 min" ;;
+        limit) what="T8 T10 x3, may abort (the result), each from and back to rest, ~4 min" ;;
+        loop) what="T6 back to back for ${LOOP_S:-600} s, ends at ${LOOP_STOP_C:-54} degC, then rest" ;;
         *) echo "unknown stage $stage" >&2; continue ;;
       esac
       answer=""
