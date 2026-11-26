@@ -2,15 +2,19 @@ cmake_minimum_required(VERSION 3.8)
 project(positronic_hardware)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  # -Werror=switch: a FaultCode without its line in describe_fault() does not compile (#121).
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror=switch)
 endif()
 
 # find dependencies
 set(THIS_PACKAGE_INCLUDE_DEPENDS
+  diagnostic_msgs
+  diagnostic_updater
   hardware_interface
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  positronic_interfaces
   positronic_protocol
   realtime_tools
   urdf
@@ -33,10 +37,13 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(${PROJECT_NAME} PUBLIC
+  ${diagnostic_msgs_TARGETS}
+  diagnostic_updater::diagnostic_updater
   hardware_interface::hardware_interface
   pluginlib::pluginlib
   rclcpp::rclcpp
   rclcpp_lifecycle::rclcpp_lifecycle
+  ${positronic_interfaces_TARGETS}
   positronic_protocol::positronic_protocol
   realtime_tools::realtime_tools
   urdf::urdf
@@ -76,12 +83,17 @@ if(BUILD_TESTING)
   target_include_directories(test_load_robot_system PRIVATE include)
   target_link_libraries(test_load_robot_system
     ament_index_cpp::ament_index_cpp
+    ${diagnostic_msgs_TARGETS}
     hardware_interface::hardware_interface
     ${lifecycle_msgs_TARGETS}
+    ${positronic_interfaces_TARGETS}
     rclcpp::rclcpp
     rclcpp_lifecycle::rclcpp_lifecycle
   )
 
+  # The table of the fault codes (#121): header-only, no ROS.
+  ament_add_gtest(test_fault_code test/test_fault_code.cpp)
+  target_include_directories(test_fault_code PRIVATE include)
   # Pure-logic unit test for the MEASURED mode of the fake arm (#122): no ROS, the test sets the
   # clock, header-only.
   ament_add_gtest(test_fake_arm test/test_fake_arm.cpp)

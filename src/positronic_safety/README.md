@@ -18,6 +18,11 @@ The safety supervisor of the arm (#45): a lifecycle node on the Jetson, next to 
 | Supervisor deactivated | `DEACTIVATED` | `ros2 lifecycle set ... deactivate` |
 | Resume failed | `RESUME_FAILED` | a resume request failed or was not answered |
 
+Why the driver faulted comes on `/diagnostics` (#121), the hardware component's own status
+(`hardware_id` = `hardware_component`), within 50 ms of the code, before or after it: the
+supervisor logs it once when it comes, "The driver says why: LINK_TIMEOUT: no valid reply from
+the arm; targets held.", and again only after an OK. It decides nothing.
+
 "Fault data lost" exists because the controller manager deactivates the broadcaster too when
 the driver's `read()`/`write()` returns ERROR: a supervisor watching only the code would be
 blind exactly then.
@@ -40,6 +45,17 @@ of `SupervisorLogic`.
   `hardware_stopped`. `hardware_stopped` false after a halt means the hardware did not confirm
   it left ACTIVE: cut the power.
 - `~/stop` (`std_srvs/Trigger`): starts a halt and answers at once.
+- `~/heartbeat` (`positronic_interfaces/Heartbeat`, best effort): published at every check
+  (20 ms) while resuming, monitoring or halting; silent when stopped. The driver's dead-man
+  check (#136) halts the arm when it stops while the arm may move, and refuses an activate
+  without it, so a `set_hardware_component_state active` by hand while the supervisor is stopped
+  fails. The mode, not the lifecycle state: a deactivate is INACTIVE at once while its halt
+  still runs. Published from the check timer itself, so a stuck executor goes silent too. The driver listens on `/safety_supervisor/heartbeat`: renaming the
+  node breaks it, and the driver then refuses to activate.
+- **Ctrl+C** on the supervisor alone runs no lifecycle transition, so `on_shutdown` never comes.
+  A pre-shutdown hook in `main()` (`halt_before_exit()`) starts the halt while the supervisor is
+  ACTIVE and waits until the hardware component is inactive, at most `halt_step_timeout_ms`;
+  while STOPPED it sends nothing.
 - Parameters, with the reason for each value: `positronic_bringup/config/safety_supervisor.yaml`.
   `controllers_to_stop` must list every controller that writes a command interface; a
   `positronic_bringup` test checks it against `jetson_controllers.yaml`.
@@ -47,7 +63,7 @@ of `SupervisorLogic`.
 ## Tests
 
 `make test`; no arm, no controller manager: `test_supervisor_logic` (the decisions),
-`test_deadline_watchdog` (timeouts), `test_fault_code` (reading the fault code),
+`test_deadline_watchdog` (timeouts), `test_fault_code` (reading the fault code and its reason),
 `test_safety_supervisor` (the node against a fake controller manager, trajectory controller
 and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`.
 
@@ -55,10 +71,17 @@ and mission node). Results on the arm: `docs/03_verification/safety_supervisor/`
 
 - **A dead serial line:** the halt goes through the driver; if its stop cannot reach the arm,
   the arm finishes its last move.
-- **The supervisor dying:** nothing stops the arm (the serial line is alive, so the driver's
-  link timeout does not fire). Fix: a dead-man check in the driver (#136); until then, the power
-  switch. Shown on the arm (test 7).
+- **The supervisor dying** (`kill -9`, a crash, a hang): the driver stops the arm by itself
+  once the heartbeat has been missing for `supervisor_timeout_ms` (500 ms), with fault 4, and
+  takes the component out of ACTIVE (#136). Until then the arm keeps moving: 500 ms plus a
+  control period and the serial turn: 509-528 ms after the last heartbeat on the arm. Start
+  the supervisor again and activate it to resume: one activate, the driver's fault clears when
+  its component activates.
+- **Any heartbeat counts:** the driver's check proves that some process publishes on
+  `~/heartbeat`, not which one: a supervisor on another machine in the same ROS domain, or a
+  `ros2 topic pub`, keeps it satisfied. ROS domain isolation is assumed.
 - **The heartbeat crosses the Wi-Fi:** the 300 ms limit holds only with the mission node at
   **25 Hz** and the Jetson's **Wi-Fi power saving off**
   (`docs/03_verification/heartbeat_link`). Detection takes up to 320 ms.
-- **`driver.launch.py` alone** starts everything active with no supervisor.
+- **`driver.launch.py` alone** starts everything active with no supervisor, and the driver's
+  dead-man check off (`supervisor_timeout_ms:=0`).
