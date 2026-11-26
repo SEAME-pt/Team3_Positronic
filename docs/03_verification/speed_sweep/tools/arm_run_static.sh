@@ -29,8 +29,9 @@
 # Follow-up prompt (Felipe, 26 Nov, the rest of #133 on camera + gripper):
 #   Add the issue's missing runs: `limit`, T8 and T10 (22.5 and 20 deg/s, the speeds #33 saw
 #   abort at 30) 3 times each; `loop`, T6 back to back for LOOP_S (600) with the servo
-#   temperatures after every goal, ended early and sent to rest at LOOP_STOP_C (54, under the
-#   driver's 60 degC cut that powers the arm off); and STEPS for 10 latency samples.
+#   temperatures after every goal, ended early and sent to rest when one servo reads LOOP_STOP_C
+#   (54, under the driver's 60 degC cut that powers the arm off) twice in a row; and STEPS for 10
+#   latency samples.
 #
 # Run INSIDE the positronic-arm container on the Jetson (make nano-shell), from /ws, ONE
 # terminal: `up` leaves the tap, the driver and the bag running in the background. Nothing here
@@ -480,6 +481,7 @@ PY
     echo "0,0,1,$(tap_temps | tr ' ' ',')" >> "$CSV"
     start=$SECONDS
     n=0
+    prev="0 0 0 0 0 0"
     reason="$LOOP_S s done"
     while [ $((SECONDS - start)) -lt "$LOOP_S" ]; do
       n=$((n + 1))
@@ -488,11 +490,14 @@ PY
       temps=$(tap_temps)
       echo "$((SECONDS - start)),$n,$ok,$(echo "$temps" | tr ' ' ',')" >> "$CSV"
       [ "$ok" = 1 ] || { reason="goal $n did not succeed"; break; }
-      max=$(echo "$temps" | tr ' ' '\n' | sort -n | tail -1)
-      if [ -n "$max" ] && [ "$max" -ge "$LOOP_STOP_C" ]; then
-        reason="a servo reached $max degC"
+      # The same servo at LOOP_STOP_C in two readings in a row (~8 s): one corrupt frame read J1
+      # 44 -> 57 -> 43 on 26 Nov. The driver's own cut (60 degC for 1 s) stays the last line.
+      hot=$(python3 -c "import sys; a, b, c = sys.argv[1].split(), sys.argv[2].split(), int(sys.argv[3]); print(' '.join(f'J{i + 1} {y}' for i, (x, y) in enumerate(zip(a, b)) if int(x) >= c and int(y) >= c))" "$prev" "$temps" "$LOOP_STOP_C" 2> /dev/null)
+      if [ -n "$hot" ]; then
+        reason="$hot degC, two readings in a row"
         break
       fi
+      prev=$temps
     done
     echo "loop: $n T6 goals in $((SECONDS - start)) s, ended: $reason; temps degC $(tap_temps)" \
       | tee "$(mode_dir)/loop_summary.txt"
