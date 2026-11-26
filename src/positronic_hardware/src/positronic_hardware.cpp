@@ -488,13 +488,7 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
-  // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. Whether the
-  // arm acknowledges it is still open, so it is reported, not checked.
-  const FreshModeCount fresh{arm_->fresh_mode_count()};
-  RCLCPP_INFO(
-    get_logger(), "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged.",
-    fresh.sent, fresh.acked);
-  log_temperatures("activate");
+  report_power_on();
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
@@ -641,10 +635,21 @@ void RobotSystem::report_echo_timeouts()
     fresh.value());
 }
 
+void RobotSystem::report_power_on() const
+{
+  // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. A missing ack
+  // does not stop the activation, so it is reported, not checked.
+  const FreshModeCount fresh{arm_->fresh_mode_count()};
+  RCLCPP_INFO(
+    get_logger(), "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged.",
+    fresh.sent, fresh.acked);
+  log_temperatures("activate");
+}
+
 void RobotSystem::log_temperatures(const char * when) const
 {
-  // #133 spike: the six servo temperatures the serial thread read last, so the speed sweep
-  // reads them at a deactivate without handing the port to pymycobot.
+  // The six servo temperatures the serial thread read last, at each activate and deactivate:
+  // a long arm session sees how hot the servos are without handing the port to pymycobot (#133).
   const std::optional<ServoTemperatures> t{arm_->read_temperatures()};
   if (!t.has_value()) {
     RCLCPP_INFO(get_logger(), "Servo temperatures at %s: no reading yet.", when);

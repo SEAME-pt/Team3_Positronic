@@ -139,7 +139,7 @@ def generate_launch_description():
     # #133: the firmware speed of every send_angles. Another speed is another launch.
     send_speed = DeclareLaunchArgument(
         'send_speed', default_value='',
-        description='Speed byte of every send_angles, percent of the firmware maximum (1 to 100).')
+        description='Speed byte of every send_angles, 1 to 100: a speed cap (#133).')
     # The yaml's value by default, read from the yaml. Here so the 10 minute run can try another
     # rate without editing the yaml.
     update_rate = DeclareLaunchArgument(

@@ -63,7 +63,7 @@ struct HardwareConfig
   double tracking_error_deg{TRACKING_ERROR_DEG};
   int tracking_error_ms{TRACKING_ERROR_MS};
   int supervisor_timeout_ms{SUPERVISOR_TIMEOUT_MS};
-  /// Speed byte of every send_angles, percent of the firmware maximum (#133).
+  /// Speed byte of every send_angles, 1 to 100: a speed cap, see docs/03_verification/speed_sweep.
   int send_speed{SerialArm::DEFAULT_SEND_SPEED};
 };
 

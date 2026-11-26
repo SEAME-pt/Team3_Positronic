@@ -155,8 +155,8 @@ public:
   static constexpr std::uint8_t MIN_SERVO_VOLTAGE{40};
   static constexpr std::uint8_t MAX_SERVO_VOLTAGE{130};
 
-  /// Default speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on
-  /// hardware). The URDF sets another with send_speed (#133).
+  /// Default speed byte of every send_angles (#32: 30 on hardware), a speed cap of 45 deg/s
+  /// (#133). The URDF sets another with send_speed.
   static constexpr std::uint8_t DEFAULT_SEND_SPEED{30};
 
   /// How long a turn waits for the get_angles reply. A reply takes ~8 ms and arrives in a dozen

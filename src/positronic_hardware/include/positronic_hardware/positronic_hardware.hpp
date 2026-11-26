@@ -125,12 +125,15 @@ private:
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
 
+  /// on_activate's report after power_on (#133): the fresh mode frames sent and acknowledged,
+  /// and the servo temperatures.
+  void report_power_on() const;
+  /// Logs the newest servo temperatures, at `when` (activate, deactivate) (#133).
+  void log_temperatures(const char * when) const;
+
   /// on_activate's temperature check, before the servos get torque: waits for the first reading
   /// and refuses an arm that was cut or is within ACTIVATE_COOLDOWN_C of the limit. False, with
   /// the reason logged, when activation must not go on.
-  /// #133 spike: logs the newest servo temperatures, at `when` (activate, deactivate).
-  void log_temperatures(const char * when) const;
-
   bool temperatures_allow_activation();
 
   /// read()'s temperature check. ERROR, with one log line, when the serial thread has cut the

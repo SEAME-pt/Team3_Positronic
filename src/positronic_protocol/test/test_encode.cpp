@@ -81,14 +81,14 @@ TEST(Encode, SetFreshModeOne)
 {
   const auto frame{pp::encode_set_fresh_mode(1)};
   ASSERT_TRUE(frame.has_value());
-  EXPECT_EQ(to_hex(bytes_of(frame.value())), "fe fe 03 16 01 fa");
+  EXPECT_EQ(to_hex(bytes_of(frame.value_or(pp::Frame{}))), "fe fe 03 16 01 fa");
 }
 
 TEST(Encode, SetFreshModeZero)
 {
   const auto frame{pp::encode_set_fresh_mode(0)};
   ASSERT_TRUE(frame.has_value());
-  EXPECT_EQ(to_hex(bytes_of(frame.value())), "fe fe 03 16 00 fa");
+  EXPECT_EQ(to_hex(bytes_of(frame.value_or(pp::Frame{}))), "fe fe 03 16 00 fa");
 }
 
 TEST(Encode, SetFreshModeRefusesOtherModes)

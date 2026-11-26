@@ -295,3 +295,13 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 60 degC, "
     "tracking error 8.0 deg for 300 ms, supervisor timeout 500 ms, send speed 30.");
 }
+
+// #122: the fake backend says which mode it moves in; the instant one keeps the old line.
+TEST(Parameters, TheInfoLineHasTheFakeMode)
+{
+  HardwareConfig config{};
+  config.backend = Backend::FAKE;
+  EXPECT_EQ(describe(config).substr(0, 16), "Backend 'fake', ");
+  config.fake_mode = positronic_hardware::FakeMode::MEASURED;
+  EXPECT_EQ(describe(config).substr(0, 39), "Backend 'fake' in mode 'measured', port");
+}
