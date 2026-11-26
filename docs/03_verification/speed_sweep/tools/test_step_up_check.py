@@ -163,3 +163,24 @@ def test_command_line_exit_codes(tmp_path, capsys):
     assert step_up_check.main([str(tmp_path), '90']) == 1
     assert 'fixed70' in capsys.readouterr().err
     assert step_up_check.main([str(tmp_path), '80']) == 2
+
+
+def test_the_bag_travel_wins_over_the_tap(tmp_path):
+    """26 Nov: stops_bag.txt, when there, is read instead of the tap's summary.txt."""
+    folder = tmp_path / 'fixed30'
+    folder.mkdir()
+    for run in range(1, 6):
+        (folder / f'stop_r{run}_trigger.txt').write_text('1 2 ok=True\n', encoding='utf-8')
+    (folder / 'summary.txt').write_text(
+        ''.join(f'stop at {run}.0 s: travel after 15.65 deg (J1)\n' for run in range(5)),
+        encoding='utf-8')
+    assert step_up_check.check(tmp_path, 50)[0] == 1
+    (folder / 'stops_bag.txt').write_text(
+        ''.join(f'stop at r{run} (bag): travel after 2.29 deg (J1)\n' for run in range(5)),
+        encoding='utf-8')
+    code, message = step_up_check.check(tmp_path, 50)
+    assert code == 0, message
+    (folder / 'stops_bag.txt').write_text(
+        'stop at r1 (bag): travel after 4.01 deg (J1)\n' * 5, encoding='utf-8')
+    assert step_up_check.check(tmp_path, 50)[0] == 1
+

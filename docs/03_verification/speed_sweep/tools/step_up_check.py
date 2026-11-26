@@ -60,8 +60,12 @@ def triggers_ok(folder):
 
 
 def stop_travels(folder):
-    """The travel after each stop, deg, from tap_speed.py's lines in summary.txt."""
-    path = folder / 'summary.txt'
+    """The travel after each stop, deg: from the bag (stops_bag.txt) when the mode has it."""
+    # 26 Nov: with the pose read from the servo-bus poll the tap no longer sees the pose, and
+    # tap_speed.py's travel in summary.txt is meaningless. stop_travel_bag.py reads /joint_states.
+    path = folder / 'stops_bag.txt'
+    if not path.is_file():
+        path = folder / 'summary.txt'
     if not path.is_file():
         return []
     travels = []

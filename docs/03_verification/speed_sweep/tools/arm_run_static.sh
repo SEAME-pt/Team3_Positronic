@@ -510,6 +510,9 @@ PY
     rm -f "$ROOT/current_mode"
     {
       [ -f "$DIR/tap.csv" ] && python3 "$TOOLS/tap_speed.py" "$DIR/tap.csv" --csv "$DIR/tap_rows.csv"
+      # 26 Nov: the tap no longer sees the pose (servo-bus poll); the stop travel from the bag.
+      ls "$DIR"/stop_r*_trigger.txt > /dev/null 2>&1 \
+        && python3 "$TOOLS/stop_travel_bag.py" "$DIR" 2> /dev/null | tee "$DIR/stops_bag.txt"
       ls "$DIR"/goal_T*_r[123].txt > /dev/null 2>&1 && python3 "$WAYPOINT" "$DIR"/goal_T*_r[123].txt
     } 2>&1 | tee "$DIR/summary.txt"
     echo "kept: $DIR (tap.csv, bag/, goal_*.txt, stop_*, rt/, launch.log, summary.txt)"
