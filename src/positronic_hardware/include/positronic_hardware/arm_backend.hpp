@@ -42,6 +42,18 @@ using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 inline constexpr std::uint8_t GRIPPER_CLOSED_VALUE{0};
 inline constexpr std::uint8_t GRIPPER_OPEN_VALUE{100};
 
+/// The pose of read_angles() together with how old it is (#120). ros2_control has no timestamp
+/// per sample: /joint_states carries the time read() ran, so this is how a reader learns when
+/// the arm measured the pose it publishes.
+struct PoseSample
+{
+  /// The same angles read_angles() returns, in radians.
+  JointPositions angles{};
+  /// Time from the arrival of the reply that carried `angles` to the call that returned them.
+  /// nullopt until the first reply: then `angles` is the placeholder pose, not a measurement.
+  std::optional<std::chrono::steady_clock::duration> age;
+};
+
 /// The servo that tripped the over-temperature cut, and the reading that did it.
 struct Overheat
 {
@@ -78,6 +90,11 @@ public:
 
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
+
+  /// read_angles() and the age of that pose, taken together so both belong to the same reply
+  /// (#120): two separate calls could meet a new pose in between. Same contract as
+  /// read_angles(): non-blocking, safe from the control loop, never NaN in `angles`.
+  [[nodiscard]] virtual PoseSample read_pose() const = 0;
 
   /// The target joint angles, in radians. Safe from the control loop: the implementation only
   /// stores the newest command and never waits for the serial port here. A newer call

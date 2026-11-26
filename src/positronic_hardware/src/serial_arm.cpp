@@ -202,7 +202,27 @@ SerialArm::~SerialArm()
 
 JointPositions SerialArm::read_angles() const
 {
-  return latest_.readFromRT()->value_or(START_POSE);
+  return latest_.readFromRT()->value_or(StampedPose{}).angles;
+}
+
+PoseSample SerialArm::read_pose() const
+{
+  // One copy of the box, so the angles and their time come from the same reply (#120). The
+  // clock is read after the copy: the age covers everything up to the read() that publishes it.
+  const std::optional<StampedPose> latest{*latest_.readFromRT()};
+  PoseSample sample{START_POSE, std::nullopt};
+  if (latest.has_value()) {
+    sample.angles = latest->angles;
+    sample.age = Clock::now() - latest->arrived;
+  }
+  return sample;
+}
+
+void SerialArm::publish_pose(const JointPositions & pose, Clock::time_point arrived)
+{
+  latest_.writeFromNonRT(StampedPose{pose, arrived});
+  last_pose_ = pose;
+  watchdog_.on_reply(arrived);
 }
 
 void SerialArm::write_angles(const JointPositions & angles)
@@ -519,10 +539,9 @@ bool SerialArm::publish_poll_frames()
     }
     angles.at(joint) = pp::angle_from_steps(last_steps_.at(joint).value_or(0), joint);
   }
-  const JointPositions pose{pp::to_radians(angles)};
-  latest_.writeFromNonRT(pose);
-  last_pose_ = pose;
-  watchdog_.on_reply(now);
+  // Its time is `now`, read as the sync-write closed: the status frames came just before it,
+  // ~1.5 ms of line at 1 Mbaud (#120).
+  publish_pose(pp::to_radians(angles), now);
   // The frames are a temperature reading too, one per send, and the guard asks nothing while
   // they come. Not with a bridged frame: it repeats an older reading.
   if (fresh) {
@@ -560,9 +579,8 @@ bool SerialArm::ask_angles(ReplyAssembler & assembler)
       continue;
     }
     if (const std::optional<JointPositions> pose{assembler.push(chunk.data(), got)}) {
-      latest_.writeFromNonRT(pose);
-      last_pose_ = pose;
-      watchdog_.on_reply(Clock::now());
+      // The reply arrived with the chunk that completed it, read just now (#120).
+      publish_pose(pose.value(), Clock::now());
       return true;
     }
   }
