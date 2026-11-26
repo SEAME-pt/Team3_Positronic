@@ -78,7 +78,8 @@ struct NumericParameter
 // down from 60: a lower limit cuts a warm arm on purpose, which is how the hardware test
 // exercises the cut without heating anything (#115). The tracking ranges are wide for the bench
 // to try values. The one rule no range can check is that tracking_error_deg stays wider than the
-// controller's trajectory tolerance (#103).
+// controller's trajectory tolerance (#103). supervisor_timeout_ms starts at 0, which turns the
+// dead-man check off (#136); 5 s is already far longer than any halt should wait.
 constexpr std::array NUMERIC_PARAMETERS{
   NumericParameter{
     "moving_period_ms", 20, MAX_MOVING_PERIOD_MS, true,
@@ -104,6 +105,11 @@ constexpr std::array NUMERIC_PARAMETERS{
     "tracking_error_ms", MIN_TRACKING_ERROR_MS, MAX_TRACKING_ERROR_MS, true,
     [](HardwareConfig & config, double value) {
       config.tracking_error_ms = static_cast<int>(value);
+    }},
+  NumericParameter{
+    "supervisor_timeout_ms", 0, MAX_SUPERVISOR_TIMEOUT_MS, true,
+    [](HardwareConfig & config, double value) {
+      config.supervisor_timeout_ms = static_cast<int>(value);
     }},
 };
 
@@ -316,7 +322,8 @@ std::string describe(const HardwareConfig & config)
        << config.timing.echo_timeout.count() << " ms, pose from poll " << poll
        << ", servo temperature limit " << config.servo_temp_limit_c << " degC, tracking error "
        << std::setprecision(1) << config.tracking_error_deg << " deg for "
-       << config.tracking_error_ms << " ms, load relief " << relief << ".";
+       << config.tracking_error_ms << " ms, supervisor timeout " << config.supervisor_timeout_ms
+       << " ms, load relief " << relief << ".";
   return line.str();
 }
 

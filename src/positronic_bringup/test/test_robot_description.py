@@ -53,6 +53,11 @@
 #   The real xacro includes mycobot_280_jn_gripper_camera.urdf, so the real camera images can
 #   use camera_link as their frame_id. Check that camera_link is in the description and hangs
 #   under joint 6 (joint6_flange) through fixed joints only, for both backends.
+# Follow-up prompt (#120):
+#   The driver gpio also declares pose_age_s, the age of the published pose, as a state
+#   interface and never as a command, for both backends. joint_state_broadcaster publishes it on
+#   /dynamic_joint_states with driver/fault_code, as long as the yaml does not narrow it
+#   (test_controllers_config.py checks that).
 # Follow-up prompt (#183):
 #   load_relief reaches the plugin like the others.
 
@@ -189,6 +194,7 @@ def test_arguments_reach_the_plugin():
             servo_temp_limit_c='45',
             tracking_error_deg='6',
             tracking_error_ms='200',
+            supervisor_timeout_ms='300',
             load_relief='false',
         )
     )
@@ -203,6 +209,7 @@ def test_arguments_reach_the_plugin():
         'servo_temp_limit_c': '45',
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
+        'supervisor_timeout_ms': '300',
         'load_relief': 'false',
     }
 
@@ -261,6 +268,23 @@ def test_driver_reports_the_fault_code(backend):
     ]
     assert 'fault_code' in states
     assert 'fault_code' not in commands
+
+
+@pytest.mark.parametrize('backend', ['serial', 'fake'])
+def test_driver_reports_the_pose_age(backend):
+    """Check that the driver gpio has a pose_age_s state and no such command (#120)."""
+    drivers = [
+        gpio
+        for gpio in expand(backend=backend).findall('ros2_control/gpio')
+        if gpio.get('name') == 'driver'
+    ]
+    assert len(drivers) == 1
+    states = [state.get('name') for state in drivers[0].findall('state_interface')]
+    commands = [
+        command.get('name') for command in drivers[0].findall('command_interface')
+    ]
+    assert states.count('pose_age_s') == 1
+    assert 'pose_age_s' not in commands
 
 
 def test_supervisor_reads_the_names_of_this_description():

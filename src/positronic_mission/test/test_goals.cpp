@@ -48,7 +48,8 @@ TEST_F(MissionNodeTest, GoalSucceedsWhenIdle)
   // the client's feedback subscription is not matched yet (a busy machine). That made this test
   // flaky (#161). Feedback is information for the client, not a safety behaviour.
   EXPECT_TRUE(wait_for_state(State::IDLE));
-  EXPECT_EQ(mock_->calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 1);
+  EXPECT_EQ(mock_->cartesian_calls, 0);
 
   // The goal's pose is what reaches the backend (where the arm goes)
   const auto sent = mock_->last_pose();
@@ -86,7 +87,7 @@ TEST_F(MissionNodeTest, TwoGoalsInARowBothSucceed)
     EXPECT_EQ(result->result->code, GoToPose::Result::OK);
     ASSERT_TRUE(wait_for_state(State::IDLE));
   }
-  EXPECT_EQ(mock_->calls, 2);
+  EXPECT_EQ(mock_->pose_calls, 2);
 }
 
 // ======================= Rejection =======================
@@ -97,7 +98,7 @@ TEST_F(MissionNodeTest, RejectsInvalidFrame)
   pose.header.frame_id = "world";
 
   EXPECT_EQ(send_goal(pose), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
   EXPECT_TRUE(wait_for_state(State::IDLE));
 }
 
@@ -115,7 +116,7 @@ TEST_F(MissionNodeTest, RejectsGoalWhileMoving)
   auto result = wait_result(first);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->result->code, GoToPose::Result::OK);
-  EXPECT_EQ(mock_->calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 1);
 }
 
 TEST_F(MissionNodeTest, RejectsGoalWhenInactive)
@@ -123,7 +124,7 @@ TEST_F(MissionNodeTest, RejectsGoalWhenInactive)
   ASSERT_EQ(node_->deactivate().id(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
 
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
 }
 
 // ======================= Cancellation =======================
@@ -201,7 +202,7 @@ TEST_F(MissionNodeTest, EStopWhileIdleBlocksGoalsUntilReset)
   ASSERT_TRUE(wait_for_state(State::STOPPED));
 
   EXPECT_EQ(send_goal(valid_pose()), nullptr);
-  EXPECT_EQ(mock_->calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
 
   auto reset = call_reset();
   ASSERT_NE(reset, nullptr);
@@ -274,4 +275,150 @@ TEST_F(MissionNodeTest, ResetRefusedWhileMoving)
   auto result = wait_result(handle);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->result->code, GoToPose::Result::OK);
+}
+
+// ======================= Cartesian Tests =======================
+
+TEST_F(MissionNodeTest, CartesianSucceedsWhenIdle)
+{
+  auto wp = valid_waypoint();
+  auto handle = send_waypoint(wp);
+  ASSERT_NE(handle, nullptr) << "Goal was rejected";
+
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value()) << "No result";
+
+  EXPECT_EQ(result->code, ResultCode::SUCCEEDED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::OK);
+  EXPECT_TRUE(result->result->success);
+  // No check on feedback: the node sends one message when the goal starts, and it is lost if
+  // the client's feedback subscription is not matched yet (a busy machine). That made this test
+  // flaky (#161). Feedback is information for the client, not a safety behaviour.
+  EXPECT_TRUE(wait_for_state(State::IDLE));
+  EXPECT_EQ(mock_->cartesian_calls, 1);
+  EXPECT_EQ(mock_->pose_calls, 0);
+
+  // The goal's path is what reaches the backend (where the arm goes)
+  const auto sent = mock_->last_waypoint();
+  ASSERT_EQ(sent.size(), wp.size());
+  EXPECT_DOUBLE_EQ(sent[0].position.x, wp[0].position.x);
+  EXPECT_DOUBLE_EQ(sent[0].position.y, wp[0].position.y);
+  EXPECT_DOUBLE_EQ(sent[0].position.z, wp[0].position.z);
+  EXPECT_DOUBLE_EQ(sent[0].orientation.w, wp[0].orientation.w);
+  EXPECT_DOUBLE_EQ(sent[1].position.x, wp[1].position.x);
+  EXPECT_DOUBLE_EQ(sent[1].position.y, wp[1].position.y);
+  EXPECT_DOUBLE_EQ(sent[1].position.z, wp[1].position.z);
+  EXPECT_DOUBLE_EQ(sent[1].orientation.w, wp[1].orientation.w);
+}
+
+TEST_F(MissionNodeTest, CartesianEmptyPath)
+{
+  auto handle = send_waypoint({});
+  EXPECT_EQ(handle, nullptr) << "Goal was accepted";
+
+  // Rejected at validation, waypoint is empty: never reaches the backend
+  EXPECT_TRUE(wait_for_state(State::IDLE));
+  EXPECT_EQ(mock_->cartesian_calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
+}
+
+TEST_F(MissionNodeTest, InvalidMode)
+{
+  GoToPose::Goal goal{};
+  goal.mode = 99;
+  auto handle = send_raw_goal(goal);
+  EXPECT_EQ(handle, nullptr) << "Goal was accepted";
+
+  // Rejected at validation, mode is invalid: never reaches the backend
+  EXPECT_TRUE(wait_for_state(State::IDLE));
+  EXPECT_EQ(mock_->cartesian_calls, 0);
+  EXPECT_EQ(mock_->pose_calls, 0);
+}
+
+TEST_F(MissionNodeTest, CancelMidCartesianGivesCanceledAndStopped)
+{
+  mock_->duration_ms = 2000;
+  auto handle = send_waypoint(valid_waypoint());
+  ASSERT_NE(handle, nullptr);
+  ASSERT_TRUE(wait_for_state(State::MOVING));
+
+  ASSERT_TRUE(cancel_goal(handle));
+
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->code, ResultCode::CANCELED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::CANCELED);
+  EXPECT_EQ(mock_->cartesian_calls, 1);
+  EXPECT_FALSE(result->result->success);
+  EXPECT_TRUE(wait_for_state(State::STOPPED));
+}
+
+// Redundant test, since the same check already exists for the Pose.
+TEST_F(MissionNodeTest, EStopMidCartesianAbortsWithStopped)
+{
+  mock_->duration_ms = 2000;
+  auto handle = send_waypoint(valid_waypoint());
+  ASSERT_NE(handle, nullptr);
+  ASSERT_TRUE(wait_for_state(State::MOVING));
+  auto stop = call_stop();
+  ASSERT_NE(stop, nullptr);
+  EXPECT_TRUE(stop->accepted);
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->code, ResultCode::ABORTED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::STOPPED);
+  EXPECT_EQ(mock_->cartesian_calls, 1);
+  EXPECT_TRUE(wait_for_state(State::STOPPED));
+  EXPECT_GE(mock_->stops, 1);
+}
+
+// A backend exception must not kill the node. We can't know if the arm moved, so the goal ends
+// as ERROR and the arm state is ERROR (a reset is needed). The heartbeat reporting ERROR also
+// shows the node is still running.
+TEST_F(MissionNodeTest, BackendStdExceptionIsExecutionError)
+{
+  mock_->throw_mode = positronic_mission::MockBackend::ThrowMode::STD_EXCEPTION;
+
+  auto handle = send_goal(valid_pose());
+  ASSERT_NE(handle, nullptr) << "Goal was rejected";
+
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value()) << "No result";
+  EXPECT_EQ(result->code, ResultCode::ABORTED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::ERROR);
+  EXPECT_TRUE(wait_for_state(State::ERROR));
+  EXPECT_EQ(mock_->pose_calls, 1);
+}
+
+// Same, for a throw that is not a std::exception (the catch (...) block).
+TEST_F(MissionNodeTest, BackendUnknownThrowIsExecutionError)
+{
+  mock_->throw_mode = positronic_mission::MockBackend::ThrowMode::UNKNOWN;
+
+  auto handle = send_goal(valid_pose());
+  ASSERT_NE(handle, nullptr) << "Goal was rejected";
+
+  auto result = wait_result(handle);
+  ASSERT_TRUE(result.has_value()) << "No result";
+  EXPECT_EQ(result->code, ResultCode::ABORTED);
+  EXPECT_EQ(result->result->code, GoToPose::Result::ERROR);
+  EXPECT_TRUE(wait_for_state(State::ERROR));
+}
+
+// An exception in a lifecycle callback sends the node through on_error. Ours cleans up and
+// returns SUCCESS, so the node lands in UNCONFIGURED and can be configured again.
+TEST_F(MissionNodeTest, ThrowOnActivateGoesThroughOnError)
+{
+  using lifecycle_msgs::msg::State;
+
+  // The fixture leaves the node active: go back to inactive first
+  ASSERT_EQ(node_->deactivate().id(), State::PRIMARY_STATE_INACTIVE);
+
+  mock_->throw_on_ready = true;
+  EXPECT_EQ(node_->activate().id(), State::PRIMARY_STATE_UNCONFIGURED);
+
+  // Recovery: on_error cleaned up, so a normal configure and activate work again
+  mock_->throw_on_ready = false;
+  EXPECT_EQ(node_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  EXPECT_EQ(node_->activate().id(), State::PRIMARY_STATE_ACTIVE);
 }

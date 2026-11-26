@@ -35,6 +35,9 @@
 // Follow-up prompt (#170):
 //   pose_from_poll, 'true' or 'false', default true, reaches SerialTiming::pose_from_poll; any
 //   other text is refused with the two values; the INFO line says "pose from poll on" or "off".
+// Follow-up prompt (#136):
+//   supervisor_timeout_ms, the dead-man check: a whole number of ms in [0, 5000], 0 turns the
+//   check off, 500 by default. Add it to every test that goes through each parameter.
 // Follow-up prompt (#183):
 //   load_relief, 'true' or 'false', default true, reaches LoadReliefLimits::enabled; any other
 //   text is refused with the two values; the INFO line ends with "load relief on".
@@ -92,6 +95,8 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.servo_temp_limit_c, defaults.servo_temp_limit_c);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, defaults.tracking_error_deg);
   EXPECT_EQ(config.tracking_error_ms, defaults.tracking_error_ms);
+  EXPECT_EQ(config.supervisor_timeout_ms, defaults.supervisor_timeout_ms);
+  EXPECT_EQ(defaults.supervisor_timeout_ms, 500);
   EXPECT_TRUE(config.relief.enabled);
 }
 
@@ -109,6 +114,7 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"servo_temp_limit_c", "45"},
       {"tracking_error_deg", "6.5"},
       {"tracking_error_ms", "200"},
+      {"supervisor_timeout_ms", "300"},
       {"load_relief", "false"}})};
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
@@ -123,6 +129,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_EQ(config.servo_temp_limit_c, 45);
   EXPECT_DOUBLE_EQ(config.tracking_error_deg, 6.5);
   EXPECT_EQ(config.tracking_error_ms, 200);
+  EXPECT_EQ(config.supervisor_timeout_ms, 300);
   EXPECT_FALSE(config.relief.enabled);
 }
 
@@ -133,7 +140,7 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, fake_mode, port, baud, "
     "velocity_filter_alpha, pose_from_poll, load_relief, moving_period_ms, echo_timeout_ms, "
-    "servo_temp_limit_c, tracking_error_deg, tracking_error_ms.");
+    "servo_temp_limit_c, tracking_error_deg, tracking_error_ms, supervisor_timeout_ms.");
 }
 
 // Every unknown name in one message, in alphabetical order: one run shows every typo.
@@ -160,6 +167,9 @@ TEST(Parameters, TheEndsOfEveryRangeAreAccepted)
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_deg", "45"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_ms", "50"}}));
   EXPECT_TRUE(accepted(Parameters{{"tracking_error_ms", "5000"}}));
+  // 0 is the dead-man check off (#136), a valid value, not an empty timeout.
+  EXPECT_TRUE(accepted(Parameters{{"supervisor_timeout_ms", "0"}}));
+  EXPECT_TRUE(accepted(Parameters{{"supervisor_timeout_ms", "5000"}}));
 }
 
 // One step past each end is refused, and the message gives the range.
@@ -195,6 +205,12 @@ TEST(Parameters, OneStepOutsideARangeIsRefusedWithTheRange)
   EXPECT_EQ(
     refusal("tracking_error_ms", "5001"),
     "Parameter 'tracking_error_ms' is '5001'; use a whole number in [50, 5000].");
+  EXPECT_EQ(
+    refusal("supervisor_timeout_ms", "-1"),
+    "Parameter 'supervisor_timeout_ms' is '-1'; use a whole number in [0, 5000].");
+  EXPECT_EQ(
+    refusal("supervisor_timeout_ms", "5001"),
+    "Parameter 'supervisor_timeout_ms' is '5001'; use a whole number in [0, 5000].");
 }
 
 TEST(Parameters, AFractionWhereAWholeNumberIsExpectedIsRefused)
@@ -202,6 +218,7 @@ TEST(Parameters, AFractionWhereAWholeNumberIsExpectedIsRefused)
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_ms", "300.5"}}));
   EXPECT_FALSE(accepted(Parameters{{"servo_temp_limit_c", "45.0"}}));
   EXPECT_FALSE(accepted(Parameters{{"moving_period_ms", "40ms"}}));
+  EXPECT_FALSE(accepted(Parameters{{"supervisor_timeout_ms", "0.5"}}));
 }
 
 // from_chars reads "nan", "inf" and "-inf" as numbers: the range check is what refuses them.
@@ -215,6 +232,8 @@ TEST(Parameters, NotANumberIsRefused)
   EXPECT_FALSE(accepted(Parameters{{"velocity_filter_alpha", "-inf"}}));
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_ms", "abc"}}));
   EXPECT_FALSE(accepted(Parameters{{"tracking_error_deg", ""}}));
+  EXPECT_FALSE(accepted(Parameters{{"supervisor_timeout_ms", "off"}}));
+  EXPECT_FALSE(accepted(Parameters{{"supervisor_timeout_ms", ""}}));
 }
 
 // #150: the wait for the sync-write only counts when the Atom is late, so it may be longer than
@@ -257,7 +276,7 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
     "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 60 degC, "
-    "tracking error 8.0 deg for 300 ms, load relief on.");
+    "tracking error 8.0 deg for 300 ms, supervisor timeout 500 ms, load relief on.");
 }
 
 // #122: the fake backend says which mode it moves in; the instant one keeps the old line.

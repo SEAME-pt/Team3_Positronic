@@ -27,6 +27,15 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   const auto supervisor = std::make_shared<positronic_safety::SafetySupervisor>();
+  // #136: on Ctrl+C rclcpp runs no lifecycle transition, so on_shutdown would never halt the
+  // arm. rclcpp calls this on its signal thread before it shuts down, while spin() below still
+  // runs the supervisor's callbacks. A weak pointer: the context outlives main().
+  const std::weak_ptr<positronic_safety::SafetySupervisor> weak{supervisor};
+  rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback([weak]() {
+      if (const auto alive = weak.lock()) {
+        alive->halt_before_exit();
+      }
+  });
   // One thread for every callback: the supervisor has no lock, on purpose.
   rclcpp::spin(supervisor->get_node_base_interface());
   rclcpp::shutdown();

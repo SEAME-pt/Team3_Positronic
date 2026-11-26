@@ -28,22 +28,44 @@
 //   gpio do not get in the way; a joint that has an interface with the same name is not taken
 //   for the driver; a missing gpio, a missing interface, an empty message, NaN and infinity
 //   all give nothing; lists of different lengths are never read past the shorter one.
+// Follow-up prompt (#121):
+//   find_fault_reason() finds the hardware component's own status in a /diagnostics message:
+//   ERROR gives its message, OK gives "";
+//   a message without the component's status (the controller manager's "ros2_control", a
+//   starting status with no hardware id, an empty message) gives nothing.
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "control_msgs/msg/dynamic_joint_state.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "positronic_safety/fault_code.hpp"
 
 namespace
 {
 using control_msgs::msg::DynamicJointState;
 using control_msgs::msg::InterfaceValue;
+using diagnostic_msgs::msg::DiagnosticArray;
+using diagnostic_msgs::msg::DiagnosticStatus;
 using positronic_safety::find_fault_code;
+using positronic_safety::find_fault_reason;
+
+/// One status of a /diagnostics message.
+DiagnosticStatus status_of(
+  const std::string & hardware_id, std::uint8_t level, const std::string & message)
+{
+  DiagnosticStatus status;
+  status.hardware_id = hardware_id;
+  status.level = level;
+  status.message = message;
+  return status;
+}
 
 /// Adds one entry to `message`: a joint or a gpio, with its interfaces and their values.
 void add_entry(
@@ -142,4 +164,28 @@ TEST(FindFaultCode, NeverReadsPastTheShorterList)
   DynamicJointState no_value;
   add_entry(no_value, "driver", {"temperature", "fault_code"}, {41.5});
   EXPECT_FALSE(find_fault_code(no_value, "driver", "fault_code").has_value());
+}
+
+TEST(FindFaultReason, TheComponentsErrorGivesItsMessageAndOkGivesNothing)
+{
+  DiagnosticArray message;
+  message.status.push_back(status_of("ros2_control", DiagnosticStatus::ERROR, "a controller"));
+  message.status.push_back(
+    status_of("positronic_arm", DiagnosticStatus::ERROR, "LINK_TIMEOUT: no valid reply"));
+  EXPECT_EQ(
+    find_fault_reason(message, "positronic_arm").value_or("<none>"),
+    "LINK_TIMEOUT: no valid reply");
+
+  DiagnosticArray ok;
+  ok.status.push_back(status_of("positronic_arm", DiagnosticStatus::OK, "NONE: no fault"));
+  EXPECT_EQ(find_fault_reason(ok, "positronic_arm").value_or("<none>"), "");
+}
+
+TEST(FindFaultReason, NothingWithoutTheComponentsStatus)
+{
+  DiagnosticArray others;
+  others.status.push_back(status_of("ros2_control", DiagnosticStatus::ERROR, "a controller"));
+  others.status.push_back(status_of("", DiagnosticStatus::OK, "Node starting up"));
+  EXPECT_FALSE(find_fault_reason(others, "positronic_arm").has_value());
+  EXPECT_FALSE(find_fault_reason(DiagnosticArray{}, "positronic_arm").has_value());
 }

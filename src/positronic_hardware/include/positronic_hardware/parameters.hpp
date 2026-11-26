@@ -43,6 +43,12 @@ enum class Backend : std::uint8_t
   FAKE
 };
 
+/// The dead-man check (#136): no heartbeat from the safety supervisor for this long while active
+/// halts the arm (FaultCode::SUPERVISOR_LOST). 500 ms is 25 heartbeats at the supervisor's 50 Hz,
+/// both nodes on the Jetson. 0 turns the check off, for a run without the supervisor.
+inline constexpr int SUPERVISOR_TIMEOUT_MS{500};
+inline constexpr int MAX_SUPERVISOR_TIMEOUT_MS{5000};
+
 /// The <param> values of the <hardware> tag, checked in on_init. A parameter the URDF does not
 /// set keeps its default.
 struct HardwareConfig
@@ -57,6 +63,7 @@ struct HardwareConfig
   int servo_temp_limit_c{SERVO_TEMP_LIMIT_C};
   double tracking_error_deg{TRACKING_ERROR_DEG};
   int tracking_error_ms{TRACKING_ERROR_MS};
+  int supervisor_timeout_ms{SUPERVISOR_TIMEOUT_MS};
   LoadReliefLimits relief{};
 };
 
