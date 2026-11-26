@@ -59,6 +59,10 @@ namespace positronic_hardware
 inline constexpr std::string_view FAULT_GPIO{"driver"};
 inline constexpr std::string_view FAULT_STATE{"fault_code"};
 
+/// Prefix of the key of each servo temperature on /diagnostics, followed by the joint name
+/// ("temperature_c/joint2_to_joint1"), value in whole degC. thermal_park.py reads them.
+inline constexpr std::string_view TEMPERATURE_KEY_PREFIX{"temperature_c/"};
+
 /// Where the safety supervisor publishes its heartbeat (#136), every check of its timer.
 inline constexpr std::string_view SUPERVISOR_HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
 
@@ -209,6 +213,9 @@ private:
   // node's default callback group, never at the same time, so diagnosed_ needs no atomic.
   /// The fault diagnose() last published.
   FaultCode diagnosed_{FaultCode::NONE};
+  /// The last servo temperatures, degC, copied by read() for diagnose(): the backend's buffer
+  /// is read from the control loop only. 0 is no reading yet, and is not published.
+  std::array<std::atomic<int>, NUM_JOINTS> temperatures_c_{};
   /// Null without a node: a resource manager loaded without an executor (most tests).
   std::unique_ptr<diagnostic_updater::Updater> diagnostics_;
   /// Publishes a new fault at once instead of at the next once-a-second status.
