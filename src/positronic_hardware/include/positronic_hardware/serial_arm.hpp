@@ -221,6 +221,12 @@ public:
   /// loop. Before the first reply arrives it returns START_POSE, never NaN.
   [[nodiscard]] JointPositions read_angles() const override;
 
+  /// read_angles() and its age (#120): the time since the thread decoded the reply that carried
+  /// that pose, the get_angles reply or the end of the sync-write that closed a poll (#170).
+  /// One read of the buffer, so the pose and its time always come from the same reply. The age
+  /// is nullopt before the first reply. Non-blocking; safe from the control loop.
+  [[nodiscard]] PoseSample read_pose() const override;
+
   /// The target pose the thread sends next, in radians. Safe from the control loop: it only
   /// stores the newest command, the poll thread sends it over the port on its next turn. It can
   /// wait 0.5 ms, once in a long while, when it meets the poll thread swapping the buffer. With
@@ -276,6 +282,21 @@ public:
 
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+  /// The newest pose and when the thread decoded the reply that carried it (#120). One box of
+  /// the RealtimeBuffer, so read_pose() never pairs a pose with the time of another one.
+  struct StampedPose
+  {
+    JointPositions angles{START_POSE};
+    // No {}: a time_point's own constructor already makes it zero, and clang-tidy flags the
+    // braces as redundant (readability-redundant-member-init).
+    Clock::time_point arrived;
+  };
+
+  /// Publishes `pose`, decoded from a reply that arrived at `arrived`: the buffer (and so
+  /// has_sample()), the reference of the jump check and the link watchdog. Serial thread only.
+  void publish_pose(const JointPositions & pose, Clock::time_point arrived);
+
   /// What halt() and power_on() leave for the thread to send at the start of its next turn.
   enum class Pending : std::uint8_t
   {
@@ -406,7 +427,8 @@ private:
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   // nullopt until the first pose. has_sample() reads this same box: a separate flag could say
   // "a pose" while a readFromRT() still gave START_POSE, which on_activate takes as a command.
-  mutable realtime_tools::RealtimeBuffer<std::optional<JointPositions>> latest_{std::nullopt};
+  // The pose carries the time of its reply (#120).
+  mutable realtime_tools::RealtimeBuffer<std::optional<StampedPose>> latest_{std::nullopt};
   // The newest command from write_angles(). The control loop writes it, the poll thread reads it.
   // nullopt until the first command: a readFromRT() that meets a write in progress keeps its old
   // box, and before the first swap that box must hold "no target", never a pose.
