@@ -27,6 +27,9 @@
 #   positronic_bringup's mission.launch.py (nothing is launched) and checks that its parameters
 #   carry robot_description_planning from joint_limits.yaml: both default scaling factors and
 #   the arm joints' max_velocity. It fails before the fix.
+# Follow-up prompt (PR #215 review):
+#   Compare the whole joint_limits.yaml with the node's robot_description_planning, read the
+#   installed yaml (the one the launch reads), and say why the private attribute is safe.
 
 """
 Check the parameters mission.launch.py gives the mission node.
@@ -45,7 +48,6 @@ from launch_ros.utilities import evaluate_parameters
 import pytest
 import yaml
 
-PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLANNING = 'robot_description_planning'
 
 
@@ -68,8 +70,9 @@ def mission_parameters():
              if isinstance(entity, Node)]
     assert len(nodes) == 1
     assert nodes[0].node_executable == 'mission_node'
-    # Node keeps the parameters it was given only in a private attribute; launch evaluates
-    # them the same way when it starts the node.
+    # launch_ros's Node has no public getter for its parameters (Jazzy), so read the private
+    # one. If launch_ros renames it, this fails with AttributeError, never a false pass.
+    # evaluate_parameters is what Node._perform_substitutions calls before starting the node.
     merged = {}
     for entry in evaluate_parameters(context, nodes[0]._Node__parameters):
         assert isinstance(entry, dict)  # every entry is a dict, no parameter file
@@ -79,26 +82,28 @@ def mission_parameters():
 
 @pytest.fixture(scope='module')
 def joint_limits():
-    """Return the contents of config/joint_limits.yaml."""
-    with open(os.path.join(PKG, 'config', 'joint_limits.yaml'), encoding='utf-8') as file:
+    """Return the installed config/joint_limits.yaml, the file mission.launch.py reads."""
+    path = os.path.join(
+        get_package_share_directory('positronic_moveit_config'), 'config', 'joint_limits.yaml')
+    with open(path, encoding='utf-8') as file:
         return yaml.safe_load(file)
 
 
-@pytest.mark.parametrize('factor', [
-    'default_velocity_scaling_factor', 'default_acceleration_scaling_factor'])
-def test_mission_node_gets_the_scaling_of_joint_limits_yaml(
-        mission_parameters, joint_limits, factor):
-    """Check both scaling factors reach the node: without them MoveIt uses 0.1 (#214)."""
-    assert mission_parameters[f'{PLANNING}.{factor}'] == joint_limits[factor]
+def flatten(tree, prefix):
+    """Yield (dotted key, value) for every leaf of a nested dict, as ROS flattens parameters."""
+    for key, value in tree.items():
+        if isinstance(value, dict):
+            yield from flatten(value, f'{prefix}.{key}')
+        else:
+            yield f'{prefix}.{key}', value
+
+
+def test_mission_node_gets_all_of_joint_limits_yaml(mission_parameters, joint_limits):
+    """Check every value of joint_limits.yaml reaches the node: without them MoveIt uses 0.1."""
+    for key, value in flatten(joint_limits, PLANNING):
+        assert mission_parameters[key] == value, key
 
 
 def test_mission_node_velocity_scaling_is_0_3(mission_parameters):
     """Check the value the arm was run with on 27 Nov (#214), so a change to it is seen here."""
     assert mission_parameters[f'{PLANNING}.default_velocity_scaling_factor'] == 0.3
-
-
-def test_mission_node_gets_every_joint_velocity_limit(mission_parameters, joint_limits):
-    """Check every joint of joint_limits.yaml reaches the node with its max_velocity."""
-    for joint, limits in joint_limits['joint_limits'].items():
-        key = f'{PLANNING}.joint_limits.{joint}.max_velocity'
-        assert mission_parameters[key] == limits['max_velocity'], joint
