@@ -36,7 +36,8 @@ namespace positronic_hardware
 /// A servo at or above this temperature stops the arm and cuts its power, as the last line of
 /// defence. It was 60 degC (#115), but the arm reached 60 several times in normal work and still
 /// behaved well, so it was raised to 65. A park at 63 degC comes first (thermal_park.py in
-/// positronic_moveit_config); this cut is for when the park fails or is too slow. 5 degC under
+/// positronic_bringup, started by driver.launch.py); this cut is for when the park fails or is
+/// too slow. 5 degC under
 /// the 70 degC at which Feetech-family servos turn their own torque off, so the arm is cut by the
 /// driver, not by one servo giving up on its own (an independent test of the STS3215 saw no
 /// shutdown of its own at 71 degC, so this cut is the one we rely on).

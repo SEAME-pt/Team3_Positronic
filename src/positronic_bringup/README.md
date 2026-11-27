@@ -24,6 +24,8 @@ Files:
   average and the maximum delay, as laptop time minus the message stamp.
 - `scripts/wrist_camera.py`: the camera node of `camera.launch.py`: reads the USB camera with
   OpenCV, turns the frame upright and publishes image, `camera_info` and the jpeg.
+- `scripts/thermal_park.py`: parks the arm at its rest pose before the over-temperature cut;
+  started by `driver.launch.py` (see Park before the over-temperature cut).
 - `config/wrist_camera.yaml`: the camera calibration (`camera_calibration`'s `ost.yaml`), read by
   `camera.launch.py`. Without it `camera_info` carries only the image size.
 
@@ -170,6 +172,36 @@ the power switch. The procedure of the fault-injection tests is in
 `driver.launch.py` alone still starts everything active, with no supervisor: for bench tests
 only.
 
+## Park before the over-temperature cut
+
+`driver.launch.py` starts `thermal_park.py` next to the driver, so every way of bringing the
+arm up (`supervised.launch.py` included) has it, with no terminal of its own, and it reads the
+temperatures on the same machine as the driver.
+
+- It reads the servo temperatures the driver publishes on `/diagnostics`
+  (`temperature_c/<joint>`, once a second).
+- When one servo stays at `park_warn_c` (63 degC) for 1 s, it publishes one trajectory on
+  `/arm_controller/joint_trajectory` to the rest pose, at 0.078 rad/s (0.3 of the working
+  limit of `arm_controller`). J1 and J6 stay where they are. **No collision check**: keep the
+  path to the rest pose clear.
+- Once the arm is there (or after the move time plus 5 s), it calls `/safety_supervisor/stop`:
+  the arm holds the pose and takes no goal until it is activated again, which the driver allows
+  only under the cut minus 5 degC. With `driver.launch.py` alone there is no supervisor: the
+  arm stays parked, active, and it warns.
+- One park per hot spell: again only after every servo went under `park_rearm_below_c`
+  (60 degC).
+- The driver's cut (65 degC, `servo_temp_limit_c`) stays the last line of defence. The rest
+  pose is folded so the arm stays put when the servos lose their torque.
+
+To try it on a cool arm, lower both, the park under the cut:
+
+```bash
+ros2 launch positronic_bringup driver.launch.py servo_temp_limit_c:=55 park_warn_c:=48 park_rearm_below_c:=46
+```
+
+`thermal_park:=false` leaves it out; only the driver's cut remains. The rest pose is also the
+`rest` group_state of `positronic_moveit_config`, to try the path in RViz.
+
 ## Real wrist camera
 
 `camera.launch.py` publishes the USB camera on the wrist on the topics of the Gazebo camera,
@@ -234,6 +266,7 @@ warning, rather than publish a wrong `camera_info`.
 | Model in RViz has no meshes | RViz cannot find `package://positronic_description`: `source install/setup.bash` before `rviz2` |
 | Delay in the billions of ms | The stamp is zero or in simulation time: driver not stamping, or a simulation publishing `/joint_states` (close Gazebo) |
 | Model jumps around | Two publishers on `/joint_states`: close `joint_state_publisher_gui` or the simulation |
+| `thermal_park` never parks | No `temperature_c/...` keys on `/diagnostics` (`ros2 topic echo /diagnostics --field status`), or `park_warn_c` at or above `servo_temp_limit_c`: the cut comes first |
 | Camera node: `cannot open /dev/video0` | Camera unplugged, another process has it, or another number: `v4l2-ctl --list-devices` on the Jetson, then `make nano-camera NANO_CAMERA=/dev/videoN` and `device:=/dev/videoN` |
 | Camera node: `calibration ... not used` | No `config/wrist_camera.yaml` yet, or made for another size than the published one (480 x 640 by default). Calibrate again at that size |
 | Wrist camera image black or missing in RViz on the laptop | No `compressed_image_transport` on the laptop (`ros-jazzy-image-transport-plugins`, in the dev image), or a different `ROS_DOMAIN_ID` |

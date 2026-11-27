@@ -10,8 +10,8 @@ firmware speed (#32), after checking them against the joint limits of the URDF (
 command past a limit, NaN or with the wrong joint count is refused and the arm halts.
 Deactivating the component stops the arm and holds it; activating it powers the servos on and
 resumes (#36). A servo at 65 degC stops the arm and powers its servos off (see Servo
-over-temperature). Before that, at 63 degC, `thermal_park.py` (in `positronic_moveit_config`)
-sends the arm to a rest pose (straight to `arm_controller`, no collision check), then has
+over-temperature). Before that, at 63 degC, `thermal_park.py` (in `positronic_bringup`, started
+by `driver.launch.py`) sends the arm to a rest pose (straight to `arm_controller`, no collision check), then has
 the safety supervisor stop it.
 
 ## How it fits together
