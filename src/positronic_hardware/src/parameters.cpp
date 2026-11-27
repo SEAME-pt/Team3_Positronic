@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "positronic_hardware/link_watchdog.hpp"
+#include "positronic_protocol/types.hpp"
 
 namespace positronic_hardware
 {
@@ -111,6 +112,13 @@ constexpr std::array NUMERIC_PARAMETERS{
     [](HardwareConfig & config, double value) {
       config.supervisor_timeout_ms = static_cast<int>(value);
     }},
+  // #133: the speed byte of every send_angles, the protocol's whole range. Fixed while the
+  // driver runs: another speed is another launch.
+  NumericParameter{
+    "send_speed", positronic_protocol::MIN_SPEED, positronic_protocol::MAX_SPEED, true,
+    [](HardwareConfig & config, double value) {
+      config.send_speed = static_cast<int>(value);
+    }},
 };
 
 /// The <param> names that are not a number in a range, each with its own rule in read_special().
@@ -120,7 +128,8 @@ constexpr std::array SPECIAL_NAMES{
   std::string_view{"port"},
   std::string_view{"baud"},
   std::string_view{"velocity_filter_alpha"},
-  std::string_view{"pose_from_poll"}};
+  std::string_view{"pose_from_poll"},
+  std::string_view{"load_relief"}};
 
 /// The value of `key`, or nullptr if the URDF does not set it.
 const std::string * find_parameter(const Parameters & parameters, std::string_view key)
@@ -173,7 +182,7 @@ std::string read_numeric(
          std::to_string(std::lround(parameter.max)) + "].";
 }
 
-/// The six SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
+/// The SPECIAL_NAMES into `config` when the URDF sets them. Empty, or the reason.
 std::string read_special(const Parameters & parameters, HardwareConfig & config)
 {
   if (const std::string * backend{find_parameter(parameters, "backend")}) {
@@ -222,6 +231,13 @@ std::string read_special(const Parameters & parameters, HardwareConfig & config)
       return "Parameter 'pose_from_poll' is '" + *poll + "'; use 'true' or 'false'.";
     }
     config.timing.pose_from_poll = (*poll == "true");
+  }
+  if (const std::string * relief{find_parameter(parameters, "load_relief")}) {
+    // #183: the relief of a still joint pushing short of its target, or none.
+    if (*relief != "true" && *relief != "false") {
+      return "Parameter 'load_relief' is '" + *relief + "'; use 'true' or 'false'.";
+    }
+    config.relief.enabled = (*relief == "true");
   }
   return {};
 }
@@ -303,6 +319,10 @@ std::string describe(const HardwareConfig & config)
   if (config.timing.pose_from_poll) {
     poll = "on";
   }
+  std::string relief{"off"};
+  if (config.relief.enabled) {
+    relief = "on";
+  }
   std::ostringstream line;
   line << std::fixed << "Backend '" << backend << "', port " << config.port << " at " << config.baud
        << " baud, velocity filter alpha " << std::setprecision(3) << config.velocity_filter_alpha
@@ -311,7 +331,7 @@ std::string describe(const HardwareConfig & config)
        << ", servo temperature limit " << config.servo_temp_limit_c << " degC, tracking error "
        << std::setprecision(1) << config.tracking_error_deg << " deg for "
        << config.tracking_error_ms << " ms, supervisor timeout " << config.supervisor_timeout_ms
-       << " ms.";
+       << " ms, load relief " << relief << ", send speed " << config.send_speed << ".";
   return line.str();
 }
 

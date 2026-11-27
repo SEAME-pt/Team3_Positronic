@@ -63,6 +63,30 @@ struct Overheat
   int celsius{0};
 };
 
+/// #133: set_fresh_mode frames sent and acknowledged, see ArmBackend::fresh_mode_count().
+struct FreshModeCount
+{
+  std::uint64_t sent{0};
+  std::uint64_t acked{0};
+};
+
+/// A load relief (load_relief.hpp), with the values of the frame that decided it. `number`
+/// counts them from 1, so a reader that polls knows which ones it has already seen.
+struct ReliefEvent
+{
+  std::uint64_t number{0};
+  /// 0 for J1 ... 5 for J6.
+  std::size_t joint{0};
+  /// 0 to 1000, in 0.1 % of the drive, sign dropped.
+  int load{0};
+  /// The controller's command minus the measured position, radians.
+  double residual_rad{0.0};
+  /// The servo's temperature in the same frame, degC.
+  int celsius{0};
+  /// Where it stands is outside the URDF limits (#34): nothing sent, the joint left alone.
+  bool refused{false};
+};
+
 /// Where the driver reads the joint angles from and sends the targets to.
 ///
 /// The plugin never knows whether it talks to the real serial port or to a stand-in: read()
@@ -171,6 +195,20 @@ public:
   /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
   /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
   [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
+
+  /// #133: the set_fresh_mode frames sent before a power_on since the backend started, and how
+  /// many the arm acknowledged. Zero for a backend without fresh mode.
+  [[nodiscard]] virtual FreshModeCount fresh_mode_count() const
+  {
+    return {};
+  }
+
+  /// The last load relief (#183); nullopt before the first, and from a backend without one.
+  /// Safe from the control loop.
+  [[nodiscard]] virtual std::optional<ReliefEvent> last_load_relief() const
+  {
+    return std::nullopt;
+  }
 };
 
 }  // namespace positronic_hardware

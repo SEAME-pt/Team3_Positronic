@@ -115,6 +115,14 @@ Frame encode_stop() noexcept
   return build_frame(CommandId::STOP, std::array<std::uint8_t, 0>{});
 }
 
+std::optional<Frame> encode_set_fresh_mode(std::uint8_t mode) noexcept
+{
+  if (mode > 1) {
+    return std::nullopt;
+  }
+  return build_frame(CommandId::SET_FRESH_MODE, std::array<std::uint8_t, 1>{mode});
+}
+
 Frame encode_get_angles() noexcept
 {
   return build_frame(CommandId::GET_ANGLES, std::array<std::uint8_t, 0>{});

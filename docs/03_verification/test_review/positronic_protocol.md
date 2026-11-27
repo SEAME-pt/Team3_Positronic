@@ -75,7 +75,7 @@ not to test joint limits.
 | Protection | Where | Status |
 |---|---|---|
 | Joint limits | `positronic_hardware`, `check_command` before each write (`src/positronic_hardware.cpp`) | Exists, reviewed with hardware |
-| Speed ≤ 30 | `positronic_hardware`, `SEND_SPEED{30}` (`include/positronic_hardware/serial_arm.hpp`) | Fixed at 30 |
+| Speed byte | `positronic_hardware`, `send_speed` parameter, 1 to 100, default `DEFAULT_SEND_SPEED{30}` (`include/positronic_hardware/serial_arm.hpp`, ADR 0008) | Default 30; another byte is opt-in per launch |
 | Only caller of `encode_send_angles` | `positronic_hardware/src/serial_arm.cpp` | Yes, no other caller |
 | Ack status read | `decode_ack` is never called outside the protocol tests | ⚠️ acks ignored, see the hardware review |
 

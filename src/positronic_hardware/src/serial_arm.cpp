@@ -163,18 +163,26 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
 }
 
 SerialArm::SerialArm(
-  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard, bool has_gripper)
-: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard, has_gripper}
+  const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard, bool has_gripper,
+  LoadReliefCheck relief, std::uint8_t send_speed)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate),
+    timing,
+    guard,
+    has_gripper,
+    relief,
+    send_speed}
 {
 }
 
 SerialArm::SerialArm(
   std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard,
-  bool has_gripper)
+  bool has_gripper, LoadReliefCheck relief, std::uint8_t send_speed)
 : transport_{std::move(transport)},
   timing_{timing},
   guard_{guard},
+  send_speed_{send_speed},
   temperature_watchdog_{guard.stale_timeout},
+  relief_{relief},
   detector_{guard.limit_c, guard.hot_for},
   has_gripper_{has_gripper}
 {
@@ -357,9 +365,19 @@ std::optional<JointPositions> SerialArm::last_target() const
   return *last_target_.readFromRT();
 }
 
+FreshModeCount SerialArm::fresh_mode_count() const
+{
+  return {fresh_mode_sent_.load(), fresh_mode_acked_.load()};
+}
+
 std::uint64_t SerialArm::echo_timeouts() const
 {
   return echo_timeouts_.load();
+}
+
+std::optional<ReliefEvent> SerialArm::last_load_relief() const
+{
+  return *last_relief_.readFromRT();
 }
 
 std::optional<JointPositions> SerialArm::last_sent() const
@@ -393,6 +411,10 @@ bool SerialArm::request_and_wait(Pending request)
 void SerialArm::send_pending_request()
 {
   const Pending pending{request_.load()};
+  if (pending != Pending::POWER_ON) {
+    // No power_on in flight: the next one gets its own fresh mode.
+    fresh_mode_done_ = false;
+  }
   if (pending == Pending::NONE) {
     return;
   }
@@ -402,6 +424,21 @@ void SerialArm::send_pending_request()
     Pending expected{pending};
     request_.compare_exchange_strong(expected, Pending::NONE);
     return;
+  }
+  if (pending == Pending::POWER_ON && !fresh_mode_done_) {
+    // #133 step zero: fresh mode 1 before the servos get torque, once per power_on request (a
+    // power_on the arm did not ack goes out again without it), so the arm streams whatever
+    // mode it woke up in. A missing ack is counted, not fatal (see requests.hpp).
+    fresh_mode_sent_.fetch_add(1);
+    if (perform(set_fresh_mode_request())) {
+      fresh_mode_acked_.fetch_add(1);
+    }
+    fresh_mode_done_ = true;
+    if (request_.load() != Pending::POWER_ON) {
+      // A request_halt() landed during the fresh mode wait (up to ACK_TIMEOUT when the Atom does
+      // not ack it): no torque. The stop goes out next turn and power_on() reports false.
+      return;
+    }
   }
   const Request request{pending == Pending::HALT ? stop_request() : power_on_request()};
   if (!perform(request)) {
@@ -416,6 +453,8 @@ void SerialArm::send_pending_request()
     // this store arriving late. Same rule as halt(), the state changes before the signal.
     halted_.store(false);
   }
+  // Taken: a later power_on request gets its own fresh mode.
+  fresh_mode_done_ = false;
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Pending expected{pending};
@@ -532,6 +571,13 @@ bool SerialArm::publish_poll_frames()
     rest = pp::ByteView{
       std::next(rest.data, static_cast<std::ptrdiff_t>(status.consumed)),
       rest.size - status.consumed};
+  }
+  // The load relief counts on the frames found in this poll only: a bridged one repeats an
+  // older load (#183). Not after a stop that landed during this send: nothing more goes out.
+  if (!halted_.load()) {
+    if (const std::optional<ReliefEvent> relief{relief_.update(found, now)}) {
+      last_relief_.writeFromNonRT(relief);
+    }
   }
   pp::JointAngles angles{};
   ServoTemperatures temperatures{};
@@ -665,14 +711,15 @@ bool SerialArm::perform(const Request & request, const Scanner & reply)
   return found && ok;
 }
 
-std::optional<positronic_protocol::Frame> SerialArm::encode_command(const JointPositions & target)
+std::optional<positronic_protocol::Frame> SerialArm::encode_command(
+  const JointPositions & target) const
 {
   const std::optional<positronic_protocol::JointAngles> angles{
     positronic_protocol::to_centidegrees(target)};
   if (!angles.has_value()) {
     return std::nullopt;
   }
-  return positronic_protocol::encode_send_angles(angles.value(), SEND_SPEED);
+  return positronic_protocol::encode_send_angles(angles.value(), send_speed_);
 }
 
 std::optional<ServoTemperatures> SerialArm::ask_temperatures()
@@ -854,6 +901,19 @@ void SerialArm::repeat_power_off(Clock::time_point turn_start)
   next_power_off_ = turn_start + guard_.period;
 }
 
+std::optional<JointPositions> SerialArm::command_to_send()
+{
+  // A stop or a cut took every target off the wire: no relief outlives them.
+  if (halted_.load()) {
+    relief_.reset();
+  }
+  std::optional<JointPositions> target{*command_.readFromRT()};
+  if (target.has_value()) {
+    target = relief_.wire(*target);
+  }
+  return target;
+}
+
 void SerialArm::poll_loop()
 {
   ReplyAssembler assembler{};
@@ -895,7 +955,7 @@ void SerialArm::poll_loop()
     }
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
-    const std::optional<JointPositions> target{*command_.readFromRT()};
+    const std::optional<JointPositions> target{command_to_send()};
     // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
     // and while it stands still the port is better spent on fresh poses. last_sent() is the
     // thread's view of last_target_, the one memory of what went out. A turn with a write since

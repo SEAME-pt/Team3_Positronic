@@ -58,6 +58,8 @@
 #   interface and never as a command, for both backends. joint_state_broadcaster publishes it on
 #   /dynamic_joint_states with driver/fault_code, as long as the yaml does not narrow it
 #   (test_controllers_config.py checks that).
+# Follow-up prompt (#183):
+#   load_relief reaches the plugin like the others.
 
 """Check the robot description that the bringup launch gives to ros2_control."""
 
@@ -193,6 +195,8 @@ def test_arguments_reach_the_plugin():
             tracking_error_deg='6',
             tracking_error_ms='200',
             supervisor_timeout_ms='300',
+            load_relief='false',
+            send_speed='50',
         )
     )
     assert params == {
@@ -207,6 +211,8 @@ def test_arguments_reach_the_plugin():
         'tracking_error_deg': '6',
         'tracking_error_ms': '200',
         'supervisor_timeout_ms': '300',
+        'load_relief': 'false',
+        'send_speed': '50',
     }
 
 
