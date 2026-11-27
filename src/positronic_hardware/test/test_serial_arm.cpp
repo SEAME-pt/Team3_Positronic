@@ -129,6 +129,9 @@
 //   frame after the last reply (it publishes before it writes), bound the age only from above by
 //   the time since the reply went out, and prove growth and drop by comparing two reads of the
 //   same reply, or the age against the time since a newer reply.
+// Follow-up prompt (gripper: keep the grip through a resume, recognise an arm without it):
+//   An arm without its gripper answers get_gripper_value with 255. Check: a reply above 100
+//   (101, 255) is no reading and drops the last one, 100 still is, and a reading again clears it.
 // Follow-up prompt (#133):
 //   The speed byte is the constructor's send_speed: check it on the wire at 50 and 70. The
 //   thread sends set_fresh_mode 1 right before every power_on and counts it; an arm that does
@@ -1672,6 +1675,37 @@ TEST(SerialArmGripper, ReadsTheGripperWhileIdle)
       EXPECT_EQ(request_id(frames[i - 1]), GET_ANGLES_ID) << i;
     }
   }
+}
+
+TEST(SerialArmGripper, AReplyAbove100IsNoReading)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  port.set_gripper(100);
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard(), true};
+
+  // 100, fully open, is the last reading.
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_gripper() == std::optional<std::uint8_t>{100};
+  }));
+  EXPECT_FALSE(arm.gripper_reply_out_of_range().has_value());
+
+  // Just past it, and the 255 of an arm without its gripper: no reading, the last one dropped.
+  for (const std::uint8_t reply : {std::uint8_t{101}, std::uint8_t{255}}) {
+    port.set_gripper(reply);
+    ASSERT_TRUE(wait_until([&arm, reply]() {
+        return arm.gripper_reply_out_of_range() == std::optional<std::uint8_t>{reply};
+    }))
+      << static_cast<int>(reply);
+    EXPECT_FALSE(arm.read_gripper().has_value()) << static_cast<int>(reply);
+  }
+
+  // A reading again (the gripper plugged back in) clears it.
+  port.set_gripper(0);
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_gripper() == std::optional<std::uint8_t>{0};
+  }));
+  EXPECT_FALSE(arm.gripper_reply_out_of_range().has_value());
 }
 
 TEST(SerialArmGripper, SendsANewTargetOnceAfterAGetAnglesReply)
