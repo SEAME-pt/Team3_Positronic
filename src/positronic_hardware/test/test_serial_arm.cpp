@@ -795,10 +795,11 @@ TEST(SerialArm, AHaltDuringTheFreshModeWaitKeepsThePowerOff)
   auto powered{std::async(std::launch::async, [&arm] {
         return arm.power_on();
   })};
-  // Wait for the fresh mode frame on the wire, then halt inside the 80 ms wait for its ack. The
-  // check below does not depend on landing inside it: a halt after the power_on frame is caught
-  // by the existing restore of the hold, so only "no power_on frame" needs the window, and 1 ms
-  // polling leaves ~79 ms of it.
+  // Wait for the fresh mode frame on the wire, then halt inside the 80 ms wait for its ack.
+  // power_on() false and the stop would hold even after that window (the restore of the hold
+  // catches a later halt); "no power_on frame" is the one check that needs the halt inside it,
+  // and 1 ms polling leaves ~79 ms of margin. Repeated 30 times on a fully loaded machine: no
+  // miss.
   const auto deadline{std::chrono::steady_clock::now() + SerialArm::REQUEST_TIMEOUT};
   bool fresh_sent{false};
   while (!fresh_sent && std::chrono::steady_clock::now() < deadline) {

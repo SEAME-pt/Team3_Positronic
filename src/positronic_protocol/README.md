@@ -17,13 +17,15 @@ FE FE LEN CMD [DATA...] FA        LEN = N + 2 for N data bytes; the frame has LE
 
 - No checksum on the 280. A reply is recognised by `FE FE LEN CMD` plus `FA` at the right place.
 - Angles: signed int16, big-endian, in 0.01 deg (`CentiDegrees`), range +-327.67 deg.
-- Speed: one byte, 1 to 100 (percent of the firmware maximum, not a physical unit).
+- Speed: one byte, 1 to 100. On the 280 it is a speed cap, 1.5 deg/s per unit and never below
+  26.4 deg/s (ADR 0008, #133).
 
 | Command     | ID     | Request                                     | Reply                                  |
 |-------------|--------|---------------------------------------------|----------------------------------------|
 | power_on    | `0x10` | `FE FE 02 10 FA`                            | `FE FE 03 10 01 FA`                    |
 | power_off   | `0x11` | `FE FE 02 11 FA`                            | `FE FE 03 11 01 FA`                    |
 | release_all_servos | `0x13` | `FE FE 02 13 FA`                     | `FE FE 03 13 01 FA`                    |
+| set_fresh_mode | `0x16` | `FE FE 03 16` + mode 0 or 1 + `FA`   | `FE FE 03 16 01 FA` (acked on our arm) |
 | get_angles  | `0x20` | `FE FE 02 20 FA`                            | `FE FE 0E 20` + 6 x int16 + `FA` (17 B)|
 | send_angles | `0x22` | `FE FE 0F 22` + 6 x int16 + speed + `FA`    | `FE FE 03 22 01 FA`                    |
 | stop        | `0x29` | `FE FE 02 29 FA`                            | `FE FE 03 29 01 FA`                    |

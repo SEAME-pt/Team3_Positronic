@@ -414,7 +414,6 @@ void SerialArm::send_pending_request()
     // sees the cut and returns false. The hold stays.
     Pending expected{pending};
     request_.compare_exchange_strong(expected, Pending::NONE);
-    fresh_mode_done_ = false;
     return;
   }
   if (pending == Pending::POWER_ON && !fresh_mode_done_) {

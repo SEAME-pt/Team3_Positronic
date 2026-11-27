@@ -663,10 +663,15 @@ void RobotSystem::report_echo_timeouts()
 void RobotSystem::report_power_on() const
 {
   // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. A missing ack
-  // does not stop the activation, so it is reported, not checked.
+  // does not stop the activation, so it is reported, not checked. The counts are the backend's,
+  // built in on_configure; the fake arm has no fresh mode and sends none, so nothing to say.
   const FreshModeCount fresh{arm_->fresh_mode_count()};
+  if (fresh.sent == 0) {
+    return;
+  }
   RCLCPP_INFO(
-    get_logger(), "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged.",
+    get_logger(),
+    "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged since configure.",
     fresh.sent, fresh.acked);
 }
 
