@@ -52,6 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-ament-lint-common \
     && rm -rf /var/lib/apt/lists/*
 
+# Temporary: make build compiles positronic_mission on the Jetson,
+# which needs MoveIt's planning interface
+# The mission node never runs on the Jetson.
+# The proper fix is a COLCON_DEFAULTS_FILE that skips positronic_mission there,
+# after which this block goes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ros-${ROS_DISTRO}-moveit-ros-planning-interface \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip3 install --no-cache-dir pymycobot
 
 # The wrist camera on the Jetson (camera.launch.py): OpenCV reads the USB camera (V4L2, MJPG)
