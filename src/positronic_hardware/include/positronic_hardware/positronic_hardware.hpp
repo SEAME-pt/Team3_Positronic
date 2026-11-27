@@ -158,6 +158,9 @@ private:
   /// True when the check is on and no heartbeat came for longer than supervisor_timeout_ms.
   /// One atomic load and one clock read: safe from read().
   [[nodiscard]] bool supervisor_silent() const;
+  /// read()'s report of the load reliefs (#183), while active: one line each, INFO for a relief,
+  /// WARN for a refusal outside the URDF limits.
+  void report_load_reliefs();
   /// True while the component is ACTIVE: the only state in which targets go out and faults count.
   [[nodiscard]] bool is_active() const;
 
@@ -196,6 +199,8 @@ private:
   /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
   /// whose count starts at zero.
   EchoTimeoutReport echo_report_;
+  /// The number of the last load relief logged. Reset with every new backend, which counts from 1.
+  std::uint64_t reported_reliefs_{0};
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
