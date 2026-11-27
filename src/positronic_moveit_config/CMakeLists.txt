@@ -19,6 +19,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_planning_scene test/test_planning_scene.py TIMEOUT 60)
   ament_add_pytest_test(test_planning_scene_node test/test_planning_scene_node.py TIMEOUT 60)
+  # The mission node gets robot_description_planning from joint_limits.yaml (#214).
+  ament_add_pytest_test(test_mission_launch test/test_mission_launch.py TIMEOUT 60)
 endif()
 
 ament_package()
