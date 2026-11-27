@@ -117,6 +117,7 @@ DRIVER_ARGUMENTS = [
     'backend', 'fake_mode', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms',
     'pose_from_poll', 'servo_temp_limit_c', 'tracking_error_deg', 'tracking_error_ms',
     'load_relief',
+    'send_speed',
 ]
 
 

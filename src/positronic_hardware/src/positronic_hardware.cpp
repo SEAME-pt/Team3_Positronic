@@ -365,7 +365,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
       // The relief sends a joint its own position: the same URDF limits as every command (#34).
       arm_ = std::make_unique<SerialArm>(
         config_.port, config_.baud, config_.timing, guard, has_gripper_,
-        LoadReliefCheck{config_.relief, limits_});
+        LoadReliefCheck{config_.relief, limits_}, static_cast<std::uint8_t>(config_.send_speed));
     } else {
       // The fake arm's time is the sum of the periods read() got: on the control loop that is
       // the time that passed, and a test that passes the periods in moves the arm without
@@ -513,6 +513,7 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
+  report_power_on();
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
@@ -657,6 +658,21 @@ void RobotSystem::report_echo_timeouts()
     "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
     "and so does a send that reached the arm while it was still answering a request.",
     fresh.value());
+}
+
+void RobotSystem::report_power_on() const
+{
+  // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. A missing ack
+  // does not stop the activation, so it is reported, not checked. The counts are the backend's,
+  // built in on_configure; the fake arm has no fresh mode and sends none, so nothing to say.
+  const FreshModeCount fresh{arm_->fresh_mode_count()};
+  if (fresh.sent == 0) {
+    return;
+  }
+  RCLCPP_INFO(
+    get_logger(),
+    "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged since configure.",
+    fresh.sent, fresh.acked);
 }
 
 void RobotSystem::report_load_reliefs()

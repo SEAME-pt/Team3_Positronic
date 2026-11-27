@@ -65,6 +65,8 @@ struct HardwareConfig
   int tracking_error_ms{TRACKING_ERROR_MS};
   int supervisor_timeout_ms{SUPERVISOR_TIMEOUT_MS};
   LoadReliefLimits relief{};
+  /// Speed byte of every send_angles, 1 to 100: a speed cap, see ADR 0008.
+  int send_speed{SerialArm::DEFAULT_SEND_SPEED};
 };
 
 /// The config read from the URDF, or the reason it was refused: exactly one of the two is set.

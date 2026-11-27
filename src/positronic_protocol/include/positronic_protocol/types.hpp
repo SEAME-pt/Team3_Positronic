@@ -58,6 +58,7 @@ enum class CommandId : std::uint8_t
   POWER_ON = 0x10,            ///< Power the servos on.
   POWER_OFF = 0x11,           ///< Power the servos off.
   RELEASE_ALL_SERVOS = 0x13,  ///< Torque off: limp arm, still answers.
+  SET_FRESH_MODE = 0x16,      ///< 1: a new target replaces the old one; 0: targets queue (#20).
   GET_ANGLES = 0x20,          ///< Read the six joint angles.
   SEND_ANGLES = 0x22,         ///< Move the six joints to the given angles.
   STOP = 0x29,                ///< Stop the current motion.

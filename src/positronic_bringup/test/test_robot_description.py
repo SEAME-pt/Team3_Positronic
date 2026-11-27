@@ -196,6 +196,7 @@ def test_arguments_reach_the_plugin():
             tracking_error_ms='200',
             supervisor_timeout_ms='300',
             load_relief='false',
+            send_speed='50',
         )
     )
     assert params == {
@@ -211,6 +212,7 @@ def test_arguments_reach_the_plugin():
         'tracking_error_ms': '200',
         'supervisor_timeout_ms': '300',
         'load_relief': 'false',
+        'send_speed': '50',
     }
 
 

@@ -37,7 +37,7 @@ driver and the mirror at the same time on one ROS_DOMAIN_ID gives two /tf publis
 same robot, which RViz warns about but tolerates. The 10 minute run only records
 /joint_states and does not need the mirror.
 
-Launch arguments. The driver's (backend to load_relief) have no default here: unset,
+Launch arguments. The driver's (backend to send_speed) have no default here: unset,
 the driver keeps its own (HardwareConfig and SerialTiming in positronic_hardware, the table in
 its README), and the INFO line of on_init prints the values in use. A default here would win
 over the driver's and hide a change made there.
@@ -57,6 +57,7 @@ over the driver's and hide a change made there.
                               supervisor. supervised.launch.py sets 500.
   load_relief:=true|false     a still joint pushing short of its target is sent where it
                               stands (#183)
+  send_speed:=                speed byte of every send_angles, 1 to 100 (#133)
   update_rate:=               Hz, of the control loop and of /joint_states; by default the
                               update_rate of jetson_controllers.yaml
   start_inactive:=false       true: the hardware component and arm_controller come up
@@ -140,6 +141,10 @@ def generate_launch_description():
     load_relief = DeclareLaunchArgument(
         'load_relief', default_value='',
         description='true or false: relieve a still joint pushing short of its target.')
+    # #133: the firmware speed of every send_angles. Another speed is another launch.
+    send_speed = DeclareLaunchArgument(
+        'send_speed', default_value='',
+        description='Speed byte of every send_angles, 1 to 100: a speed cap (#133).')
     # The yaml's value by default, read from the yaml. Here so the 10 minute run can try another
     # rate without editing the yaml.
     update_rate = DeclareLaunchArgument(
@@ -179,6 +184,7 @@ def generate_launch_description():
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
             ' supervisor_timeout_ms:=', LaunchConfiguration('supervisor_timeout_ms'),
             ' load_relief:=', LaunchConfiguration('load_relief'),
+            ' send_speed:=', LaunchConfiguration('send_speed'),
         ]),
         value_type=str)
 
@@ -254,6 +260,7 @@ def generate_launch_description():
         tracking_error_ms,
         supervisor_timeout_ms,
         load_relief,
+        send_speed,
         update_rate,
         start_inactive,
         camera,
