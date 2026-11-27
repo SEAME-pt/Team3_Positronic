@@ -139,6 +139,11 @@
 //   The status now also carries each servo's last temperature, key "temperature_c/<joint>",
 //   whole degC, for thermal_park.py. Test that the LINK_TIMEOUT status has the six, at the
 //   30 degC the pseudo-terminal arm answers.
+// Follow-up prompt (gripper: keep the grip through a resume, recognise an arm without it):
+//   With the gripper in the URDF, an arm that answers 255 to get_gripper_value is not activated
+//   (no power_on, refused before the wait runs out). After an activate, and again after a
+//   deactivate and an activate, commands at the measured gripper value or one unit off it send
+//   no set_gripper_value; a command two units off sends one.
 // Follow-up prompt (#133):
 //   send_speed loads at 50 and is refused at 0, 101, a fraction and NaN.
 
@@ -491,6 +496,18 @@ public:
     silent_after_power_off_.store(silent);
   }
 
+  /// What the arm answers to get_gripper_value (0x65) from now on, -1 for nothing (default).
+  void set_gripper(int value)
+  {
+    gripper_.store(value);
+  }
+
+  /// How many set_gripper_value frames (FE FE 04 67 ...) arrived since this arm started.
+  std::size_t received_gripper_sets()
+  {
+    return count_frames(7, 0x67);
+  }
+
   /// Every byte the driver wrote to the arm so far.
   std::vector<std::uint8_t> received()
   {
@@ -548,6 +565,13 @@ private:
       }
       return;
     }
+    if (id == 0x65) {
+      const int gripper{gripper_.load()};
+      if (gripper >= 0) {
+        put(controller, {0xFE, 0xFE, 0x03, 0x65, static_cast<std::uint8_t>(gripper), 0xFA});
+      }
+      return;
+    }
     if (id == 0x20) {
       put(controller, poll);
       put(controller, {RECORDED_REPLY.begin(), RECORDED_REPLY.end()});
@@ -592,6 +616,7 @@ private:
   std::atomic<bool> silent_after_power_off_{false};
   std::atomic<bool> powered_off_{false};
   std::atomic<std::uint8_t> celsius_{30};
+  std::atomic<int> gripper_{-1};
   std::atomic<bool> stop_{false};
   std::atomic<bool> ack_requests_{true};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
@@ -2077,6 +2102,89 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
   resource_manager_.reset();
   arm.reset();
   ::close(controller);
+}
+
+namespace
+{
+
+/// The radians a controller writes for gripper value `value` (0 closed .. 100 open).
+double gripper_radians(int value)
+{
+  return GRIPPER_CLOSED + value / 100.0 * (GRIPPER_OPEN - GRIPPER_CLOSED);
+}
+
+/// How long the serial thread gets to send a set_gripper_value that is due: it serves the
+/// gripper after a get_angles reply, every 20 to 40 ms, so 300 ms is several turns.
+constexpr std::chrono::milliseconds GRIPPER_TURNS{300};
+
+}  // namespace
+
+TEST_F(LoadRobotSystem, ActivateRefusesAnArmThatAnswers255ForTheGripper)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  arm->set_gripper(255);
+
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
+  // Refused on the 255, not after the wait for an answer runs out (FIRST_SAMPLE_TIMEOUT, 2 s).
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds{1500});
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, AfterActivateTheGripperHoldGoesOutOnlyWhenItLeavesTheMeasuredValue)
+{
+  constexpr int MEASURED{30};  // fingers stopped on an object, target still closed
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  arm->set_gripper(MEASURED);
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+
+  // Twice: the first activate, then a halt and a resume (deactivate, activate).
+  for (int round{0}; round < 2; ++round) {
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK) << round;
+    const std::size_t before{arm->received_gripper_sets()};
+    // The controller's hold: the measured value, or one unit off it.
+    for (const int value : {MEASURED, MEASURED - 1, MEASURED + 1, MEASURED}) {
+      ASSERT_TRUE(command(GRIPPER, gripper_radians(value)));
+      ASSERT_TRUE(cycles(2)) << round << " " << value;
+    }
+    std::this_thread::sleep_for(GRIPPER_TURNS);
+    EXPECT_EQ(arm->received_gripper_sets(), before) << round;
+
+    // A new goal, two units off: it goes out, once.
+    ASSERT_TRUE(command(GRIPPER, gripper_radians(MEASURED - 2)));
+    ASSERT_TRUE(cycles(2)) << round;
+    std::this_thread::sleep_for(GRIPPER_TURNS);
+    EXPECT_EQ(arm->received_gripper_sets(), before + 1) << round;
+
+    ASSERT_EQ(
+      go_to(
+        lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+        hardware_interface::lifecycle_state_names::INACTIVE),
+      hardware_interface::return_type::OK)
+      << round;
+  }
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
 }
 
 // #136, the dead-man check. The tests sleep because the plugin reads the real clock; the exact

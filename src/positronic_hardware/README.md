@@ -238,11 +238,30 @@ that is due (a new value, or the 100 ms read). While the command changes, the gr
 ("The gripper did not answer within ... ms") if none comes. `FakeArm` starts open (100) and is at
 every gripper target at once.
 
+**No gripper on the arm.** Without servo 7 the Atom answers `get_gripper_value` with 255
+(`FE FE 03 65 FF FA`, gripper off, 23 Nov 2026). A reply above 100 is no reading: the serial
+thread drops the last reading and keeps the reply (`gripper_reply_out_of_range()`). With the
+gripper in the URDF, `on_activate` refuses at once: "The arm answered 255 to get_gripper_value
+(0x65): no gripper on the arm, but the URDF has 'gripper_controller'". Read as a value, 255 was
+shown as fully open, and with `allow_stalling` a close that never moves ended `SUCCEEDED`.
+
+**The grip through a halt and a resume.** The gripper's servo pushes towards its target with a
+force that grows with the distance to it. Closed on an object, the fingers stop on it (say at 30)
+while the target stays at closed (0): that distance is the grip. After an activate, the plugin's
+command and `gripper_action_controller`'s hold are both the measured value; sent, it would become
+the target, the servo would stop pushing and the object could slip. So after every activate
+`write()` sends the gripper nothing until a command is more than one unit (`GRIPPER_HOLD_BAND`)
+off the value measured at the activate: the controller reads its hold after the plugin, and a
+settling servo can move one unit in between. The measured value itself never goes out. The
+first command outside the band goes out, and from then on every new value does, until the next
+activate.
+
 **Tests.** `test_serial_arm` (`SerialArmGripper.*`: reads while idle, one send after a
 `get_angles` reply, waits while the arm has targets, halt and power on, no gripper frame without
-a gripper, the link never times out while the gripper is served, with the replay transport) and
+a gripper, a reply above 100 is no reading, the link never times out while the gripper is served, with the replay transport) and
 `test_load_robot_system` (the seventh joint, its limits, mapping at the limits, refused targets,
-velocity, activation without a gripper reply). The recorded frames are checked in
+velocity, activation without a gripper reply, activation refused on a 255 reply, no send of the
+hold after an activate and a resume). The recorded frames are checked in
 `positronic_protocol` (`test_recorded_gripper.cpp`).
 
 ## Parameters

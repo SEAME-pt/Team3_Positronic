@@ -268,6 +268,7 @@ public:
 
   void write_gripper(std::uint8_t value) override;
   [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override;
+  [[nodiscard]] std::optional<std::uint8_t> gripper_reply_out_of_range() const override;
 
   /// The newest plausible temperatures, from the poll's status frames or from get_servo_temps,
   /// or nullopt before the first one.
@@ -500,6 +501,9 @@ private:
   realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_command_{std::nullopt};
   mutable realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_latest_{std::nullopt};
   std::optional<std::uint8_t> gripper_last_sent_;
+  // The last get_gripper_value reply above GRIPPER_OPEN_VALUE, -1 after a reading. Written by
+  // the serial thread, read by the plugin.
+  std::atomic<int> gripper_out_of_range_{-1};
   Clock::time_point last_gripper_read_;
   // #170, serial thread only: the last good position of each joint from a poll and when it came
   // (POLL_BRIDGE_AGE), and the last pose the thread published from any source, the reference of
