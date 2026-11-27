@@ -112,6 +112,10 @@ class HotWatch:
         self._hot_since = {}
         self._parked = False
 
+    def cancel(self):
+        """Forget a park that could not be sent: the next hot second tries again."""
+        self._parked = False
+
     def update(self, temperatures, now_s):
         """Return the (joint, degC) to park for, once per hot spell, else None."""
         for joint in list(self._hot_since):
@@ -243,7 +247,11 @@ class ThermalPark(Node):
         logger.warn(f'Servo {joint} at {celsius} degC: parking the arm at its rest pose')
         targets = park_targets(self._joints)
         if targets is None:
-            logger.error('No /joint_states yet: not parking. The driver cut still applies.')
+            logger.error(
+                'No valid /joint_states: not parking now, trying again on the next hot second. '
+                'The driver cut still applies.')
+            # Not latched: a park that never left must not wait for the arm to cool.
+            self._watch.cancel()
             return
         duration_s = park_duration_s(self._joints, targets, self._speed_rad_s)
         self._publisher.publish(build_trajectory(targets, duration_s))

@@ -38,6 +38,11 @@
 #   them, and otherwise one trajectory, with the deadline at now + move time + margin. The
 #   stand-in client now answers service_is_ready(), as _stop() no longer waits.
 #
+# Follow-up prompt (second review):
+#   A park that could not be sent (no /joint_states, or a NaN in them) must not stay latched:
+#   HotWatch.cancel() undoes it, and a hot second later, with /joint_states there, the arm
+#   parks.
+#
 # Follow-up prompt (supervisor stop after the park):
 #   Test _stop() on a stand-in for the node: it calls the supervisor's stop when the service
 #   is there, only warns when it is not, and does nothing with stop_after_park off.
@@ -289,7 +294,8 @@ def _parker(joints):
     logger = _Logger()
     return SimpleNamespace(
         _joints=joints, _speed_rad_s=0.078, _margin_s=5.0, _targets=None, _deadline_s=None,
-        _now_s=lambda: 100.0, _publisher=_Publisher(), get_logger=lambda: logger)
+        _now_s=lambda: 100.0, _publisher=_Publisher(), get_logger=lambda: logger,
+        _watch=MOD.HotWatch(63, 1.0, 60))
 
 
 def test_park_without_joint_states_sends_nothing():
@@ -312,3 +318,28 @@ def test_park_sends_one_trajectory_and_sets_the_deadline():
     assert len(node._publisher.sent) == 1
     duration_s = MOD.park_duration_s(_current(), node._targets, 0.078)
     assert node._deadline_s == pytest.approx(100.0 + duration_s + 5.0)
+
+
+def test_cancel_lets_the_next_hot_second_park_again():
+    watch = MOD.HotWatch(63, 1.0, 60)
+    hot = {**_all_at(40), 'joint5_to_joint4': 63}
+    watch.update(hot, 0.0)
+    assert watch.update(hot, 1.0) is not None
+    watch.cancel()
+    assert watch.update(hot, 2.0) is None
+    assert watch.update(hot, 3.0) == ('joint5_to_joint4', 63)
+
+
+def test_a_park_that_could_not_be_sent_is_tried_again():
+    node = _parker({})
+    hot = {**_all_at(40), 'joint5_to_joint4': 63}
+    node._watch.update(hot, 0.0)
+    joint, celsius = node._watch.update(hot, 1.0)
+    MOD.ThermalPark._park(node, joint, celsius)
+    assert node._publisher.sent == []
+    # /joint_states arrive; the servo is still hot.
+    node._joints = _current()
+    assert node._watch.update(hot, 2.0) is None
+    joint, celsius = node._watch.update(hot, 3.0)
+    MOD.ThermalPark._park(node, joint, celsius)
+    assert len(node._publisher.sent) == 1
