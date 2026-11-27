@@ -47,7 +47,8 @@ Rules:
 
 ## 4. Node graph
 
-**TODO**: Nodes are not fully implemented yet, this part will be filled once the node architecture is better set up.
+What runs on the laptop and what runs on the Jetson (ADR 0003), and the topics, actions and services
+between them: [diagram](diagrams/nodes_and_topics.svg) (source: `diagrams/nodes_and_topics.drawio`).
 
 ## 5. QoS
 
