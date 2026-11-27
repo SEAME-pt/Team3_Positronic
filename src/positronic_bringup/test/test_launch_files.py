@@ -41,6 +41,8 @@
 #   driver.launch.py gets a camera argument, default false, that includes camera.launch.py only
 #   when true. Check the default, and that the include is there, conditional, and resolves to
 #   the camera launch.
+# Follow-up prompt (#183):
+#   load_relief is a driver argument too.
 
 """Check that the launch files of the real arm build their description."""
 
@@ -114,6 +116,7 @@ def test_driver_starts_active_unless_asked():
 DRIVER_ARGUMENTS = [
     'backend', 'fake_mode', 'port', 'baud', 'moving_period_ms', 'echo_timeout_ms',
     'pose_from_poll', 'servo_temp_limit_c', 'tracking_error_deg', 'tracking_error_ms',
+    'load_relief',
     'send_speed',
 ]
 

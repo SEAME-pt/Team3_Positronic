@@ -164,20 +164,25 @@ std::size_t PosixSerialPort::read(std::uint8_t * dst, std::size_t max)
 
 SerialArm::SerialArm(
   const std::string & port, int baud_rate, Timing timing, TemperatureGuard guard, bool has_gripper,
-  std::uint8_t send_speed)
-: SerialArm{
-    std::make_unique<PosixSerialPort>(port, baud_rate), timing, guard, has_gripper, send_speed}
+  LoadReliefCheck relief, std::uint8_t send_speed)
+: SerialArm{std::make_unique<PosixSerialPort>(port, baud_rate),
+    timing,
+    guard,
+    has_gripper,
+    relief,
+    send_speed}
 {
 }
 
 SerialArm::SerialArm(
   std::unique_ptr<SerialTransport> transport, Timing timing, TemperatureGuard guard,
-  bool has_gripper, std::uint8_t send_speed)
+  bool has_gripper, LoadReliefCheck relief, std::uint8_t send_speed)
 : transport_{std::move(transport)},
   timing_{timing},
   guard_{guard},
   send_speed_{send_speed},
   temperature_watchdog_{guard.stale_timeout},
+  relief_{relief},
   detector_{guard.limit_c, guard.hot_for},
   has_gripper_{has_gripper}
 {
@@ -361,6 +366,11 @@ std::uint64_t SerialArm::echo_timeouts() const
   return echo_timeouts_.load();
 }
 
+std::optional<ReliefEvent> SerialArm::last_load_relief() const
+{
+  return *last_relief_.readFromRT();
+}
+
 std::optional<JointPositions> SerialArm::last_sent() const
 {
   return *last_target_.readFromNonRT();
@@ -539,6 +549,13 @@ bool SerialArm::publish_poll_frames()
     rest = pp::ByteView{
       std::next(rest.data, static_cast<std::ptrdiff_t>(status.consumed)),
       rest.size - status.consumed};
+  }
+  // The load relief counts on the frames found in this poll only: a bridged one repeats an
+  // older load (#183). Not after a stop that landed during this send: nothing more goes out.
+  if (!halted_.load()) {
+    if (const std::optional<ReliefEvent> relief{relief_.update(found, now)}) {
+      last_relief_.writeFromNonRT(relief);
+    }
   }
   pp::JointAngles angles{};
   ServoTemperatures temperatures{};
@@ -852,6 +869,19 @@ void SerialArm::repeat_power_off(Clock::time_point turn_start)
   next_power_off_ = turn_start + guard_.period;
 }
 
+std::optional<JointPositions> SerialArm::command_to_send()
+{
+  // A stop or a cut took every target off the wire: no relief outlives them.
+  if (halted_.load()) {
+    relief_.reset();
+  }
+  std::optional<JointPositions> target{*command_.readFromRT()};
+  if (target.has_value()) {
+    target = relief_.wire(*target);
+  }
+  return target;
+}
+
 void SerialArm::poll_loop()
 {
   ReplyAssembler assembler{};
@@ -893,7 +923,7 @@ void SerialArm::poll_loop()
     }
     // nullopt means no command yet, or a read that lost the race with write_angles() before
     // the first one: both send nothing, the next turn reads again.
-    const std::optional<JointPositions> target{*command_.readFromRT()};
+    const std::optional<JointPositions> target{command_to_send()};
     // Only a changed command goes out: a send_angles keeps the arm busy until its sync-write,
     // and while it stands still the port is better spent on fresh poses. last_sent() is the
     // thread's view of last_target_, the one memory of what went out. A turn with a write since

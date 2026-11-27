@@ -27,6 +27,7 @@
 #include <unordered_map>
 
 #include "positronic_hardware/fake_arm.hpp"
+#include "positronic_hardware/load_relief.hpp"
 #include "positronic_hardware/serial_arm.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
 #include "positronic_hardware/tracking_check.hpp"
@@ -63,6 +64,7 @@ struct HardwareConfig
   double tracking_error_deg{TRACKING_ERROR_DEG};
   int tracking_error_ms{TRACKING_ERROR_MS};
   int supervisor_timeout_ms{SUPERVISOR_TIMEOUT_MS};
+  LoadReliefLimits relief{};
   /// Speed byte of every send_angles, 1 to 100: a speed cap, see ADR 0008.
   int send_speed{SerialArm::DEFAULT_SEND_SPEED};
 };

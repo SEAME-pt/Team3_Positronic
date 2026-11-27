@@ -34,9 +34,14 @@ LCOV=(lcov --quiet --ignore-errors mismatch,mismatch --rc geninfo_unexecuted_blo
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
 
+# -fprofile-update=atomic: the driver's tests run the serial thread beside the test's own, and
+# two threads counting the same line without it leave counts that geninfo refuses ("Unexpected
+# negative count").
+COVERAGE_FLAGS="--coverage -fprofile-update=atomic"
 echo "== Build with --coverage (${BUILD}/)"
 colcon build --build-base "${BUILD}" --install-base "${INSTALL}" \
-  --cmake-args -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_C_FLAGS=--coverage
+  --cmake-args -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_CXX_FLAGS=${COVERAGE_FLAGS}" \
+  "-DCMAKE_C_FLAGS=${COVERAGE_FLAGS}"
 
 # Counts from an earlier run would add to this one.
 "${LCOV[@]}" --zerocounters --directory "${BUILD}"

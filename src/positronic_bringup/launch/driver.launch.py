@@ -55,6 +55,8 @@ over the driver's and hide a change made there.
   supervisor_timeout_ms:=0    ms without the safety supervisor's heartbeat that halt the arm
                               (#136). 0 here, the check off: this launch alone has no
                               supervisor. supervised.launch.py sets 500.
+  load_relief:=true|false     a still joint pushing short of its target is sent where it
+                              stands (#183)
   send_speed:=                speed byte of every send_angles, 1 to 100 (#133)
   update_rate:=               Hz, of the control loop and of /joint_states; by default the
                               update_rate of jetson_controllers.yaml
@@ -136,6 +138,9 @@ def generate_launch_description():
     supervisor_timeout_ms = DeclareLaunchArgument(
         'supervisor_timeout_ms', default_value='0',
         description='ms without a supervisor heartbeat that halt the arm (0: check off).')
+    load_relief = DeclareLaunchArgument(
+        'load_relief', default_value='',
+        description='true or false: relieve a still joint pushing short of its target.')
     # #133: the firmware speed of every send_angles. Another speed is another launch.
     send_speed = DeclareLaunchArgument(
         'send_speed', default_value='',
@@ -178,6 +183,7 @@ def generate_launch_description():
             ' tracking_error_deg:=', LaunchConfiguration('tracking_error_deg'),
             ' tracking_error_ms:=', LaunchConfiguration('tracking_error_ms'),
             ' supervisor_timeout_ms:=', LaunchConfiguration('supervisor_timeout_ms'),
+            ' load_relief:=', LaunchConfiguration('load_relief'),
             ' send_speed:=', LaunchConfiguration('send_speed'),
         ]),
         value_type=str)
@@ -253,6 +259,7 @@ def generate_launch_description():
         tracking_error_deg,
         tracking_error_ms,
         supervisor_timeout_ms,
+        load_relief,
         send_speed,
         update_rate,
         start_inactive,

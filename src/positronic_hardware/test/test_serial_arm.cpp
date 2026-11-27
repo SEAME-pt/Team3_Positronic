@@ -715,7 +715,12 @@ TEST(SerialArm, TheSendSpeedIsTheByteOnTheWire)
     auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
     ReplayTransport & port{*transport};
     SerialArm arm{
-      std::move(transport), SerialArm::Timing{}, positronic_hardware::TemperatureGuard{}, false,
+      std::move(transport),
+      SerialArm::Timing{},
+      positronic_hardware::TemperatureGuard{},
+      false,
+      positronic_hardware::LoadReliefCheck{
+        positronic_hardware::LoadReliefLimits{false}, positronic_hardware::PositionLimits{}},
       speed};
     arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
     const auto sends{wait_for_sends(port, 1)};
@@ -2629,4 +2634,109 @@ TEST(SerialArmPoseAge, CountsFromTheSyncWriteWhenThePoseComesFromThePoll)
     seen.value_or(PoseSample{}).age.value_or(SteadyClock::duration::max())};
   EXPECT_GE(age, SteadyClock::duration::zero());
   EXPECT_LE(age, after - port.sync_write_times().front());
+}
+
+// Follow-up prompt (#183, the load relief on the replayed arm):
+//   The poll frames carry J1 pushing (load 30) while the controller keeps writing J1 1 deg past
+//   where it stands: after the hold (500 ms here) J1 goes out where it stands, the relief is
+//   logged; a halt ends it, and a hold after the power on J1 is relieved again; a new command for
+//   J1 goes out as is.
+
+namespace
+{
+using positronic_hardware::LoadReliefCheck;
+using positronic_hardware::LoadReliefLimits;
+using positronic_hardware::PositionLimits;
+using positronic_hardware::ReliefEvent;
+
+constexpr double ONE_DEG{M_PI / 180.0};
+
+/// The recorded poll, still and at load 0, with J1 reporting `load`.
+std::vector<std::uint8_t> poll_with_j1_load(std::uint16_t load)
+{
+  std::vector<std::uint8_t> frames{
+    with_byte(parse_hex(RECORDED_POLL_FRAMES), 0, 4, static_cast<std::uint8_t>(load & 0xFFU))};
+  return with_byte(std::move(frames), 0, 5, static_cast<std::uint8_t>(load >> 8U));
+}
+
+/// A relief with a 500 ms hold and +-3 rad on every joint. The checks after the power on and
+/// after the move must see the command on the wire before the next relief: a window of one hold
+/// against writes 10 ms apart. write_until's 2 s is four holds.
+LoadReliefCheck fast_relief()
+{
+  LoadReliefLimits limits{};
+  limits.hold = std::chrono::milliseconds{500};
+  PositionLimits range{};
+  for (positronic_hardware::PositionLimit & limit : range) {
+    limit.lower = -3.0;
+    limit.upper = 3.0;
+  }
+  return LoadReliefCheck{limits, range};
+}
+
+/// The recorded poll's pose with J1 1 deg further: J1 stands 1 deg short of it.
+JointPositions j1_short()
+{
+  JointPositions command{recorded_poll_pose()};
+  command.at(0) += ONE_DEG;
+  return command;
+}
+
+/// Writes `command` every 10 ms, as the controller does, until `done()` or 2 s. Returns done().
+template<typename Done>
+bool write_until(SerialArm & arm, const JointPositions & command, Done done)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    arm.write_angles(command);
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return done();
+}
+
+/// True when the last target on the wire has J1 at `rad`.
+bool j1_on_the_wire(const SerialArm & arm, double rad)
+{
+  const std::optional<JointPositions> target{arm.last_target()};
+  return target.has_value() && std::abs(target.value_or(JointPositions{}).at(0) - rad) < 1e-9;
+}
+
+/// An arm whose poll shows J1 pushing with `load`, with `relief`.
+std::unique_ptr<SerialArm> arm_with(std::uint16_t load, const LoadReliefCheck & relief)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  transport->set_poll_frames(poll_with_j1_load(load));
+  return std::make_unique<SerialArm>(
+    std::move(transport), POLL_TIMING, TemperatureGuard{}, false, relief);
+}
+}  // namespace
+
+TEST(SerialArmLoadRelief, AStillLoadedJointGoesOutWhereItStandsUntilMovedOrHalted)
+{
+  const std::unique_ptr<SerialArm> arm{arm_with(30, fast_relief())};
+  static_cast<void>(wait_for_reply(*arm));
+  const JointPositions command{j1_short()};
+  const double stands{rad_of(RECORDED_POLL_STEPS.at(0), 0)};
+  const auto relieved{[&arm, stands]() {
+      return j1_on_the_wire(*arm, stands);
+    }};
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 1u);
+  // A halt ends the relief: the first send after the power on carries the controller's
+  // command, and a whole hold later J1 is relieved again.
+  ASSERT_TRUE(arm->halt());
+  ASSERT_TRUE(arm->power_on());
+  ASSERT_TRUE(write_until(*arm, command, [&arm, &command]() {
+      return j1_on_the_wire(*arm, command.at(0));
+  }));
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
+  // The controller moves J1: the new command goes out as is.
+  JointPositions moved{command};
+  moved.at(0) += ONE_DEG;
+  EXPECT_TRUE(write_until(*arm, moved, [&arm, &moved]() {
+      return j1_on_the_wire(*arm, moved.at(0));
+  }));
+  // Polls without a relief leave the last one for the plugin to read.
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
 }
