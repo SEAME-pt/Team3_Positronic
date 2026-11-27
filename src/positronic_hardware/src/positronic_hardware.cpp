@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -146,6 +147,11 @@ void log_fault(
     info.joints.at(check.joint).name.c_str(), check.value, check.value * RAD_TO_DEG,
     to_string(check.fault), limit.lower, limit.upper);
 }
+
+/// How far, in gripper units (0..100), a command after an activate may be from the value measured
+/// then and still not go out: the controller reads its hold after the plugin, and a settling
+/// servo can move one unit in between.
+constexpr int GRIPPER_HOLD_BAND{1};
 
 std::uint8_t to_gripper_value(double radians, double closed, double open)
 {
@@ -471,14 +477,8 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
-  while (has_gripper_ && !arm_->read_gripper().has_value()) {
-    if (std::chrono::steady_clock::now() >= deadline) {
-      RCLCPP_ERROR(
-        get_logger(), "The gripper did not answer within %d ms; not activating.",
-        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
-      return CallbackReturn::ERROR;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  if (!gripper_answered_by(deadline)) {
+    return CallbackReturn::ERROR;
   }
 
   // #35: never activate on a silent link; one that comes back before the deadline is waited for.
@@ -517,6 +517,10 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
+  // The controller's first commands hold the gripper where it is measured: on an object, that
+  // value as a target would end the squeeze. Nothing goes out until a command leaves the band.
+  const std::optional<std::uint8_t> gripper{has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  gripper_hold_.store(gripper.has_value() ? static_cast<int>(gripper.value()) : -1);
   for (const auto & [name, description] : joint_command_interfaces_) {
     set_command(name, get_state(name));
   }
@@ -822,7 +826,13 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
   arm_->write_angles(commands);
   if (gripper_read) {
-    arm_->write_gripper(to_gripper_value(gripper_target, gripper_closed_, gripper_open_));
+    const std::uint8_t value{to_gripper_value(gripper_target, gripper_closed_, gripper_open_)};
+    const int hold{gripper_hold_.load()};
+    if (hold >= 0 && std::abs(static_cast<int>(value) - hold) <= GRIPPER_HOLD_BAND) {
+      return return_type::OK;
+    }
+    gripper_hold_.store(-1);
+    arm_->write_gripper(value);
   }
   return return_type::OK;
 }
@@ -909,6 +919,28 @@ bool RobotSystem::link_alive_by(std::chrono::steady_clock::time_point deadline)
     if (std::chrono::steady_clock::now() >= deadline) {
       RCLCPP_ERROR(
         get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+bool RobotSystem::gripper_answered_by(std::chrono::steady_clock::time_point deadline)
+{
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (const std::optional<std::uint8_t> reply{arm_->gripper_reply_out_of_range()}) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "The arm answered %u to get_gripper_value (0x65): no gripper on the arm, but the URDF "
+        "has '%s'. Not activating.",
+        static_cast<unsigned>(reply.value()), info_.joints.at(NUM_JOINTS).name.c_str());
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
       return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{10});

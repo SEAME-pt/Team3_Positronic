@@ -207,6 +207,12 @@ public:
     return gripper_;
   }
 
+  /// The simulated gripper is always there.
+  [[nodiscard]] std::optional<std::uint8_t> gripper_reply_out_of_range() const override
+  {
+    return std::nullopt;
+  }
+
   /// INSTANT has nothing to interrupt. MEASURED stops every joint where it is. False after
   /// cut_link(): the stop never reaches the arm.
   [[nodiscard]] bool halt() override

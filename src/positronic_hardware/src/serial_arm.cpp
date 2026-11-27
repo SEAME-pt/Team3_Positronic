@@ -327,6 +327,15 @@ std::optional<std::uint8_t> SerialArm::read_gripper() const
   return *gripper_latest_.readFromRT();
 }
 
+std::optional<std::uint8_t> SerialArm::gripper_reply_out_of_range() const
+{
+  const int value{gripper_out_of_range_.load()};
+  if (value < 0) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint8_t>(value);
+}
+
 std::optional<ServoTemperatures> SerialArm::read_temperatures() const
 {
   return *temperatures_.readFromRT();
@@ -840,9 +849,19 @@ void SerialArm::gripper_turn()
     return;
   }
   last_gripper_read_ = now;
-  if (const std::optional<std::uint8_t> value{ask_gripper()}) {
-    gripper_latest_.writeFromNonRT(value);
+  const std::optional<std::uint8_t> value{ask_gripper()};
+  if (!value.has_value()) {
+    return;
   }
+  // Without servo 7 the Atom answers 255 (FE FE 03 65 FF FA, gripper off, 23 Nov 2026): no
+  // reading, and the last one is dropped, so the gripper is not reported where it no longer is.
+  if (value.value() > GRIPPER_OPEN_VALUE) {
+    gripper_out_of_range_.store(value.value());
+    gripper_latest_.writeFromNonRT(std::nullopt);
+    return;
+  }
+  gripper_out_of_range_.store(-1);
+  gripper_latest_.writeFromNonRT(value);
 }
 
 std::optional<std::uint8_t> SerialArm::ask_gripper()
