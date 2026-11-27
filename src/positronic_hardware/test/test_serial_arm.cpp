@@ -133,6 +133,10 @@
 //   The speed byte is the constructor's send_speed: check it on the wire at 50 and 70. The
 //   thread sends set_fresh_mode 1 right before every power_on and counts it; an arm that does
 //   not ack the 0x16 still gets its power_on, and the count says so.
+// Follow-up prompt (#133, review):
+//   A halt that lands during the fresh mode wait keeps the power off: no power_on frame, the
+//   stop goes out, power_on() is false. A power_on resent because the arm did not ack it sends
+//   its fresh mode once, and the next request its own.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -335,13 +339,13 @@ public:
     return sync_writes_sent_;
   }
 
-  /// An arm that never acknowledges a stop or power on (default: it does).
   /// #133: an arm that never acks set_fresh_mode (default: it does).
   void set_ack_fresh_mode(bool ack)
   {
     ack_fresh_mode_.store(ack);
   }
 
+  /// An arm that never acknowledges a stop or power on (default: it does).
   void set_ack_requests(bool ack)
   {
     ack_requests_.store(ack);
@@ -769,10 +773,71 @@ TEST(SerialArm, PowerOnStillGoesOutWhenFreshModeIsNotAcknowledged)
 
   const auto start{std::chrono::steady_clock::now()};
   EXPECT_TRUE(arm.power_on());
+  // Lower bound only: the thread waits the whole ACK_TIMEOUT for the missing ack, so it cannot
+  // be shorter. No upper bound: a loaded CI runner can stretch it.
   EXPECT_GE(std::chrono::steady_clock::now() - start, positronic_hardware::ACK_TIMEOUT);
   EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 1u);
   EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
   EXPECT_EQ(arm.fresh_mode_count().acked, 0u);
+}
+
+// #133: a halt that lands while the thread waits for the fresh mode ack wins: no power_on goes
+// out, the stop does, and power_on() reports false with the hold on.
+TEST(SerialArm, AHaltDuringTheFreshModeWaitKeepsThePowerOff)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_fresh_mode(false);  // the wait lasts the whole ACK_TIMEOUT (80 ms)
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  const std::vector<std::uint8_t> fresh_one{0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA};
+  auto powered{std::async(std::launch::async, [&arm] {
+        return arm.power_on();
+  })};
+  // Wait for the fresh mode frame on the wire, then halt inside the 80 ms wait for its ack. The
+  // check below does not depend on landing inside it: a halt after the power_on frame is caught
+  // by the existing restore of the hold, so only "no power_on frame" needs the window, and 1 ms
+  // polling leaves ~79 ms of it.
+  const auto deadline{std::chrono::steady_clock::now() + SerialArm::REQUEST_TIMEOUT};
+  bool fresh_sent{false};
+  while (!fresh_sent && std::chrono::steady_clock::now() < deadline) {
+    const auto frames{port.written()};
+    fresh_sent = std::find(frames.begin(), frames.end(), fresh_one) != frames.end();
+    if (!fresh_sent) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+  }
+  ASSERT_TRUE(fresh_sent);
+  arm.request_halt();
+
+  EXPECT_FALSE(powered.get());
+  const auto frames{port.written()};
+  EXPECT_TRUE(frames_with_id(frames, POWER_ON_ID).empty());
+  EXPECT_FALSE(frames_with_id(frames, STOP_ID).empty());
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+}
+
+// #133: a power_on the arm does not ack goes out again every turn, but its fresh mode only once;
+// the next power_on request gets its own.
+TEST(SerialArm, FreshModeGoesOutOncePerPowerOnRequestNotPerRetry)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_requests(false);
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  EXPECT_FALSE(arm.power_on());  // never acked: gives up at REQUEST_TIMEOUT, still pending
+  // A retry costs one ACK_TIMEOUT (80 ms) plus a turn, so REQUEST_TIMEOUT (300 ms) holds about
+  // three: asking for two leaves room for a slow runner.
+  EXPECT_GE(frames_with_id(port.written(), POWER_ON_ID).size(), 2u);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+
+  port.set_ack_requests(true);
+  ASSERT_TRUE(arm.halt());  // the stop replaces the pending power_on
+  ASSERT_TRUE(arm.power_on());
+  EXPECT_EQ(arm.fresh_mode_count().sent, 2u);
 }
 
 TEST(SerialArm, SkipsACommandItCannotEncode)

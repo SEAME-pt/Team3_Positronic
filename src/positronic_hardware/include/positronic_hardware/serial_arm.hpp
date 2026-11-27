@@ -485,6 +485,8 @@ private:
   // #133: set_fresh_mode frames sent and acknowledged. Written by the poll thread.
   std::atomic<std::uint64_t> fresh_mode_sent_{0};
   std::atomic<std::uint64_t> fresh_mode_acked_{0};
+  // #133: fresh mode already sent for the power_on request in flight. Poll thread only.
+  bool fresh_mode_done_{false};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   // When the guard last took a reading, from the poll or by asking: what period and max_age

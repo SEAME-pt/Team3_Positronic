@@ -402,6 +402,10 @@ bool SerialArm::request_and_wait(Pending request)
 void SerialArm::send_pending_request()
 {
   const Pending pending{request_.load()};
+  if (pending != Pending::POWER_ON) {
+    // No power_on in flight: the next one gets its own fresh mode.
+    fresh_mode_done_ = false;
+  }
   if (pending == Pending::NONE) {
     return;
   }
@@ -410,14 +414,22 @@ void SerialArm::send_pending_request()
     // sees the cut and returns false. The hold stays.
     Pending expected{pending};
     request_.compare_exchange_strong(expected, Pending::NONE);
+    fresh_mode_done_ = false;
     return;
   }
-  if (pending == Pending::POWER_ON) {
-    // #133 step zero: fresh mode 1 before the servos get torque, every time, so the arm streams
-    // whatever mode it woke up in. A missing ack is counted, not fatal (see requests.hpp).
+  if (pending == Pending::POWER_ON && !fresh_mode_done_) {
+    // #133 step zero: fresh mode 1 before the servos get torque, once per power_on request (a
+    // power_on the arm did not ack goes out again without it), so the arm streams whatever
+    // mode it woke up in. A missing ack is counted, not fatal (see requests.hpp).
     fresh_mode_sent_.fetch_add(1);
     if (perform(set_fresh_mode_request())) {
       fresh_mode_acked_.fetch_add(1);
+    }
+    fresh_mode_done_ = true;
+    if (request_.load() != Pending::POWER_ON) {
+      // A request_halt() landed during the fresh mode wait (up to ACK_TIMEOUT when the Atom does
+      // not ack it): no torque. The stop goes out next turn and power_on() reports false.
+      return;
     }
   }
   const Request request{pending == Pending::HALT ? stop_request() : power_on_request()};
@@ -433,6 +445,8 @@ void SerialArm::send_pending_request()
     // this store arriving late. Same rule as halt(), the state changes before the signal.
     halted_.store(false);
   }
+  // Taken: a later power_on request gets its own fresh mode.
+  fresh_mode_done_ = false;
   // Not a plain store: a request made after a timeout must not be erased by the late clear of
   // the one that went out.
   Pending expected{pending};
