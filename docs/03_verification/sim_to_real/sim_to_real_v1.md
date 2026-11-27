@@ -1,5 +1,8 @@
 # Sim-to-real report v1: one trajectory in Gazebo and on the real arm (#37)
 
+What simulation and the real arm share and where they differ:
+[diagram](../../02_architecture/diagrams/sim_vs_real.svg) (source: `sim_vs_real.drawio`).
+
 ## Verdict
 
 **The real arm follows the same trajectory within 3.6 deg of Gazebo on every joint**, RMS at

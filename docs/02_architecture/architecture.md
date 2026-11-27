@@ -20,6 +20,10 @@ Use these terms exactly, in docs, code comments and reviews.
 
 ## 2. Layers
 
+Our nodes in the layers of the Module 1 reference architecture (mission, ROS 2 middleware,
+hardware abstraction, real-time layer, sensors and actuators): [diagram](diagrams/layers.svg)
+(source: `diagrams/layers.drawio`). The table below is the earlier draft.
+
 ```
 +--------------------------------------------------------------+
 | L4  Code quality, measurement             (Block C)          |
@@ -50,6 +54,9 @@ Rules:
 What runs on the laptop and what runs on the Jetson (ADR 0003), and the topics, actions and services
 between them: [diagram](diagrams/nodes_and_topics.svg) (source: `diagrams/nodes_and_topics.drawio`).
 
+Lifecycle states of the hardware component and of the safety supervisor, with what triggers each
+transition: [diagram](diagrams/lifecycle.md).
+
 ## 5. QoS
 
 **TODO**: Nodes are not fully implemented yet, this part will be filled once the node architecture is better set up.
@@ -60,6 +67,9 @@ QoS will filled for the topics once we have working nodes. Can be checked using 
 |---|---|---|---|---|---|
 
 ## 6. Draft timing budget
+
+The path of a goal from MoveIt to the arm, with the times measured in #32, #33 and #39 on each
+step: [diagram](diagrams/goal_path.svg) (source: `diagrams/goal_path.drawio`).
 
 All numbers are **low-latency, soft-deadline** targets. Evidence is in `docs/03_verification/serial_measurement/docs/serial_link.md`.
 

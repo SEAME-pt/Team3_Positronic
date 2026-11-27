@@ -14,6 +14,9 @@ over-temperature).
 
 ## How it fits together
 
+The control loop and the serial thread, what each one owns, and the halt path:
+[diagram](../../docs/02_architecture/diagrams/driver_inside.svg) (source: `driver_inside.drawio`).
+
 ```
 controller_manager ── read() / write() ──> RobotSystem (plugin)
                                               │  read_angles(), write_angles(), has_sample():
