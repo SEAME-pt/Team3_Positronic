@@ -126,6 +126,10 @@ private:
   /// on_activate's wait for a link that died after the first reply (#35, #121): true once the
   /// arm answers again before `deadline`, false with one log line if it stays silent.
   bool link_alive_by(std::chrono::steady_clock::time_point deadline);
+  /// on_activate's wait for the first gripper reading, when the URDF has a gripper: true once
+  /// one comes before `deadline`. False, with one log line, if it does not, or at once if the
+  /// arm answers above GRIPPER_OPEN_VALUE (no gripper on the arm, #184).
+  bool gripper_answered_by(std::chrono::steady_clock::time_point deadline);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.

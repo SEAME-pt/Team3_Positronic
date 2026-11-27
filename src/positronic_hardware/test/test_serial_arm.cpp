@@ -1542,7 +1542,8 @@ TEST(SerialArmGripper, AReplyAbove100IsNoReading)
     port.set_gripper(reply);
     ASSERT_TRUE(wait_until([&arm, reply]() {
         return arm.gripper_reply_out_of_range() == std::optional<std::uint8_t>{reply};
-    })) << static_cast<int>(reply);
+    }))
+      << static_cast<int>(reply);
     EXPECT_FALSE(arm.read_gripper().has_value()) << static_cast<int>(reply);
   }
 

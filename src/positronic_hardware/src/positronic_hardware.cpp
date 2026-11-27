@@ -469,22 +469,8 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
-  while (has_gripper_ && !arm_->read_gripper().has_value()) {
-    if (const std::optional<std::uint8_t> reply{arm_->gripper_reply_out_of_range()}) {
-      RCLCPP_ERROR(
-        get_logger(),
-        "The arm answered %u to get_gripper_value (0x65): no gripper on the arm, but the URDF "
-        "has '%s'. Not activating.", static_cast<unsigned>(reply.value()),
-        info_.joints.at(NUM_JOINTS).name.c_str());
-      return CallbackReturn::ERROR;
-    }
-    if (std::chrono::steady_clock::now() >= deadline) {
-      RCLCPP_ERROR(
-        get_logger(), "The gripper did not answer within %d ms; not activating.",
-        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
-      return CallbackReturn::ERROR;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  if (!gripper_answered_by(deadline)) {
+    return CallbackReturn::ERROR;
   }
 
   // #35: never activate on a silent link; one that comes back before the deadline is waited for.
@@ -882,6 +868,28 @@ bool RobotSystem::link_alive_by(std::chrono::steady_clock::time_point deadline)
     if (std::chrono::steady_clock::now() >= deadline) {
       RCLCPP_ERROR(
         get_logger(), "The arm stopped answering on %s; not activating.", config_.port.c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
+bool RobotSystem::gripper_answered_by(std::chrono::steady_clock::time_point deadline)
+{
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (const std::optional<std::uint8_t> reply{arm_->gripper_reply_out_of_range()}) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "The arm answered %u to get_gripper_value (0x65): no gripper on the arm, but the URDF "
+        "has '%s'. Not activating.",
+        static_cast<unsigned>(reply.value()), info_.joints.at(NUM_JOINTS).name.c_str());
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
       return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds{10});

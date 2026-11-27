@@ -2166,7 +2166,8 @@ TEST_F(LoadRobotSystem, AfterActivateTheGripperHoldGoesOutOnlyWhenItLeavesTheMea
       go_to(
         lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
         hardware_interface::lifecycle_state_names::INACTIVE),
-      hardware_interface::return_type::OK) << round;
+      hardware_interface::return_type::OK)
+      << round;
   }
 
   resource_manager_.reset();
