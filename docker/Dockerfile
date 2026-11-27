@@ -54,8 +54,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Temporary: make build compiles positronic_mission on the Jetson,
 # which needs MoveIt's planning interface
-# The mission node never runs on the Jetson.
-# The proper fix is a COLCON_DEFAULTS_FILE that skips positronic_mission there,
+# The mission node never runs on the Jetson,
+# the proper fix is a COLCON_DEFAULTS_FILE that skips positronic_mission there,
 # after which this block goes.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ros-${ROS_DISTRO}-moveit-ros-planning-interface \
