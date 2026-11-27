@@ -157,8 +157,9 @@ public:
   static constexpr std::uint8_t MIN_SERVO_VOLTAGE{40};
   static constexpr std::uint8_t MAX_SERVO_VOLTAGE{130};
 
-  /// Speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on hardware).
-  static constexpr std::uint8_t SEND_SPEED{30};
+  /// Default speed byte of every send_angles (#32: 30 on hardware), a speed cap of 45 deg/s
+  /// (#133). The URDF sets another with send_speed.
+  static constexpr std::uint8_t DEFAULT_SEND_SPEED{30};
 
   /// How long a turn waits for the get_angles reply. A reply takes ~8 ms and arrives in a dozen
   /// small chunks behind servo-bus chatter, so the turn reads until the frame completes, not a
@@ -207,13 +208,15 @@ public:
   SerialArm(
     const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
     bool has_gripper = false,
-    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}});
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
     std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
     bool has_gripper = false,
-    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}});
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   ~SerialArm() override;
 
@@ -283,6 +286,8 @@ public:
   [[nodiscard]] std::uint64_t echo_timeouts() const override;
 
   [[nodiscard]] std::optional<ReliefEvent> last_load_relief() const override;
+  /// #133: the set_fresh_mode frames sent before a power_on, and how many the arm acknowledged.
+  [[nodiscard]] FreshModeCount fresh_mode_count() const override;
 
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -387,8 +392,10 @@ private:
 
   void poll_loop();
 
-  /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
-  static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
+  /// The send_angles frame for `target` at send_speed_, or nullopt when an angle is NaN or out
+  /// of range.
+  [[nodiscard]] std::optional<positronic_protocol::Frame> encode_command(
+    const JointPositions & target) const;
 
   bool request_and_wait(Pending request);
 
@@ -426,6 +433,8 @@ private:
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
   const TemperatureGuard guard_;
+  // The speed byte of every send_angles (#133), fixed for the life of the backend.
+  const std::uint8_t send_speed_;
   // Time since the last valid reply (#35). The poll thread feeds it; the plugin asks it.
   LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
@@ -473,6 +482,11 @@ private:
   LoadReliefCheck relief_;
   // Its last relief, for the plugin's log. Same rule as latest_.
   mutable realtime_tools::RealtimeBuffer<std::optional<ReliefEvent>> last_relief_{std::nullopt};
+  // #133: set_fresh_mode frames sent and acknowledged. Written by the poll thread.
+  std::atomic<std::uint64_t> fresh_mode_sent_{0};
+  std::atomic<std::uint64_t> fresh_mode_acked_{0};
+  // #133: fresh mode already sent for the power_on request in flight. Poll thread only.
+  bool fresh_mode_done_{false};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   // When the guard last took a reading, from the poll or by asking: what period and max_age

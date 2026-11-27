@@ -134,6 +134,9 @@ private:
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
 
+  /// on_activate's report after power_on (#133): the fresh mode frames sent and acknowledged.
+  void report_power_on() const;
+
   /// on_activate's temperature check, before the servos get torque: waits for the first reading
   /// and refuses an arm that was cut or is within ACTIVATE_COOLDOWN_C of the limit. False, with
   /// the reason logged, when activation must not go on.

@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "positronic_hardware/link_watchdog.hpp"
+#include "positronic_protocol/types.hpp"
 
 namespace positronic_hardware
 {
@@ -110,6 +111,13 @@ constexpr std::array NUMERIC_PARAMETERS{
     "supervisor_timeout_ms", 0, MAX_SUPERVISOR_TIMEOUT_MS, true,
     [](HardwareConfig & config, double value) {
       config.supervisor_timeout_ms = static_cast<int>(value);
+    }},
+  // #133: the speed byte of every send_angles, the protocol's whole range. Fixed while the
+  // driver runs: another speed is another launch.
+  NumericParameter{
+    "send_speed", positronic_protocol::MIN_SPEED, positronic_protocol::MAX_SPEED, true,
+    [](HardwareConfig & config, double value) {
+      config.send_speed = static_cast<int>(value);
     }},
 };
 
@@ -323,7 +331,7 @@ std::string describe(const HardwareConfig & config)
        << ", servo temperature limit " << config.servo_temp_limit_c << " degC, tracking error "
        << std::setprecision(1) << config.tracking_error_deg << " deg for "
        << config.tracking_error_ms << " ms, supervisor timeout " << config.supervisor_timeout_ms
-       << " ms, load relief " << relief << ".";
+       << " ms, load relief " << relief << ", send speed " << config.send_speed << ".";
   return line.str();
 }
 

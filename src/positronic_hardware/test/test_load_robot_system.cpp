@@ -139,6 +139,8 @@
 //   The status now also carries each servo's last temperature, key "temperature_c/<joint>",
 //   whole degC, for thermal_park.py. Test that the LINK_TIMEOUT status has the six, at the
 //   30 degC the pseudo-terminal arm answers.
+// Follow-up prompt (#133):
+//   send_speed loads at 50 and is refused at 0, 101, a fraction and NaN.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -967,7 +969,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50") +
+                         param("send_speed", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -998,6 +1001,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
     {"fake_mode", "slow"},              // only instant or measured (#122)
+    {"send_speed", "0"},                // #133: the protocol's speed is 1 to 100
+    {"send_speed", "101"},              // above the firmware maximum
+    {"send_speed", "30.5"},             // a whole byte only
+    {"send_speed", "nan"},              // from_chars reads it, the range check must not
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);

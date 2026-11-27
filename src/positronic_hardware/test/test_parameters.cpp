@@ -41,6 +41,9 @@
 // Follow-up prompt (#183):
 //   load_relief, 'true' or 'false', default true, reaches LoadReliefLimits::enabled; any other
 //   text is refused with the two values; the INFO line ends with "load relief on".
+// Follow-up prompt (#133):
+//   send_speed, the speed byte of every send_angles, 1 to 100, default 30: its field, both ends,
+//   0 and 101 refused, a fraction, NaN and infinity refused, and the INFO line prints it.
 
 #include <gtest/gtest.h>
 
@@ -98,6 +101,7 @@ TEST(Parameters, NothingSetGivesTheDefaults)
   EXPECT_EQ(config.supervisor_timeout_ms, defaults.supervisor_timeout_ms);
   EXPECT_EQ(defaults.supervisor_timeout_ms, 500);
   EXPECT_TRUE(config.relief.enabled);
+  EXPECT_EQ(config.send_speed, 30);
 }
 
 TEST(Parameters, EveryParameterReachesItsField)
@@ -115,7 +119,8 @@ TEST(Parameters, EveryParameterReachesItsField)
       {"tracking_error_deg", "6.5"},
       {"tracking_error_ms", "200"},
       {"supervisor_timeout_ms", "300"},
-      {"load_relief", "false"}})};
+      {"load_relief", "false"},
+      {"send_speed", "50"}})};
   ASSERT_TRUE(parsed.config.has_value()) << parsed.error;
   const HardwareConfig config{parsed.config.value_or(HardwareConfig{})};
   EXPECT_EQ(config.backend, Backend::FAKE);
@@ -131,6 +136,7 @@ TEST(Parameters, EveryParameterReachesItsField)
   EXPECT_EQ(config.tracking_error_ms, 200);
   EXPECT_EQ(config.supervisor_timeout_ms, 300);
   EXPECT_FALSE(config.relief.enabled);
+  EXPECT_EQ(config.send_speed, 50);
 }
 
 // The list in the message comes from the tables: a parameter added there shows up here.
@@ -140,7 +146,8 @@ TEST(Parameters, AnUnknownNameIsRefusedWithEveryKnownName)
     refusal("moving_period", "40"),
     "Unknown hardware parameter 'moving_period'. Known: backend, fake_mode, port, baud, "
     "velocity_filter_alpha, pose_from_poll, load_relief, moving_period_ms, echo_timeout_ms, "
-    "servo_temp_limit_c, tracking_error_deg, tracking_error_ms, supervisor_timeout_ms.");
+    "servo_temp_limit_c, tracking_error_deg, tracking_error_ms, supervisor_timeout_ms, "
+    "send_speed.");
 }
 
 // Every unknown name in one message, in alphabetical order: one run shows every typo.
@@ -211,6 +218,25 @@ TEST(Parameters, OneStepOutsideARangeIsRefusedWithTheRange)
   EXPECT_EQ(
     refusal("supervisor_timeout_ms", "5001"),
     "Parameter 'supervisor_timeout_ms' is '5001'; use a whole number in [0, 5000].");
+}
+
+// #133: the speed byte takes the protocol's whole range, and nothing outside it.
+TEST(Parameters, TheSendSpeedIsTheProtocolRange)
+{
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "1"}}));
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "70"}}));
+  EXPECT_TRUE(accepted(Parameters{{"send_speed", "100"}}));
+  EXPECT_EQ(
+    refusal("send_speed", "0"), "Parameter 'send_speed' is '0'; use a whole number in [1, 100].");
+  EXPECT_EQ(
+    refusal("send_speed", "101"),
+    "Parameter 'send_speed' is '101'; use a whole number in [1, 100].");
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "-30"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "30.5"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "nan"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "inf"}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", ""}}));
+  EXPECT_FALSE(accepted(Parameters{{"send_speed", "256"}}));
 }
 
 TEST(Parameters, AFractionWhereAWholeNumberIsExpectedIsRefused)
