@@ -43,6 +43,10 @@
 #   the camera launch.
 # Follow-up prompt (#183):
 #   load_relief is a driver argument too.
+#
+# Follow-up prompt (park at 63 degC):
+#   driver.launch.py starts thermal_park.py from positronic_bringup, under a condition, with
+#   thermal_park defaulting to true and park_warn_c, park_rearm_below_c to 63 and 60.
 
 """Check that the launch files of the real arm build their description."""
 
@@ -179,6 +183,22 @@ def test_driver_has_both_variants_of_what_start_inactive_changes():
     assert all(node.condition is not None for node in managers)
     assert len(spawners) == 3  # joint_state_broadcaster, and arm_controller twice
     assert sum(node.condition is not None for node in spawners) == 2
+
+
+def test_driver_starts_thermal_park_unless_asked():
+    """Check the park node: started by driver.launch.py, on by default, at 63 and 60 degC."""
+    nodes = [
+        entity
+        for entity in describe('driver.launch.py').entities
+        if isinstance(entity, Node) and entity.node_executable == 'thermal_park.py'
+    ]
+    assert len(nodes) == 1
+    assert nodes[0].node_package == 'positronic_bringup'
+    assert nodes[0].condition is not None
+    defaults = launch_defaults('driver.launch.py')
+    assert defaults['thermal_park'] == 'true'
+    assert defaults['park_warn_c'] == '63'
+    assert defaults['park_rearm_below_c'] == '60'
 
 
 def test_supervised_launch_starts_the_driver_and_the_supervisor():
