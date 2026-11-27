@@ -207,6 +207,11 @@ private:
   JointHandles gripper_handles_{};
   double gripper_previous_{0.0};
   bool gripper_previous_valid_{false};
+  /// The gripper value measured at the last activate, -1 once a command more than
+  /// GRIPPER_HOLD_BAND off it went out (or without a gripper). Until then write() sends the
+  /// gripper nothing: sending the measured value would end the grip (see the README, Gripper).
+  /// Atomic: on_activate and write() may run on different threads.
+  std::atomic<int> gripper_hold_{-1};
 
   /// The time of the supervisor's last heartbeat (#136), the same lock-free watchdog as the
   /// link's: the subscription callback writes it on an executor thread, read() reads it on the

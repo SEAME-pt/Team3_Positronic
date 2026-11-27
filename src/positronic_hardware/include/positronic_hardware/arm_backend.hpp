@@ -106,6 +106,11 @@ public:
 
   [[nodiscard]] virtual std::optional<std::uint8_t> read_gripper() const = 0;
 
+  /// The last get_gripper_value reply above GRIPPER_OPEN_VALUE, or nullopt when the last reply
+  /// was a reading. Such a reply is no reading: an arm without its gripper answers 255. Clears
+  /// at the next reading. Non-blocking, safe from the control loop.
+  [[nodiscard]] virtual std::optional<std::uint8_t> gripper_reply_out_of_range() const = 0;
+
   /// How long halt() and power_on() may wait for the arm to acknowledge their request. Part of
   /// the contract, so the plugin can log the deadline without knowing which backend it holds.
   static constexpr std::chrono::milliseconds REQUEST_TIMEOUT{300};
