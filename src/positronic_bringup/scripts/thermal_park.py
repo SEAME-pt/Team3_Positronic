@@ -15,6 +15,10 @@ trajectory on /arm_controller/joint_trajectory, slowly. J1 and J6 stay where the
 turning the base or the wrist does not change whether the folded arm stands on its own, and
 it keeps the move short.
 
+driver.launch.py starts it next to the driver (thermal_park:=false to leave it out), so every
+way of bringing the arm up, supervised.launch.py included, has it, on the same machine as the
+driver: no network between the temperatures and the park.
+
 No collision check: the trajectory goes joint by joint in a straight line, so keep the path
 to the rest pose clear. It skips MoveIt on purpose, for now: the workcell model of the
 planning scene refuses poses that are free on the real bench (START_STATE_IN_COLLISION).

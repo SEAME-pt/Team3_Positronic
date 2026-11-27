@@ -27,6 +27,11 @@
 #   On the real messages the trajectory test failed: rclpy gives float64[] fields as
 #   array.array('d'), which never equals a list. Compare them as lists.
 #
+# Follow-up prompt (node moved to positronic_bringup):
+#   The node and its tests now live in positronic_bringup, started by driver.launch.py. The
+#   SRDF stays in positronic_moveit_config: read it from the sibling package, and skip the
+#   pose check where that package is not in the tree.
+#
 # Follow-up prompt (review of the PR):
 #   park_targets() refuses a NaN or infinite position, on a moved joint and on a kept one;
 #   _park(), on a stand-in for the node, sends nothing without /joint_states or with a NaN in
@@ -47,7 +52,10 @@ import pytest
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(PKG, 'scripts', 'thermal_park.py')
-SRDF = os.path.join(PKG, 'config', 'positronic.srdf')
+# The rest pose is also a group_state of the MoveIt config, for RViz: a sibling package in the
+# repository, not built on the Jetson.
+SRDF = os.path.join(
+    os.path.dirname(PKG), 'positronic_moveit_config', 'config', 'positronic.srdf')
 
 
 def _load_script():
@@ -180,6 +188,7 @@ def test_arrived_needs_every_joint_within_the_tolerance():
     assert not MOD.arrived(current, targets, 0.07)
 
 
+@pytest.mark.skipif(not os.path.exists(SRDF), reason='positronic_moveit_config not here')
 def test_rest_positions_match_the_srdf_rest_state():
     root = ET.parse(SRDF).getroot()
     (rest,) = [s for s in root.findall('group_state') if s.get('name') == 'rest']
