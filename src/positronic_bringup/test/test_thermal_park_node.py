@@ -12,10 +12,13 @@
 #   (the publisher replaced by a recorder); without /joint_states nothing is published; a
 #   status from another hardware or a cool one parks nothing; at the rest pose the arrival
 #   check stops, and without a supervisor stop service it only warns; stop_after_park off
-#   returns at once. Every service name is unique to this process.
+#   calls no service. Every service name is unique to this process.
 #
 # Follow-up prompt (review of the PR):
 #   The node refuses a speed_rad_s outside (0, 0.26] and a warn_c at or above the driver cut.
+#
+# Follow-up prompt (second review):
+#   With stop_after_park off, check that no service call is made, not how long _stop() takes.
 
 """
 Drive the real ThermalPark node's callbacks, without spinning it.
@@ -26,7 +29,6 @@ messages built here. The trajectory publisher is replaced by a recorder, so noth
 
 import importlib.util
 import os
-import time
 from types import SimpleNamespace
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -127,11 +129,13 @@ def test_at_the_rest_pose_it_stops_and_warns_without_a_supervisor(make_node):
     assert node._targets is None
 
 
-def test_stop_after_park_off_returns_at_once(make_node):
+def test_stop_after_park_off_calls_no_service(make_node):
     node = make_node(stop_after_park='false')
-    start = time.monotonic()
+    calls = []
+    node._stop_client = SimpleNamespace(
+        service_is_ready=lambda: True, call_async=lambda request: calls.append(request))
     node._stop()
-    assert time.monotonic() - start < 0.5
+    assert calls == []
 
 
 @pytest.mark.parametrize('speed', ['0.0', '-0.1', '0.5'])
