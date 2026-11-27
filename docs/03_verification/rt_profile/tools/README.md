@@ -75,7 +75,7 @@ cycle stamps was not the loop.
 - `idle` and `load` only subscribe. No controller that can move the arm is spawned, so the arm
   cannot move during the two long runs.
 - `steps` moves **one joint**, by `DELTA_RAD` (0.0873 rad, 5 deg) and back, 20 times, at the
-  driver's fixed `SEND_SPEED` of 30. Bench clear, hand near the power switch. The runner prints
+  driver's default `send_speed` of 30. Bench clear, hand near the power switch. The runner prints
   a banner and a 5 s countdown before the first command, and `rt_record.py` commands the pose
   the arm was resting at as its last message, whatever the last step asked for.
 - `load` saturates every core for 2 minutes. The control loop is **not** running with real-time
