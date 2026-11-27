@@ -302,7 +302,7 @@ TEST(Parameters, TheInfoLineHasEveryValue)
     describe(HardwareConfig{}),
     "Backend 'serial', port /dev/ttyTHS1 at 1000000 baud, velocity filter alpha 0.300, moving "
     "period 33 ms, echo timeout 60 ms, pose from poll on, servo temperature limit 65 degC, "
-    "tracking error 8.0 deg for 300 ms, supervisor timeout 500 ms.");
+    "tracking error 8.0 deg for 300 ms, supervisor timeout 500 ms, load relief on, send speed 30.");
 }
 
 // #122: the fake backend says which mode it moves in; the instant one keeps the old line.
