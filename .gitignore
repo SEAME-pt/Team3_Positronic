@@ -54,6 +54,7 @@ venv/
 *.db3
 *.bag
 rosbag2_*/
+/bags/
 /runs/
 /datasets/
 /models/

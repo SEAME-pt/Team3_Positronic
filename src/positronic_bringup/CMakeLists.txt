@@ -25,6 +25,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_joint_states_rate_main test/test_joint_states_rate_main.py)
   # The wrist camera node: calibration file, rotation, messages, with a fake camera.
   ament_add_pytest_test(test_wrist_camera test/test_wrist_camera.py)
+  # The session recorder: topic list, folder name, session.txt, with a fake ros2 bag (#128).
+  ament_add_pytest_test(test_record_session test/test_record_session.py)
 endif()
 
 # Copy the folders to install/.
@@ -32,7 +34,7 @@ install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
 # Scripts go to lib/, where `ros2 run` looks for executables.
 install(PROGRAMS scripts/joint_states_delay.py scripts/joint_states_rate.py
-  scripts/wrist_camera.py
+  scripts/wrist_camera.py scripts/record_session.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

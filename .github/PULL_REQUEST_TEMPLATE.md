@@ -8,6 +8,7 @@ Commands or steps a reviewer can run.
 
 ## Evidence
 Measurements, plots, screenshots or logs that show it works.
+Arm session, recorded with `record_session.py`: `bags/<folder>` (or none)
 
 ## Safety impact
 none / motion / e-stop / limits / hardware. If not none, say what was checked.

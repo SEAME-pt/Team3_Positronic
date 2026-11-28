@@ -176,7 +176,7 @@ Optional body: why this change, not what (the diff shows what).
 | What changes | 2–5 bullets |
 | Why | The problem, plus `Closes #n` |
 | How to test | Exact commands a reviewer can copy, e.g. `make build && make test`, then `ros2 launch …` |
-| Evidence | Numbers, plots, screenshots or logs, e.g. `ros2 topic hz /joint_states: 50.1 Hz, max period 23 ms` |
+| Evidence | Numbers, plots, screenshots or logs, e.g. `ros2 topic hz /joint_states: 50.1 Hz, max period 23 ms`. A session on the real arm is recorded with `record_session.py` ([Recording a session](../src/positronic_bringup/README.md#recording-a-session)); give the session folder name in the PR |
 | Safety impact | `none` / `motion` / `e-stop` / `limits` / `hardware`. If it's not `none`, say what you checked and the safe state |
 | Checklist | Honest ticks. If you can't tick one, explain why |
 
