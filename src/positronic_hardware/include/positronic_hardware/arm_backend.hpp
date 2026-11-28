@@ -42,6 +42,18 @@ using ServoTemperatures = std::array<std::uint8_t, NUM_JOINTS>;
 inline constexpr std::uint8_t GRIPPER_CLOSED_VALUE{0};
 inline constexpr std::uint8_t GRIPPER_OPEN_VALUE{100};
 
+/// The pose of read_angles() together with how old it is (#120). ros2_control has no timestamp
+/// per sample: /joint_states carries the time read() ran, so this is how a reader learns when
+/// the arm measured the pose it publishes.
+struct PoseSample
+{
+  /// The same angles read_angles() returns, in radians.
+  JointPositions angles{};
+  /// Time from the arrival of the reply that carried `angles` to the call that returned them.
+  /// nullopt until the first reply: then `angles` is the placeholder pose, not a measurement.
+  std::optional<std::chrono::steady_clock::duration> age;
+};
+
 /// The servo that tripped the over-temperature cut, and the reading that did it.
 struct Overheat
 {
@@ -49,6 +61,30 @@ struct Overheat
   std::size_t joint{0};
   /// degC.
   int celsius{0};
+};
+
+/// #133: set_fresh_mode frames sent and acknowledged, see ArmBackend::fresh_mode_count().
+struct FreshModeCount
+{
+  std::uint64_t sent{0};
+  std::uint64_t acked{0};
+};
+
+/// A load relief (load_relief.hpp), with the values of the frame that decided it. `number`
+/// counts them from 1, so a reader that polls knows which ones it has already seen.
+struct ReliefEvent
+{
+  std::uint64_t number{0};
+  /// 0 for J1 ... 5 for J6.
+  std::size_t joint{0};
+  /// 0 to 1000, in 0.1 % of the drive, sign dropped.
+  int load{0};
+  /// The controller's command minus the measured position, radians.
+  double residual_rad{0.0};
+  /// The servo's temperature in the same frame, degC.
+  int celsius{0};
+  /// Where it stands is outside the URDF limits (#34): nothing sent, the joint left alone.
+  bool refused{false};
 };
 
 /// Where the driver reads the joint angles from and sends the targets to.
@@ -79,6 +115,11 @@ public:
   /// The latest known joint angles, in radians. Non-blocking, safe from the control loop.
   [[nodiscard]] virtual JointPositions read_angles() const = 0;
 
+  /// read_angles() and the age of that pose, taken together so both belong to the same reply
+  /// (#120): two separate calls could meet a new pose in between. Same contract as
+  /// read_angles(): non-blocking, safe from the control loop, never NaN in `angles`.
+  [[nodiscard]] virtual PoseSample read_pose() const = 0;
+
   /// The target joint angles, in radians. Safe from the control loop: the implementation only
   /// stores the newest command and never waits for the serial port here. A newer call
   /// replaces the previous command before it was sent. The plugin calls this only while
@@ -88,6 +129,11 @@ public:
   virtual void write_gripper(std::uint8_t value) = 0;
 
   [[nodiscard]] virtual std::optional<std::uint8_t> read_gripper() const = 0;
+
+  /// The last get_gripper_value reply above GRIPPER_OPEN_VALUE, or nullopt when the last reply
+  /// was a reading. Such a reply is no reading: an arm without its gripper answers 255. Clears
+  /// at the next reading. Non-blocking, safe from the control loop.
+  [[nodiscard]] virtual std::optional<std::uint8_t> gripper_reply_out_of_range() const = 0;
 
   /// How long halt() and power_on() may wait for the arm to acknowledge their request. Part of
   /// the contract, so the plugin can log the deadline without knowing which backend it holds.
@@ -149,6 +195,20 @@ public:
   /// no target from it, as with a target outside the arm's own joint limits (19 Nov 2026), or it
   /// answers in a way the driver does not know. Never decreases. Safe from the control loop.
   [[nodiscard]] virtual std::uint64_t echo_timeouts() const = 0;
+
+  /// #133: the set_fresh_mode frames sent before a power_on since the backend started, and how
+  /// many the arm acknowledged. Zero for a backend without fresh mode.
+  [[nodiscard]] virtual FreshModeCount fresh_mode_count() const
+  {
+    return {};
+  }
+
+  /// The last load relief (#183); nullopt before the first, and from a backend without one.
+  /// Safe from the control loop.
+  [[nodiscard]] virtual std::optional<ReliefEvent> last_load_relief() const
+  {
+    return std::nullopt;
+  }
 };
 
 }  // namespace positronic_hardware

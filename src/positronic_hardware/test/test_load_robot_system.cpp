@@ -123,12 +123,25 @@
 //   The supervisor now beats only from its resume on, so the first heartbeat reaches the driver
 //   while on_activate already waits. Test that a heartbeat that starts after activate() was
 //   called still activates.
+// Follow-up prompt (#120):
+//   The driver gpio may also declare driver/pose_age_s, the age in seconds of the pose read()
+//   publishes, NaN until the first pose. FAULT_GPIO now declares it, as the xacro does. Test:
+//   it is exported; it is NaN after configure and 0 after a read on the fake arm; a URDF
+//   without it still loads and runs, with no such interface; on the pseudo-terminal arm it is
+//   finite and small while the arm answers, and well past a turn once the arm goes quiet.
 // Follow-up prompt (#121):
 //   With an executor in the resource manager params, as the controller manager gives it, the
 //   component gets a node and publishes its fault on /diagnostics. With the once-a-second status
 //   set to an hour, so a status that comes is a change: a silent arm gives ERROR LINK_TIMEOUT
 //   with its reason at once, and an activate right after the arm answers again brings OK back:
 //   activate waits for the link to come back, as for the first reply, instead of refusing.
+// Follow-up prompt (gripper: keep the grip through a resume, recognise an arm without it):
+//   With the gripper in the URDF, an arm that answers 255 to get_gripper_value is not activated
+//   (no power_on, refused before the wait runs out). After an activate, and again after a
+//   deactivate and an activate, commands at the measured gripper value or one unit off it send
+//   no set_gripper_value; a command two units off sends one.
+// Follow-up prompt (#133):
+//   send_speed loads at 50 and is refused at 0, 101, a fraction and NaN.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -197,8 +210,12 @@ constexpr std::string_view VELOCITY{"<state_interface name=\"velocity\"/>"};
 constexpr std::string_view COMMAND{"<command_interface name=\"position\"/>"};
 /// ros2_control's clamping limiter off, as in positronic_real.urdf.xacro (#34).
 constexpr std::string_view LIMITS_OFF{"<limits enable=\"false\"/>"};
-/// The fault <gpio> the supervisor reads (#35), exactly as in positronic_real.urdf.xacro.
-constexpr std::string_view FAULT_GPIO{
+/// The driver <gpio>, exactly as in positronic_real.urdf.xacro: the fault the supervisor reads
+/// (#35) and the age of the pose (#120).
+constexpr std::string_view FAULT_GPIO{R"(<gpio name="driver"><state_interface name="fault_code"/>)"
+  R"(<state_interface name="pose_age_s"/></gpio>)"};
+/// The driver <gpio> as before #120: the fault alone. The pose age is optional.
+constexpr std::string_view FAULT_ONLY_GPIO{
   R"(<gpio name="driver"><state_interface name="fault_code"/></gpio>)"};
 /// The values of FaultCode the supervisor relies on: written out here, not taken from the
 /// header, so the test fails if someone renumbers them.
@@ -474,6 +491,18 @@ public:
     silent_after_power_off_.store(silent);
   }
 
+  /// What the arm answers to get_gripper_value (0x65) from now on, -1 for nothing (default).
+  void set_gripper(int value)
+  {
+    gripper_.store(value);
+  }
+
+  /// How many set_gripper_value frames (FE FE 04 67 ...) arrived since this arm started.
+  std::size_t received_gripper_sets()
+  {
+    return count_frames(7, 0x67);
+  }
+
   /// Every byte the driver wrote to the arm so far.
   std::vector<std::uint8_t> received()
   {
@@ -531,6 +560,13 @@ private:
       }
       return;
     }
+    if (id == 0x65) {
+      const int gripper{gripper_.load()};
+      if (gripper >= 0) {
+        put(controller, {0xFE, 0xFE, 0x03, 0x65, static_cast<std::uint8_t>(gripper), 0xFA});
+      }
+      return;
+    }
     if (id == 0x20) {
       put(controller, poll);
       put(controller, {RECORDED_REPLY.begin(), RECORDED_REPLY.end()});
@@ -575,6 +611,7 @@ private:
   std::atomic<bool> silent_after_power_off_{false};
   std::atomic<bool> powered_off_{false};
   std::atomic<std::uint8_t> celsius_{30};
+  std::atomic<int> gripper_{-1};
   std::atomic<bool> stop_{false};
   std::atomic<bool> ack_requests_{true};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
@@ -879,18 +916,19 @@ TEST_F(LoadRobotSystem, InitSucceedsWithSixPositionJoints)
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }
 
-TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesAndTheFaultCode)
+TEST_F(LoadRobotSystem, ExportsTheTwelveJointStatesTheFaultCodeAndThePoseAge)
 {
   auto & resource_manager{load(urdf_with(all_good_joints()))};
   ASSERT_TRUE(loaded_);
 
   std::vector<std::string> expected;
-  expected.reserve(2 * JOINTS.size() + 1);
+  expected.reserve(2 * JOINTS.size() + 2);
   for (const auto & joint : JOINTS) {
     expected.push_back(joint + "/position");
     expected.push_back(joint + "/velocity");
   }
   expected.emplace_back("driver/fault_code");
+  expected.emplace_back("driver/pose_age_s");
   auto keys{resource_manager.state_interface_keys()};
   std::sort(keys.begin(), keys.end());
   std::sort(expected.begin(), expected.end());
@@ -951,7 +989,8 @@ TEST_F(LoadRobotSystem, InitAcceptsEveryParameter)
     all_good_joints(), std::string{FAKE_BACKEND} + param("port", "/dev/ttyUSB0") +
                          param("baud", "115200") + param("velocity_filter_alpha", "0.5") +
                          param("moving_period_ms", "40") + param("echo_timeout_ms", "45") +
-                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50")));
+                         param("pose_from_poll", "false") + param("servo_temp_limit_c", "50") +
+                         param("send_speed", "50")));
 
   EXPECT_TRUE(loaded_);
   EXPECT_EQ(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -982,6 +1021,10 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
     {"fake_mode", "slow"},              // only instant or measured (#122)
+    {"send_speed", "0"},                // #133: the protocol's speed is 1 to 100
+    {"send_speed", "101"},              // above the firmware maximum
+    {"send_speed", "30.5"},             // a whole byte only
+    {"send_speed", "nan"},              // from_chars reads it, the range check must not
   };
   for (const auto & [name, value] : bad) {
     SCOPED_TRACE(::testing::Message{} << name << "=" << value);
@@ -1619,6 +1662,66 @@ TEST_F(LoadRobotSystem, FaultCodeIsZeroWhileTheLinkIsAlive)
   EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
 }
 
+// #120: the fake pose is computed at the read() that publishes it, so its age is 0, and NaN
+// ("unknown") before any read, like the joints.
+TEST_F(LoadRobotSystem, PoseAgeIsUnknownAfterConfigureAndZeroOnTheFakeArm)
+{
+  load(urdf_with(all_good_joints()));
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  EXPECT_TRUE(std::isnan(state("driver", "pose_age_s").value_or(0.0)));
+
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "pose_age_s").value_or(std::nan("")), 0.0);
+}
+
+// #120: the pose age is optional. A URDF without it, as before, loads and runs, and the plugin
+// exports no such interface.
+TEST_F(LoadRobotSystem, RunsWithoutThePoseAge)
+{
+  auto & resource_manager{
+    load(urdf_with(all_good_joints(), FAKE_BACKEND, read_description(), FAULT_ONLY_GPIO))};
+  ASSERT_TRUE(loaded_);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("driver", "fault_code").value_or(std::nan("")), NO_FAULT);
+  const auto keys{resource_manager.state_interface_keys()};
+  EXPECT_EQ(std::count(keys.begin(), keys.end(), "driver/pose_age_s"), 0);
+}
+
+// #120, end to end on the pseudo-terminal arm. While it answers, a reply comes every turn (10 ms
+// at rest), so the pose read() publishes is young. Once the arm is quiet, the pose stays the last
+// one and its age grows with the silence; the link fault does not reset it. One bound splits the
+// two, half the silence: far above a turn, so a loaded CI runner stays under it while the arm
+// answers, and far below the silence, so a reply still on the line at the cut stays over it.
+TEST_F(LoadRobotSystem, PoseAgeIsSmallWhileTheArmAnswersAndGrowsWhenItGoesQuiet)
+{
+  constexpr std::chrono::milliseconds QUIET_FOR{300};
+  const double split_s{std::chrono::duration<double>{QUIET_FOR}.count() / 2.0};
+  ASSERT_TRUE(load_on_pseudo_terminal());
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  ASSERT_EQ(configure(), hardware_interface::return_type::OK);
+  ASSERT_EQ(activate(), hardware_interface::return_type::OK);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const double alive{state("driver", "pose_age_s").value_or(std::nan(""))};
+  EXPECT_TRUE(std::isfinite(alive));
+  EXPECT_GE(alive, 0.0);
+  EXPECT_LT(alive, split_s);
+
+  arm.reset();
+  std::this_thread::sleep_for(QUIET_FOR);
+  ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
+  const double quiet{state("driver", "pose_age_s").value_or(std::nan(""))};
+  EXPECT_GE(quiet, split_s);
+  EXPECT_GT(quiet, alive);
+
+  resource_manager_.reset();
+  ::close(controller_);
+}
+
 TEST_F(LoadRobotSystem, DeactivateFailsWhenTheArmDoesNotAcknowledgeTheStop)
 {
   // #103. The arm answers poses but never acknowledges the stop: the line is alive and the
@@ -1994,6 +2097,89 @@ TEST_F(LoadRobotSystem, ActivateFailsWhenTheGripperNeverAnswers)
   resource_manager_.reset();
   arm.reset();
   ::close(controller);
+}
+
+namespace
+{
+
+/// The radians a controller writes for gripper value `value` (0 closed .. 100 open).
+double gripper_radians(int value)
+{
+  return GRIPPER_CLOSED + value / 100.0 * (GRIPPER_OPEN - GRIPPER_CLOSED);
+}
+
+/// How long the serial thread gets to send a set_gripper_value that is due: it serves the
+/// gripper after a get_angles reply, every 20 to 40 ms, so 300 ms is several turns.
+constexpr std::chrono::milliseconds GRIPPER_TURNS{300};
+
+}  // namespace
+
+TEST_F(LoadRobotSystem, ActivateRefusesAnArmThatAnswers255ForTheGripper)
+{
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  arm->set_gripper(255);
+
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
+  EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
+  // Refused on the 255, not after the wait for an answer runs out (FIRST_SAMPLE_TIMEOUT, 2 s).
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds{1500});
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
+}
+
+TEST_F(LoadRobotSystem, AfterActivateTheGripperHoldGoesOutOnlyWhenItLeavesTheMeasuredValue)
+{
+  constexpr int MEASURED{30};  // fingers stopped on an object, target still closed
+  std::array<char, 128> port{};
+  controller_ = open_pseudo_terminal(port);
+  ASSERT_GE(controller_, 0);
+  auto arm{std::make_unique<ReplyingArm>(controller_)};
+  arm->set_gripper(MEASURED);
+  load(urdf_with(
+    all_good_joints() + good_joint(GRIPPER),
+    param("backend", "serial") + param("port", port.data()), read_gripper_description()));
+  ASSERT_TRUE(loaded_);
+
+  // Twice: the first activate, then a halt and a resume (deactivate, activate).
+  for (int round{0}; round < 2; ++round) {
+    ASSERT_EQ(activate(), hardware_interface::return_type::OK) << round;
+    const std::size_t before{arm->received_gripper_sets()};
+    // The controller's hold: the measured value, or one unit off it.
+    for (const int value : {MEASURED, MEASURED - 1, MEASURED + 1, MEASURED}) {
+      ASSERT_TRUE(command(GRIPPER, gripper_radians(value)));
+      ASSERT_TRUE(cycles(2)) << round << " " << value;
+    }
+    std::this_thread::sleep_for(GRIPPER_TURNS);
+    EXPECT_EQ(arm->received_gripper_sets(), before) << round;
+
+    // A new goal, two units off: it goes out, once.
+    ASSERT_TRUE(command(GRIPPER, gripper_radians(MEASURED - 2)));
+    ASSERT_TRUE(cycles(2)) << round;
+    std::this_thread::sleep_for(GRIPPER_TURNS);
+    EXPECT_EQ(arm->received_gripper_sets(), before + 1) << round;
+
+    ASSERT_EQ(
+      go_to(
+        lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE,
+        hardware_interface::lifecycle_state_names::INACTIVE),
+      hardware_interface::return_type::OK)
+      << round;
+  }
+
+  resource_manager_.reset();
+  arm.reset();
+  ::close(controller_);
 }
 
 // #136, the dead-man check. The tests sleep because the plugin reads the real clock; the exact

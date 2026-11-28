@@ -60,6 +60,9 @@ enum class FakeMode : std::uint8_t
 ///   So at rest every joint reads that far off its command, even one never commanded to move.
 /// It only reads the time through `now`, so a test sets the time and never sleeps.
 ///
+/// read_pose() reports age 0 in both modes (#120): there is no serial turn between a
+/// measurement and the read() that publishes it.
+///
 /// cut_link() is a test hook for a link that goes silent (#122), in either mode: see there.
 class FakeArm : public ArmBackend
 {
@@ -147,6 +150,14 @@ public:
     return angles;
   }
 
+  /// read_angles() with age 0 (#120): the fake pose is computed at the call, so it is never
+  /// older than the read() that publishes it. After cut_link() too: the age stays 0 although
+  /// the pose is frozen, link_timed_out() is what reports the silence.
+  [[nodiscard]] PoseSample read_pose() const override
+  {
+    return PoseSample{read_angles(), Clock::duration::zero()};
+  }
+
   /// Where the joints will be. In MEASURED mode a joint whose target is NaN or infinite keeps
   /// going to its previous one: the plugin refuses such a target before it gets here (#34), and
   /// a pose that turned NaN would never recover.
@@ -194,6 +205,12 @@ public:
   [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override
   {
     return gripper_;
+  }
+
+  /// The simulated gripper is always there.
+  [[nodiscard]] std::optional<std::uint8_t> gripper_reply_out_of_range() const override
+  {
+    return std::nullopt;
   }
 
   /// INSTANT has nothing to interrupt. MEASURED stops every joint where it is. False after

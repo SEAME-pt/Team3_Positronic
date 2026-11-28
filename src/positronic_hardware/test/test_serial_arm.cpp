@@ -115,6 +115,31 @@
 //   wait for the stored last target; a stale timeout over max_age where the requests are the
 //   only readings; check the fallback within two periods of the send and the off-poll pose
 //   10 ms after the sync-write; drop the tests whose mutants others kill.
+// Follow-up prompt (#120):
+//   read_pose() returns the pose of read_angles() with the time since the thread decoded the
+//   reply that carried it, nullopt before the first one. With ScriptedArm, which now can lose
+//   its get_angles replies and records when it hands each one out, check: no age before the
+//   first reply; replies at known times give the age since the last one, within the decode
+//   margin; lost replies make the age grow by the time that passed and keep the pose; the next
+//   reply brings it back down to the time since that reply. With the pose from the poll, the
+//   age counts from the sync-write that closed the poll.
+// Follow-up prompt (#120, CI):
+//   The checks failed on a loaded CI runner: they assumed the thread decodes a reply within
+//   15 ms. Make them independent of how fast the thread runs: wait for the thread to write a
+//   frame after the last reply (it publishes before it writes), bound the age only from above by
+//   the time since the reply went out, and prove growth and drop by comparing two reads of the
+//   same reply, or the age against the time since a newer reply.
+// Follow-up prompt (gripper: keep the grip through a resume, recognise an arm without it):
+//   An arm without its gripper answers get_gripper_value with 255. Check: a reply above 100
+//   (101, 255) is no reading and drops the last one, 100 still is, and a reading again clears it.
+// Follow-up prompt (#133):
+//   The speed byte is the constructor's send_speed: check it on the wire at 50 and 70. The
+//   thread sends set_fresh_mode 1 right before every power_on and counts it; an arm that does
+//   not ack the 0x16 still gets its power_on, and the count says so.
+// Follow-up prompt (#133, review):
+//   A halt that lands during the fresh mode wait keeps the power off: no power_on frame, the
+//   stop goes out, power_on() is false. A power_on resent because the arm did not ack it sends
+//   its fresh mode once, and the next request its own.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -156,6 +181,8 @@ using positronic_hardware::SerialArm;
 using positronic_hardware::SerialTransport;
 
 constexpr std::uint8_t STOP_ID{static_cast<std::uint8_t>(positronic_protocol::CommandId::STOP)};
+constexpr std::uint8_t FRESH_MODE_ID{
+  static_cast<std::uint8_t>(positronic_protocol::CommandId::SET_FRESH_MODE)};
 constexpr std::uint8_t POWER_ON_ID{
   static_cast<std::uint8_t>(positronic_protocol::CommandId::POWER_ON)};
 constexpr std::uint8_t POWER_OFF_ID{
@@ -248,6 +275,11 @@ public:
         // the next send (#170).
         queued_.push_back({now, {0xFE, 0xFE, 0x08, 0xE5, 31, 33, 35, 30, 29, 28, 0xFA}, true});
       }
+    } else if (count == 6 && *std::next(data, 3) == FRESH_MODE_ID) {
+      // #133: set_fresh_mode. Whether the Atom acks it is open; ack_fresh_mode_ picks.
+      if (ack_fresh_mode_.load()) {
+        queued_.push_back({now, {0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA}, true});
+      }
     } else if (count == 18 && *std::next(data, 3) == 0x22) {
       // A send_angles: the ack at once, the sync-write to the servos ~20 ms later, with the
       // poses still flowing in between. The serial thread waits for the sync-write (#150);
@@ -308,6 +340,12 @@ public:
   {
     const std::lock_guard<std::mutex> lock{mutex_};
     return sync_writes_sent_;
+  }
+
+  /// #133: an arm that never acks set_fresh_mode (default: it does).
+  void set_ack_fresh_mode(bool ack)
+  {
+    ack_fresh_mode_.store(ack);
   }
 
   /// An arm that never acknowledges a stop or power on (default: it does).
@@ -412,6 +450,7 @@ private:
   std::atomic<bool> ack_requests_{true};
   std::atomic<bool> ack_power_off_{true};
   std::size_t written_while_busy_{0};
+  std::atomic<bool> ack_fresh_mode_{true};
   std::atomic<std::chrono::milliseconds> ack_delay_{std::chrono::milliseconds{0}};
   std::atomic<std::chrono::milliseconds> angles_delay_{std::chrono::milliseconds{0}};
   std::atomic<bool> answer_gripper_{false};
@@ -663,7 +702,7 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
     0x00,
     0x00,
     0x00,
-    SerialArm::SEND_SPEED,
+    SerialArm::DEFAULT_SEND_SPEED,
     0xFA};
   EXPECT_EQ(sends.front(), expected);
 
@@ -674,6 +713,135 @@ TEST(SerialArm, SendsTheCommandOnceAsASendAnglesFrame)
   // A new command goes out once more.
   arm.write_angles(JointPositions{0.2, 0.0, 0.0, 0.0, 0.0, 0.0});
   EXPECT_EQ(wait_for_sends(port, 2).size(), 2u);
+}
+
+// #133: the speed byte, second to last, is the one the backend was built with.
+TEST(SerialArm, TheSendSpeedIsTheByteOnTheWire)
+{
+  for (const std::uint8_t speed : {std::uint8_t{50}, std::uint8_t{70}}) {
+    auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+    ReplayTransport & port{*transport};
+    SerialArm arm{
+      std::move(transport),
+      SerialArm::Timing{},
+      positronic_hardware::TemperatureGuard{},
+      false,
+      positronic_hardware::LoadReliefCheck{
+        positronic_hardware::LoadReliefLimits{false}, positronic_hardware::PositionLimits{}},
+      speed};
+    arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+    const auto sends{wait_for_sends(port, 1)};
+    ASSERT_EQ(sends.size(), 1u) << "speed " << int{speed};
+    ASSERT_EQ(sends.front().size(), 18u);
+    EXPECT_EQ(sends.front().at(16), speed);
+  }
+}
+
+// #133 step zero: fresh mode 1 goes out right before every power_on, nothing between them.
+TEST(SerialArm, FreshModeOneGoesOutRightBeforeEveryPowerOn)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+
+  ASSERT_TRUE(arm.power_on());
+  ASSERT_TRUE(arm.halt());
+  ASSERT_TRUE(arm.power_on());
+
+  const std::vector<std::uint8_t> fresh_one{0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA};
+  const auto frames{port.written()};
+  std::size_t power_ons{0};
+  for (std::size_t i{0}; i < frames.size(); ++i) {
+    if (frames.at(i).size() == 5 && frames.at(i).at(3) == POWER_ON_ID) {
+      ++power_ons;
+      ASSERT_GT(i, 0u);
+      EXPECT_EQ(frames.at(i - 1), fresh_one) << "power_on " << power_ons;
+    }
+  }
+  EXPECT_EQ(power_ons, 2u);
+  EXPECT_EQ(std::count(frames.begin(), frames.end(), fresh_one), 2);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 2u);
+  EXPECT_EQ(arm.fresh_mode_count().acked, 2u);
+}
+
+// #133: an Atom that does not ack 0x16 costs the power_on one ACK_TIMEOUT, not the activation.
+TEST(SerialArm, PowerOnStillGoesOutWhenFreshModeIsNotAcknowledged)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_fresh_mode(false);
+  SerialArm arm{std::move(transport)};
+  wait_for_reply(arm);
+
+  const auto start{std::chrono::steady_clock::now()};
+  EXPECT_TRUE(arm.power_on());
+  // Lower bound only: the thread waits the whole ACK_TIMEOUT for the missing ack, so it cannot
+  // be shorter. No upper bound: a loaded CI runner can stretch it.
+  EXPECT_GE(std::chrono::steady_clock::now() - start, positronic_hardware::ACK_TIMEOUT);
+  EXPECT_EQ(frames_with_id(port.written(), POWER_ON_ID).size(), 1u);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+  EXPECT_EQ(arm.fresh_mode_count().acked, 0u);
+}
+
+// #133: a halt that lands while the thread waits for the fresh mode ack wins: no power_on goes
+// out, the stop does, and power_on() reports false with the hold on.
+TEST(SerialArm, AHaltDuringTheFreshModeWaitKeepsThePowerOff)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_fresh_mode(false);  // the wait lasts the whole ACK_TIMEOUT (80 ms)
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  const std::vector<std::uint8_t> fresh_one{0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA};
+  auto powered{std::async(std::launch::async, [&arm] {
+        return arm.power_on();
+  })};
+  // Wait for the fresh mode frame on the wire, then halt inside the 80 ms wait for its ack.
+  // power_on() false and the stop would hold even after that window (the restore of the hold
+  // catches a later halt); "no power_on frame" is the one check that needs the halt inside it,
+  // and 1 ms polling leaves ~79 ms of margin. Repeated 30 times on a fully loaded machine: no
+  // miss.
+  const auto deadline{std::chrono::steady_clock::now() + SerialArm::REQUEST_TIMEOUT};
+  bool fresh_sent{false};
+  while (!fresh_sent && std::chrono::steady_clock::now() < deadline) {
+    const auto frames{port.written()};
+    fresh_sent = std::find(frames.begin(), frames.end(), fresh_one) != frames.end();
+    if (!fresh_sent) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+  }
+  ASSERT_TRUE(fresh_sent);
+  arm.request_halt();
+
+  EXPECT_FALSE(powered.get());
+  const auto frames{port.written()};
+  EXPECT_TRUE(frames_with_id(frames, POWER_ON_ID).empty());
+  EXPECT_FALSE(frames_with_id(frames, STOP_ID).empty());
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+}
+
+// #133: a power_on the arm does not ack goes out again every turn, but its fresh mode only once;
+// the next power_on request gets its own.
+TEST(SerialArm, FreshModeGoesOutOncePerPowerOnRequestNotPerRetry)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_ack_requests(false);
+  SerialArm arm{std::move(transport)};
+  static_cast<void>(wait_for_reply(arm));
+
+  EXPECT_FALSE(arm.power_on());  // never acked: gives up at REQUEST_TIMEOUT, still pending
+  // A retry costs one ACK_TIMEOUT (80 ms) plus a turn, so REQUEST_TIMEOUT (300 ms) holds about
+  // three: asking for two leaves room for a slow runner.
+  EXPECT_GE(frames_with_id(port.written(), POWER_ON_ID).size(), 2u);
+  EXPECT_EQ(arm.fresh_mode_count().sent, 1u);
+
+  port.set_ack_requests(true);
+  ASSERT_TRUE(arm.halt());  // the stop replaces the pending power_on
+  ASSERT_TRUE(arm.power_on());
+  EXPECT_EQ(arm.fresh_mode_count().sent, 2u);
 }
 
 TEST(SerialArm, SkipsACommandItCannotEncode)
@@ -1145,9 +1313,13 @@ public:
     written_.emplace_back(data, std::next(data, static_cast<std::ptrdiff_t>(count)));
     const std::uint8_t id{count == 5 ? *std::next(data, 3) : std::uint8_t{0}};
     if (id == GET_ANGLES_ID) {
+      if (!answer_angles_) {
+        return true;  // a lost reply (#120): the request went out, nothing comes back
+      }
       for (const auto & burst : recorded_bursts()) {
         pending_.insert(pending_.end(), burst.begin(), burst.end());
       }
+      angles_pending_ = true;
     } else if (id == TEMPS_ID && answer_temperatures_) {
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x08, 0xE5});
       pending_.insert(pending_.end(), temperatures_.begin(), temperatures_.end());
@@ -1156,6 +1328,8 @@ public:
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, id, 0x01, 0xFA});
     } else if (id == GET_GRIPPER_ID) {
       pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, GET_GRIPPER_ID, gripper_, 0xFA});
+    } else if (count == 6 && *std::next(data, 3) == FRESH_MODE_ID) {
+      pending_.insert(pending_.end(), {0xFE, 0xFE, 0x03, FRESH_MODE_ID, 0x01, 0xFA});
     }
     return true;
   }
@@ -1172,7 +1346,36 @@ public:
     const std::size_t n{std::min(max, pending_.size())};
     std::copy_n(pending_.begin(), n, dst);
     pending_.erase(pending_.begin(), std::next(pending_.begin(), static_cast<std::ptrdiff_t>(n)));
+    // The get_angles reply is complete once nothing of it is left to hand out (#120).
+    if (angles_pending_ && pending_.empty()) {
+      angles_pending_ = false;
+      angles_handed_.push_back(std::chrono::steady_clock::now());
+      written_at_handed_ = written_.size();
+    }
     return n;
+  }
+
+  /// An arm whose get_angles replies are lost while `answer` is false (default: it answers).
+  void set_answer_angles(bool answer)
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    answer_angles_ = answer;
+  }
+
+  /// When read() handed out the last byte of each get_angles reply, oldest first (#120).
+  std::vector<std::chrono::steady_clock::time_point> angles_handed()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return angles_handed_;
+  }
+
+  /// True once the last get_angles reply is out and the thread has written a frame since (#120).
+  /// The thread publishes a reply before it writes anything else, so the pose is in the buffer:
+  /// a test waits on this instead of a time that a loaded machine can overrun.
+  bool last_reply_published()
+  {
+    const std::lock_guard<std::mutex> lock{mutex_};
+    return !angles_pending_ && !angles_handed_.empty() && written_.size() > written_at_handed_;
   }
 
   void set_temperatures(const ServoTemperatures & temperatures)
@@ -1199,6 +1402,10 @@ private:
   std::vector<std::uint8_t> pending_;
   ServoTemperatures temperatures_{COOL};
   bool answer_temperatures_{true};
+  bool answer_angles_{true};
+  bool angles_pending_{false};
+  std::vector<std::chrono::steady_clock::time_point> angles_handed_;
+  std::size_t written_at_handed_{0};
   std::uint8_t gripper_{100};
   std::mutex mutex_;
 };
@@ -1468,6 +1675,37 @@ TEST(SerialArmGripper, ReadsTheGripperWhileIdle)
       EXPECT_EQ(request_id(frames[i - 1]), GET_ANGLES_ID) << i;
     }
   }
+}
+
+TEST(SerialArmGripper, AReplyAbove100IsNoReading)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  port.set_gripper(100);
+  const SerialArm arm{std::move(transport), SerialArm::Timing{}, fast_guard(), true};
+
+  // 100, fully open, is the last reading.
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_gripper() == std::optional<std::uint8_t>{100};
+  }));
+  EXPECT_FALSE(arm.gripper_reply_out_of_range().has_value());
+
+  // Just past it, and the 255 of an arm without its gripper: no reading, the last one dropped.
+  for (const std::uint8_t reply : {std::uint8_t{101}, std::uint8_t{255}}) {
+    port.set_gripper(reply);
+    ASSERT_TRUE(wait_until([&arm, reply]() {
+        return arm.gripper_reply_out_of_range() == std::optional<std::uint8_t>{reply};
+    }))
+      << static_cast<int>(reply);
+    EXPECT_FALSE(arm.read_gripper().has_value()) << static_cast<int>(reply);
+  }
+
+  // A reading again (the gripper plugged back in) clears it.
+  port.set_gripper(0);
+  ASSERT_TRUE(wait_until([&arm]() {
+      return arm.read_gripper() == std::optional<std::uint8_t>{0};
+  }));
+  EXPECT_FALSE(arm.gripper_reply_out_of_range().has_value());
 }
 
 TEST(SerialArmGripper, SendsANewTargetOnceAfterAGetAnglesReply)
@@ -2357,4 +2595,248 @@ TEST(SerialArmPollPose, TheJumpEdgeOfAPlausibleFrame)
   EXPECT_NEAR(
     pose_after_poll(frames_at(0, far, 7, 0x23, 1), 1).at(0), rad_of(RECORDED_POLL_STEPS.at(0), 0),
     1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Age of the pose (#120)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+using positronic_hardware::PoseSample;
+using SteadyClock = std::chrono::steady_clock;
+
+/// Stops the replies and waits until the thread has published the last one: nothing of it left
+/// to hand out, and a frame written since. Returns when that reply went out.
+std::optional<SteadyClock::time_point> lose_replies(ScriptedArm & port)
+{
+  port.set_answer_angles(false);
+  const auto published{[&port]() {
+      return port.last_reply_published();
+    }};
+  if (!wait_until(published)) {
+    return std::nullopt;
+  }
+  return port.angles_handed().back();
+}
+
+/// Reads the age now and checks it against the reply that went out at `arrived`: never negative,
+/// and never more than the time since then, since the thread decodes a reply after it went out.
+/// Only an upper bound: how soon after the thread decoded it depends on the machine.
+PoseSample expect_age_within(const SerialArm & arm, SteadyClock::time_point arrived)
+{
+  const PoseSample sample{arm.read_pose()};
+  const auto after{SteadyClock::now()};
+  EXPECT_TRUE(sample.age.has_value());
+  const SteadyClock::duration age{sample.age.value_or(SteadyClock::duration::max())};
+  EXPECT_GE(age, SteadyClock::duration::zero());
+  EXPECT_LE(age, after - arrived);
+  return sample;
+}
+
+/// How long the replies stay lost: well past a turn (POLL_PERIOD), so the growth stands out.
+constexpr std::chrono::milliseconds LOST_FOR{150};
+}  // namespace
+
+TEST(SerialArmPoseAge, IsUnknownBeforeTheFirstReply)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  transport->set_answer_angles(false);
+  const SerialArm arm{std::move(transport)};
+  std::this_thread::sleep_for(3 * SerialArm::POLL_PERIOD);
+  const PoseSample sample{arm.read_pose()};
+  EXPECT_FALSE(arm.has_sample());
+  EXPECT_FALSE(sample.age.has_value());
+  EXPECT_EQ(sample.angles, arm.read_angles());  // the placeholder, never NaN
+}
+
+TEST(SerialArmPoseAge, GrowsWhileRepliesAreLostAndDropsWithTheNextOne)
+{
+  auto transport{std::make_unique<ScriptedArm>()};
+  ScriptedArm & port{*transport};
+  const SerialArm arm{std::move(transport)};
+
+  // Replies at known times: the age counts from the last one.
+  const auto first_reply{[&port]() {
+      return !port.angles_handed().empty();
+    }};
+  ASSERT_TRUE(wait_until(first_reply));
+  const std::optional<SteadyClock::time_point> last{lose_replies(port)};
+  ASSERT_TRUE(last.has_value());
+  const SteadyClock::time_point last_at{last.value_or(SteadyClock::time_point{})};
+  const PoseSample first{expect_age_within(arm, last_at)};
+  EXPECT_EQ(first.angles, arm.read_angles());
+  const JointPositions expected{expected_pose()};
+  for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+    EXPECT_NEAR(first.angles.at(joint), expected.at(joint), 1e-9) << joint;
+  }
+
+  // Lost replies: the pose stays and so does its time, so the age grows by the time between the
+  // two reads, at least LOST_FOR.
+  std::this_thread::sleep_for(LOST_FOR);
+  const PoseSample lost{expect_age_within(arm, last_at)};
+  EXPECT_EQ(lost.angles, first.angles);
+  const SteadyClock::duration first_age{first.age.value_or(SteadyClock::duration::zero())};
+  const SteadyClock::duration lost_age{lost.age.value_or(SteadyClock::duration::zero())};
+  EXPECT_GE(lost_age - first_age, LOST_FOR);
+
+  // The next reply brings it back down: the age counts from that reply, which went out at least
+  // LOST_FOR after the last one, so an age still counted from the last one would fail here.
+  const std::size_t handed{port.angles_handed().size()};
+  port.set_answer_angles(true);
+  const auto next_reply{[&port, handed]() {
+      return port.angles_handed().size() > handed;
+    }};
+  ASSERT_TRUE(wait_until(next_reply));
+  const std::optional<SteadyClock::time_point> next{lose_replies(port)};
+  ASSERT_TRUE(next.has_value());
+  const SteadyClock::time_point next_at{next.value_or(SteadyClock::time_point{})};
+  EXPECT_GE(next_at - last_at, LOST_FOR);
+  static_cast<void>(expect_age_within(arm, next_at));
+}
+
+TEST(SerialArmPoseAge, CountsFromTheSyncWriteWhenThePoseComesFromThePoll)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  ReplayTransport & port{*transport};
+  port.set_poll_frames(parse_hex(RECORDED_POLL_FRAMES));
+  port.set_quiet_after_send(true);
+  SerialArm arm{std::move(transport), POLL_TIMING};
+  static_cast<void>(wait_for_reply(arm));
+  arm.write_angles(JointPositions{0.1, 0.0, 0.0, 0.0, 0.0, 0.0});
+  // Read until the poll's pose is the one published: it differs from the get_angles pose. A
+  // get_angles may replace it later; the bound below holds for both, since both came after.
+  const JointPositions poll_pose{recorded_poll_pose()};
+  const auto is_poll_pose{[&poll_pose](const JointPositions & angles) {
+      for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+        if (std::abs(angles.at(joint) - poll_pose.at(joint)) > 1e-9) {
+          return false;
+        }
+      }
+      return true;
+    }};
+  std::optional<PoseSample> seen;
+  const auto deadline{SteadyClock::now() + std::chrono::seconds{2}};
+  while (!seen.has_value() && SteadyClock::now() < deadline) {
+    const PoseSample sample{arm.read_pose()};
+    if (is_poll_pose(sample.angles)) {
+      seen = sample;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+  }
+  const auto after{SteadyClock::now()};
+  ASSERT_TRUE(seen.has_value());
+  ASSERT_FALSE(port.sync_write_times().empty());
+  // Stamped when the sync-write closed, not earlier (at the start of the turn, before the send):
+  // the age is never more than the time since the sync-write went out.
+  const SteadyClock::duration age{
+    seen.value_or(PoseSample{}).age.value_or(SteadyClock::duration::max())};
+  EXPECT_GE(age, SteadyClock::duration::zero());
+  EXPECT_LE(age, after - port.sync_write_times().front());
+}
+
+// Follow-up prompt (#183, the load relief on the replayed arm):
+//   The poll frames carry J1 pushing (load 30) while the controller keeps writing J1 1 deg past
+//   where it stands: after the hold (500 ms here) J1 goes out where it stands, the relief is
+//   logged; a halt ends it, and a hold after the power on J1 is relieved again; a new command for
+//   J1 goes out as is.
+
+namespace
+{
+using positronic_hardware::LoadReliefCheck;
+using positronic_hardware::LoadReliefLimits;
+using positronic_hardware::PositionLimits;
+using positronic_hardware::ReliefEvent;
+
+constexpr double ONE_DEG{M_PI / 180.0};
+
+/// The recorded poll, still and at load 0, with J1 reporting `load`.
+std::vector<std::uint8_t> poll_with_j1_load(std::uint16_t load)
+{
+  std::vector<std::uint8_t> frames{
+    with_byte(parse_hex(RECORDED_POLL_FRAMES), 0, 4, static_cast<std::uint8_t>(load & 0xFFU))};
+  return with_byte(std::move(frames), 0, 5, static_cast<std::uint8_t>(load >> 8U));
+}
+
+/// A relief with a 500 ms hold and +-3 rad on every joint. The checks after the power on and
+/// after the move must see the command on the wire before the next relief: a window of one hold
+/// against writes 10 ms apart. write_until's 2 s is four holds.
+LoadReliefCheck fast_relief()
+{
+  LoadReliefLimits limits{};
+  limits.hold = std::chrono::milliseconds{500};
+  PositionLimits range{};
+  for (positronic_hardware::PositionLimit & limit : range) {
+    limit.lower = -3.0;
+    limit.upper = 3.0;
+  }
+  return LoadReliefCheck{limits, range};
+}
+
+/// The recorded poll's pose with J1 1 deg further: J1 stands 1 deg short of it.
+JointPositions j1_short()
+{
+  JointPositions command{recorded_poll_pose()};
+  command.at(0) += ONE_DEG;
+  return command;
+}
+
+/// Writes `command` every 10 ms, as the controller does, until `done()` or 2 s. Returns done().
+template<typename Done>
+bool write_until(SerialArm & arm, const JointPositions & command, Done done)
+{
+  const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    arm.write_angles(command);
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return done();
+}
+
+/// True when the last target on the wire has J1 at `rad`.
+bool j1_on_the_wire(const SerialArm & arm, double rad)
+{
+  const std::optional<JointPositions> target{arm.last_target()};
+  return target.has_value() && std::abs(target.value_or(JointPositions{}).at(0) - rad) < 1e-9;
+}
+
+/// An arm whose poll shows J1 pushing with `load`, with `relief`.
+std::unique_ptr<SerialArm> arm_with(std::uint16_t load, const LoadReliefCheck & relief)
+{
+  auto transport{std::make_unique<ReplayTransport>(recorded_bursts())};
+  transport->set_poll_frames(poll_with_j1_load(load));
+  return std::make_unique<SerialArm>(
+    std::move(transport), POLL_TIMING, TemperatureGuard{}, false, relief);
+}
+}  // namespace
+
+TEST(SerialArmLoadRelief, AStillLoadedJointGoesOutWhereItStandsUntilMovedOrHalted)
+{
+  const std::unique_ptr<SerialArm> arm{arm_with(30, fast_relief())};
+  static_cast<void>(wait_for_reply(*arm));
+  const JointPositions command{j1_short()};
+  const double stands{rad_of(RECORDED_POLL_STEPS.at(0), 0)};
+  const auto relieved{[&arm, stands]() {
+      return j1_on_the_wire(*arm, stands);
+    }};
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 1u);
+  // A halt ends the relief: the first send after the power on carries the controller's
+  // command, and a whole hold later J1 is relieved again.
+  ASSERT_TRUE(arm->halt());
+  ASSERT_TRUE(arm->power_on());
+  ASSERT_TRUE(write_until(*arm, command, [&arm, &command]() {
+      return j1_on_the_wire(*arm, command.at(0));
+  }));
+  ASSERT_TRUE(write_until(*arm, command, relieved));
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
+  // The controller moves J1: the new command goes out as is.
+  JointPositions moved{command};
+  moved.at(0) += ONE_DEG;
+  EXPECT_TRUE(write_until(*arm, moved, [&arm, &moved]() {
+      return j1_on_the_wire(*arm, moved.at(0));
+  }));
+  // Polls without a relief leave the last one for the plugin to read.
+  EXPECT_EQ(arm->last_load_relief().value_or(ReliefEvent{}).number, 2u);
 }

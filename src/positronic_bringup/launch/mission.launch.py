@@ -23,9 +23,11 @@
 Start the mission node with the MoveIt parameters it needs.
 
 The MoveIt configuration is built the same way as in move_group.launch.py, so
-both launches load the same robot. Only robot_description, the SRDF and
-kinematics.yaml are passed to the node: its MoveIt backend reads them on an
-internal node to build MoveGroupInterface. The node starts unconfigured; bring
+both launches load the same robot. Only robot_description, the SRDF,
+kinematics.yaml and joint_limits.yaml are passed to the node: its MoveIt backend
+reads them on an internal node to build MoveGroupInterface. joint_limits.yaml
+gives it the default velocity and acceleration scaling; without it MoveIt falls
+back to 0.1 (#214). The node starts unconfigured; bring
 it up with `ros2 lifecycle set /mission_node configure` and `activate`.
 Activation fails if move_group isn't reachable. Set use_sim_time:=true when
 Gazebo provides the clock.
@@ -76,6 +78,7 @@ def launch_setup(context, *args, **kwargs):
             config.robot_description,
             config.robot_description_semantic,
             config.robot_description_kinematics,
+            config.joint_limits,
             {'use_sim_time': use_sim_time},
         ],
     )

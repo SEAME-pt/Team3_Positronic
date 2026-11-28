@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -92,11 +93,26 @@ bool has_fault_gpio(const hardware_interface::HardwareInfo & info)
   return false;
 }
 
+/// True if the <gpio> named FAULT_GPIO declares a POSE_AGE_STATE state interface (#120). It is
+/// optional, so its absence is no error: the plugin then exports no pose age.
+bool declares_pose_age(const hardware_interface::HardwareInfo & info)
+{
+  return std::any_of(
+    info.gpios.begin(), info.gpios.end(), [](const hardware_interface::ComponentInfo & gpio) {
+      return gpio.name == FAULT_GPIO && has_interface(gpio.state_interfaces, POSE_AGE_STATE);
+    });
+}
+
 /// A FaultCode as the value of the fault state interface: a small whole number, exact in a double.
 constexpr double to_state(FaultCode code)
 {
   return static_cast<double>(std::underlying_type_t<FaultCode>(code));
 }
+
+/// The least time between two relief lines of read() (#183): at most one relief per poll, 33 ms
+/// apart, so the throttle drops none. A relief overwritten before read() takes it is not logged:
+/// the numbers in the log show the gap.
+constexpr int RELIEF_LOG_PERIOD_MS{20};
 
 /// How long on_activate waits for the arm's first reply. One get_angles round trip takes a few
 /// milliseconds, so this is generous; the arm not answering at all is what it catches.
@@ -131,6 +147,11 @@ void log_fault(
     info.joints.at(check.joint).name.c_str(), check.value, check.value * RAD_TO_DEG,
     to_string(check.fault), limit.lower, limit.upper);
 }
+
+/// How far, in gripper units (0..100), a command after an activate may be from the value measured
+/// then and still not go out: the controller reads its hold after the plugin, and a settling
+/// servo can move one unit in between.
+constexpr int GRIPPER_HOLD_BAND{1};
 
 std::uint8_t to_gripper_value(double radians, double closed, double open)
 {
@@ -339,6 +360,7 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   // open, even from this process): drop it first. On a first configure there is nothing to drop.
   arm_.reset();
   echo_report_.reset();
+  reported_reliefs_ = 0;
   tracking_ = TrackingCheck{TrackingLimits{
       config_.tracking_error_deg * TRACKING_DEG_TO_RAD,
       std::chrono::milliseconds{config_.tracking_error_ms}}};
@@ -346,8 +368,10 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     if (config_.backend == Backend::SERIAL) {
       TemperatureGuard guard{};
       guard.limit_c = config_.servo_temp_limit_c;
+      // The relief sends a joint its own position: the same URDF limits as every command (#34).
       arm_ = std::make_unique<SerialArm>(
-        config_.port, config_.baud, config_.timing, guard, has_gripper_);
+        config_.port, config_.baud, config_.timing, guard, has_gripper_,
+        LoadReliefCheck{config_.relief, limits_}, static_cast<std::uint8_t>(config_.send_speed));
     } else {
       // The fake arm's time is the sum of the periods read() got: on the control loop that is
       // the time that passed, and a test that passes the periods in moves the arm without
@@ -389,6 +413,12 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
     }
     fault_handle_ =
       get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{FAULT_STATE});
+    // #120: only when the URDF declares it; without it read() publishes no pose age.
+    pose_age_handle_.reset();
+    if (declares_pose_age(info_)) {
+      pose_age_handle_ =
+        get_state_interface_handle(std::string{FAULT_GPIO} + "/" + std::string{POSE_AGE_STATE});
+    }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Cannot find an interface: %s", error.what());
     return CallbackReturn::ERROR;
@@ -398,6 +428,8 @@ CallbackReturn RobotSystem::on_configure(const rclcpp_lifecycle::State & /*previ
   for (const auto & [name, description] : joint_state_interfaces_) {
     set_state(name, std::numeric_limits<double>::quiet_NaN());
   }
+  // #120: no pose yet, so no age.
+  set_pose_age(std::nullopt);
   // #35: a fault latched before an on_error stays visible; only on_activate clears it.
   std::ignore = set_state(fault_handle_, to_state(fault_.load()), true);
   return CallbackReturn::SUCCESS;
@@ -445,14 +477,8 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
 
-  while (has_gripper_ && !arm_->read_gripper().has_value()) {
-    if (std::chrono::steady_clock::now() >= deadline) {
-      RCLCPP_ERROR(
-        get_logger(), "The gripper did not answer within %d ms; not activating.",
-        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
-      return CallbackReturn::ERROR;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  if (!gripper_answered_by(deadline)) {
+    return CallbackReturn::ERROR;
   }
 
   // #35: never activate on a silent link; one that comes back before the deadline is waited for.
@@ -487,9 +513,14 @@ CallbackReturn RobotSystem::on_activate(const rclcpp_lifecycle::State & /*previo
       static_cast<int>(ArmBackend::REQUEST_TIMEOUT.count()));
     return CallbackReturn::ERROR;
   }
+  report_power_on();
 
   // dt = 0: no time has passed, so the velocity estimate is held, not recomputed.
   update_states(0.0);
+  // The controller's first commands hold the gripper where it is measured: on an object, that
+  // value as a target would end the squeeze. Nothing goes out until a command leaves the band.
+  const std::optional<std::uint8_t> gripper{has_gripper_ ? arm_->read_gripper() : std::nullopt};
+  gripper_hold_.store(gripper.has_value() ? static_cast<int>(gripper.value()) : -1);
   for (const auto & [name, description] : joint_command_interfaces_) {
     set_command(name, get_state(name));
   }
@@ -571,6 +602,7 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
   if (active) {
     check_tracking();
     report_echo_timeouts();
+    report_load_reliefs();
   }
   // Reported, not returned as ERROR: the component stays ACTIVE and readable, the backend holds
   // every target, and the supervisor (#45) decides what happens next. Written every cycle, so
@@ -630,6 +662,47 @@ void RobotSystem::report_echo_timeouts()
     "turns waited the whole echo timeout. A target outside the arm's own joint limits does this, "
     "and so does a send that reached the arm while it was still answering a request.",
     fresh.value());
+}
+
+void RobotSystem::report_power_on() const
+{
+  // #133 step zero: the serial thread sent set_fresh_mode 1 before the power_on. A missing ack
+  // does not stop the activation, so it is reported, not checked. The counts are the backend's,
+  // built in on_configure; the fake arm has no fresh mode and sends none, so nothing to say.
+  const FreshModeCount fresh{arm_->fresh_mode_count()};
+  if (fresh.sent == 0) {
+    return;
+  }
+  RCLCPP_INFO(
+    get_logger(),
+    "Fresh mode 1 before power_on: %" PRIu64 " sent, %" PRIu64 " acknowledged since configure.",
+    fresh.sent, fresh.acked);
+}
+
+void RobotSystem::report_load_reliefs()
+{
+  const std::optional<ReliefEvent> relief{arm_->last_load_relief()};
+  if (!relief.has_value() || relief->number <= reported_reliefs_) {
+    return;
+  }
+  reported_reliefs_ = relief->number;
+  const char * joint{info_.joints.at(relief->joint).name.c_str()};
+  const double residual_deg{relief->residual_rad * RAD_TO_DEG};
+  if (!relief->refused) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
+      "Load relief %" PRIu64
+      ": joint '%s' stood still %.1f deg from its target pushing with load "
+      "%d at %d degC: sent where it stands, until the controller moves it.",
+      relief->number, joint, residual_deg, relief->load, relief->celsius);
+    return;
+  }
+  RCLCPP_WARN_THROTTLE(
+    get_logger(), *get_clock(), RELIEF_LOG_PERIOD_MS,
+    "Load relief %" PRIu64
+    ": joint '%s' stood still %.1f deg from its target pushing with load "
+    "%d at %d degC, but where it stands is outside its URDF limits: not relieved.",
+    relief->number, joint, residual_deg, relief->load, relief->celsius);
 }
 
 bool RobotSystem::temperatures_allow_activation()
@@ -753,7 +826,13 @@ return_type RobotSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dura
 
   arm_->write_angles(commands);
   if (gripper_read) {
-    arm_->write_gripper(to_gripper_value(gripper_target, gripper_closed_, gripper_open_));
+    const std::uint8_t value{to_gripper_value(gripper_target, gripper_closed_, gripper_open_)};
+    const int hold{gripper_hold_.load()};
+    if (hold >= 0 && std::abs(static_cast<int>(value) - hold) <= GRIPPER_HOLD_BAND) {
+      return return_type::OK;
+    }
+    gripper_hold_.store(-1);
+    arm_->write_gripper(value);
   }
   return return_type::OK;
 }
@@ -847,6 +926,28 @@ bool RobotSystem::link_alive_by(std::chrono::steady_clock::time_point deadline)
   return true;
 }
 
+bool RobotSystem::gripper_answered_by(std::chrono::steady_clock::time_point deadline)
+{
+  while (has_gripper_ && !arm_->read_gripper().has_value()) {
+    if (const std::optional<std::uint8_t> reply{arm_->gripper_reply_out_of_range()}) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "The arm answered %u to get_gripper_value (0x65): no gripper on the arm, but the URDF "
+        "has '%s'. Not activating.",
+        static_cast<unsigned>(reply.value()), info_.joints.at(NUM_JOINTS).name.c_str());
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(
+        get_logger(), "The gripper did not answer within %d ms; not activating.",
+        static_cast<int>(FIRST_SAMPLE_TIMEOUT.count()));
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+  }
+  return true;
+}
+
 void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
 {
   diagnosed_ = fault_.load();
@@ -873,9 +974,14 @@ void RobotSystem::update_states(double dt)
   // No reply from the arm yet: keep the states NaN ("unknown") rather than publish the
   // placeholder pose, and keep the velocity estimator from using it as a baseline.
   if (!arm_->has_sample()) {
+    set_pose_age(std::nullopt);
     return;
   }
-  const JointPositions angles{arm_->read_angles()};
+  // #120: the pose and its age from one read of the backend, so the age is the one of the pose
+  // published below, measured up to this read().
+  const PoseSample sample{arm_->read_pose()};
+  const JointPositions & angles{sample.angles};
+  set_pose_age(sample.age);
   const JointPositions velocities{velocity_estimator_.update(angles, dt)};
   for (std::size_t i{0}; i < NUM_JOINTS; ++i) {
     // wait_until_set = false: never block on a controller that is reading the handle.
@@ -892,6 +998,20 @@ void RobotSystem::update_states(double dt)
     std::ignore = set_state(gripper_handles_.position, position, false);
     std::ignore = set_state(gripper_handles_.velocity, velocity, false);
   }
+}
+
+void RobotSystem::set_pose_age(std::optional<std::chrono::steady_clock::duration> age)
+{
+  if (pose_age_handle_ == nullptr) {
+    return;
+  }
+  // Seconds, as every ROS interface (CONTRIBUTING, Units).
+  double age_s{std::numeric_limits<double>::quiet_NaN()};
+  if (age.has_value()) {
+    age_s = std::chrono::duration<double>{age.value()}.count();
+  }
+  // wait_until_set = false, as for the joints: never block on a controller reading the handle.
+  std::ignore = set_state(pose_age_handle_, age_s, false);
 }
 
 }  // namespace positronic_hardware

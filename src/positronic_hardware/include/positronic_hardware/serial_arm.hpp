@@ -35,7 +35,9 @@
 #include <vector>
 
 #include "positronic_hardware/arm_backend.hpp"
+#include "positronic_hardware/joint_limit_check.hpp"
 #include "positronic_hardware/link_watchdog.hpp"
+#include "positronic_hardware/load_relief.hpp"
 #include "positronic_hardware/requests.hpp"
 #include "positronic_hardware/serial_transport.hpp"
 #include "positronic_hardware/servo_temperature.hpp"
@@ -155,8 +157,9 @@ public:
   static constexpr std::uint8_t MIN_SERVO_VOLTAGE{40};
   static constexpr std::uint8_t MAX_SERVO_VOLTAGE{130};
 
-  /// Speed byte of every send_angles, percent of the firmware maximum (#32: 30 % on hardware).
-  static constexpr std::uint8_t SEND_SPEED{30};
+  /// Default speed byte of every send_angles (#32: 30 on hardware), a speed cap of 45 deg/s
+  /// (#133). The URDF sets another with send_speed.
+  static constexpr std::uint8_t DEFAULT_SEND_SPEED{30};
 
   /// How long a turn waits for the get_angles reply. A reply takes ~8 ms and arrives in a dozen
   /// small chunks behind servo-bus chatter, so the turn reads until the frame completes, not a
@@ -200,14 +203,20 @@ public:
 
   /// Opens `port` at `baud_rate` with a real POSIX serial port and starts polling.
   /// Throws std::runtime_error if the port cannot be opened (the plugin's on_configure catches it).
+  /// `relief` decides on the frames of each poll which still joint is sent its own position
+  /// (#183); off unless given.
   SerialArm(
     const std::string & port, int baud_rate, Timing timing = {}, TemperatureGuard guard = {},
-    bool has_gripper = false);
+    bool has_gripper = false,
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   /// Takes an already-built transport. Used by the tests with a fake that replays recorded bytes.
   explicit SerialArm(
     std::unique_ptr<SerialTransport> transport, Timing timing = {}, TemperatureGuard guard = {},
-    bool has_gripper = false);
+    bool has_gripper = false,
+    LoadReliefCheck relief = LoadReliefCheck{LoadReliefLimits{false}, PositionLimits{}},
+    std::uint8_t send_speed = DEFAULT_SEND_SPEED);
 
   ~SerialArm() override;
 
@@ -219,6 +228,12 @@ public:
   /// The newest pose the thread has decoded, in radians. Non-blocking; safe from the control
   /// loop. Before the first reply arrives it returns START_POSE, never NaN.
   [[nodiscard]] JointPositions read_angles() const override;
+
+  /// read_angles() and its age (#120): the time since the thread decoded the reply that carried
+  /// that pose, the get_angles reply or the end of the sync-write that closed a poll (#170).
+  /// One read of the buffer, so the pose and its time always come from the same reply. The age
+  /// is nullopt before the first reply. Non-blocking; safe from the control loop.
+  [[nodiscard]] PoseSample read_pose() const override;
 
   /// The target pose the thread sends next, in radians. Safe from the control loop: it only
   /// stores the newest command, the poll thread sends it over the port on its next turn. It can
@@ -253,6 +268,7 @@ public:
 
   void write_gripper(std::uint8_t value) override;
   [[nodiscard]] std::optional<std::uint8_t> read_gripper() const override;
+  [[nodiscard]] std::optional<std::uint8_t> gripper_reply_out_of_range() const override;
 
   /// The newest plausible temperatures, from the poll's status frames or from get_servo_temps,
   /// or nullopt before the first one.
@@ -270,8 +286,27 @@ public:
   /// The sends whose sync-write did not come within SerialTiming::echo_timeout (#150).
   [[nodiscard]] std::uint64_t echo_timeouts() const override;
 
+  [[nodiscard]] std::optional<ReliefEvent> last_load_relief() const override;
+  /// #133: the set_fresh_mode frames sent before a power_on, and how many the arm acknowledged.
+  [[nodiscard]] FreshModeCount fresh_mode_count() const override;
+
 private:
   static constexpr JointPositions START_POSE{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+  /// The newest pose and when the thread decoded the reply that carried it (#120). One box of
+  /// the RealtimeBuffer, so read_pose() never pairs a pose with the time of another one.
+  struct StampedPose
+  {
+    JointPositions angles{START_POSE};
+    // No {}: a time_point's own constructor already makes it zero, and clang-tidy flags the
+    // braces as redundant (readability-redundant-member-init).
+    Clock::time_point arrived;
+  };
+
+  /// Publishes `pose`, decoded from a reply that arrived at `arrived`: the buffer (and so
+  /// has_sample()), the reference of the jump check and the link watchdog. Serial thread only.
+  void publish_pose(const JointPositions & pose, Clock::time_point arrived);
+
   /// What halt() and power_on() leave for the thread to send at the start of its next turn.
   enum class Pending : std::uint8_t
   {
@@ -322,6 +357,11 @@ private:
   /// plausible, and fed to the detector, whose trip cuts the arm. Serial thread only.
   void take_temperatures(const ServoTemperatures & temperatures, Clock::time_point at);
 
+  /// The controller's newest command as it goes on the wire: each relieved joint at its own
+  /// position (#183), so last_sent() is the wire. Clears every relief while the arm is held.
+  /// Serial thread only.
+  [[nodiscard]] std::optional<JointPositions> command_to_send();
+
   /// One get_angles: the request, then its reply within REPLY_TIMEOUT, published as the pose.
   /// False when the port refused the request or the reply did not come. Serial thread only.
   bool ask_angles(ReplyAssembler & assembler);
@@ -353,8 +393,10 @@ private:
 
   void poll_loop();
 
-  /// The send_angles frame for `target`, or nullopt when an angle is NaN or out of range.
-  static std::optional<positronic_protocol::Frame> encode_command(const JointPositions & target);
+  /// The send_angles frame for `target` at send_speed_, or nullopt when an angle is NaN or out
+  /// of range.
+  [[nodiscard]] std::optional<positronic_protocol::Frame> encode_command(
+    const JointPositions & target) const;
 
   bool request_and_wait(Pending request);
 
@@ -392,13 +434,16 @@ private:
   std::unique_ptr<SerialTransport> transport_;
   const Timing timing_;
   const TemperatureGuard guard_;
+  // The speed byte of every send_angles (#133), fixed for the life of the backend.
+  const std::uint8_t send_speed_;
   // Time since the last valid reply (#35). The poll thread feeds it; the plugin asks it.
   LinkWatchdog watchdog_;
   // readFromRT() is non-const but read_angles() is logically const (it observes state), so the
   // buffer is mutable. writeFromNonRT() runs on the poll thread, readFromRT() on the control loop.
   // nullopt until the first pose. has_sample() reads this same box: a separate flag could say
   // "a pose" while a readFromRT() still gave START_POSE, which on_activate takes as a command.
-  mutable realtime_tools::RealtimeBuffer<std::optional<JointPositions>> latest_{std::nullopt};
+  // The pose carries the time of its reply (#120).
+  mutable realtime_tools::RealtimeBuffer<std::optional<StampedPose>> latest_{std::nullopt};
   // The newest command from write_angles(). The control loop writes it, the poll thread reads it.
   // nullopt until the first command: a readFromRT() that meets a write in progress keeps its old
   // box, and before the first swap that box must hold "no target", never a pose.
@@ -434,6 +479,15 @@ private:
   std::atomic<int> overheat_celsius_{0};
   // Sends whose sync-write did not come within echo_timeout (#150). Written by the poll thread.
   std::atomic<std::uint64_t> echo_timeouts_{0};
+  // The load relief (#183). Poll thread only.
+  LoadReliefCheck relief_;
+  // Its last relief, for the plugin's log. Same rule as latest_.
+  mutable realtime_tools::RealtimeBuffer<std::optional<ReliefEvent>> last_relief_{std::nullopt};
+  // #133: set_fresh_mode frames sent and acknowledged. Written by the poll thread.
+  std::atomic<std::uint64_t> fresh_mode_sent_{0};
+  std::atomic<std::uint64_t> fresh_mode_acked_{0};
+  // #133: fresh mode already sent for the power_on request in flight. Poll thread only.
+  bool fresh_mode_done_{false};
   // The guard's bookkeeping, used by the poll thread only.
   OverheatDetector detector_;
   // When the guard last took a reading, from the poll or by asking: what period and max_age
@@ -447,6 +501,9 @@ private:
   realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_command_{std::nullopt};
   mutable realtime_tools::RealtimeBuffer<std::optional<std::uint8_t>> gripper_latest_{std::nullopt};
   std::optional<std::uint8_t> gripper_last_sent_;
+  // The last get_gripper_value reply above GRIPPER_OPEN_VALUE, -1 after a reading. Written by
+  // the serial thread, read by the plugin.
+  std::atomic<int> gripper_out_of_range_{-1};
   Clock::time_point last_gripper_read_;
   // #170, serial thread only: the last good position of each joint from a poll and when it came
   // (POLL_BRIDGE_AGE), and the last pose the thread published from any source, the reference of

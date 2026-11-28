@@ -59,6 +59,12 @@ namespace positronic_hardware
 inline constexpr std::string_view FAULT_GPIO{"driver"};
 inline constexpr std::string_view FAULT_STATE{"fault_code"};
 
+/// #120: the age of the pose read() publishes, in seconds (SI), on the same gpio: the time from the
+/// arrival of the reply that carried the pose to the read() that publishes it. NaN until the
+/// first pose. Optional: exported only when the <gpio name="driver"> declares it, as
+/// positronic_real.urdf.xacro does; nothing reads it yet.
+inline constexpr std::string_view POSE_AGE_STATE{"pose_age_s"};
+
 /// Where the safety supervisor publishes its heartbeat (#136), every check of its timer.
 inline constexpr std::string_view SUPERVISOR_HEARTBEAT_TOPIC{"/safety_supervisor/heartbeat"};
 
@@ -120,10 +126,17 @@ private:
   /// on_activate's wait for a link that died after the first reply (#35, #121): true once the
   /// arm answers again before `deadline`, false with one log line if it stays silent.
   bool link_alive_by(std::chrono::steady_clock::time_point deadline);
+  /// on_activate's wait for the first gripper reading, when the URDF has a gripper: true once
+  /// one comes before `deadline`. False, with one log line, if it does not, or at once if the
+  /// arm answers above GRIPPER_OPEN_VALUE (no gripper on the arm, #184).
+  bool gripper_answered_by(std::chrono::steady_clock::time_point deadline);
 
   /// Refuses a bad command (#34): asks the backend to stop the arm and logs the joint name and
   /// value. write() then returns ERROR, which takes the component out of ACTIVE.
   void refuse(const CommandCheck & check);
+
+  /// on_activate's report after power_on (#133): the fresh mode frames sent and acknowledged.
+  void report_power_on() const;
 
   /// on_activate's temperature check, before the servos get torque: waits for the first reading
   /// and refuses an arm that was cut or is within ACTIVATE_COOLDOWN_C of the limit. False, with
@@ -152,6 +165,9 @@ private:
   /// True when the check is on and no heartbeat came for longer than supervisor_timeout_ms.
   /// One atomic load and one clock read: safe from read().
   [[nodiscard]] bool supervisor_silent() const;
+  /// read()'s report of the load reliefs (#183), while active: one line each, INFO for a relief,
+  /// WARN for a refusal outside the URDF limits.
+  void report_load_reliefs();
   /// True while the component is ACTIVE: the only state in which targets go out and faults count.
   [[nodiscard]] bool is_active() const;
 
@@ -165,8 +181,12 @@ private:
   };
 
   /// Asks the arm where the joints are, estimates the velocity from the change since the last
-  /// call `dt` seconds ago, and stores both in the state interfaces. No allocation, no blocking.
+  /// call `dt` seconds ago, and stores both in the state interfaces, with the age of that pose
+  /// (#120). No allocation, no blocking.
   void update_states(double dt);
+
+  /// Writes `age` to driver/pose_age_s in seconds, NaN for nullopt, when the URDF declares it.
+  void set_pose_age(std::optional<std::chrono::steady_clock::duration> age);
 
   HardwareConfig config_{};
   std::unique_ptr<ArmBackend> arm_;
@@ -175,6 +195,8 @@ private:
   std::array<JointHandles, NUM_JOINTS> handles_{};
   /// "driver/fault_code", looked up once like the joint handles.
   hardware_interface::StateInterface::SharedPtr fault_handle_;
+  /// "driver/pose_age_s" (#120), or null when the URDF does not declare it.
+  hardware_interface::StateInterface::SharedPtr pose_age_handle_;
   /// The latched fault. read() runs on the control loop and the lifecycle callbacks may run on
   /// another thread: an atomic keeps both sides safe without a lock.
   std::atomic<FaultCode> fault_{FaultCode::NONE};
@@ -184,6 +206,8 @@ private:
   /// #150: when read() warns about sends without a sync-write. Reset with every new backend,
   /// whose count starts at zero.
   EchoTimeoutReport echo_report_;
+  /// The number of the last load relief logged. Reset with every new backend, which counts from 1.
+  std::uint64_t reported_reliefs_{0};
 
   /// Position limits of J1..J6 from the URDF, read once in on_init. write() checks every
   /// command against them before it reaches the arm.
@@ -195,6 +219,11 @@ private:
   JointHandles gripper_handles_{};
   double gripper_previous_{0.0};
   bool gripper_previous_valid_{false};
+  /// The gripper value measured at the last activate, -1 once a command more than
+  /// GRIPPER_HOLD_BAND off it went out (or without a gripper). Until then write() sends the
+  /// gripper nothing: sending the measured value would end the grip (see the README, Gripper).
+  /// Atomic: on_activate and write() may run on different threads.
+  std::atomic<int> gripper_hold_{-1};
 
   /// The time of the supervisor's last heartbeat (#136), the same lock-free watchdog as the
   /// link's: the subscription callback writes it on an executor thread, read() reads it on the

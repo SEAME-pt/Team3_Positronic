@@ -32,7 +32,8 @@ controller_manager ── read() / write() ──> RobotSystem (plugin)
                                            └─ PosixSerialPort   /dev/ttyTHS1, raw 8N1, exclusive
 ```
 
-- One turn of the serial thread: a pending stop or power on first, if any, waiting for its ack;
+- One turn of the serial thread: a pending stop or power on first, if any, waiting for its ack
+  (a power on goes after fresh mode 1, once per request, #133);
   then `get_angles`, up to 50 ms for the reply; then, when no send goes out or while the poll
   comes broken, `get_servo_temps` (see Servo over-temperature); then, if the arm answered and
   there is a new target, one
@@ -88,6 +89,7 @@ the real one, with the parameters as xacro arguments.
        joint6_to_joint5 and joint6output_to_joint6 -->
   <gpio name="driver">
     <state_interface name="fault_code"/>
+    <state_interface name="pose_age_s"/>
   </gpio>
 </ros2_control>
 ```
@@ -95,7 +97,8 @@ the real one, with the parameters as xacro arguments.
 `<limits enable="false"/>` is part of the joint limit check, see below. A `driver` gpio with
 a `fault_code` state interface is required too (other gpios and other `driver` interfaces are
 allowed; a `fault_code` command interface is not): it is how the driver reports a fault to
-the supervisor (#35, see "Link timeout"). The Gazebo xacro in
+the supervisor (#35, see "Link timeout"). `pose_age_s` is optional: without it the driver runs
+and exports no pose age (#120, see "Pose age"). The Gazebo xacro in
 `positronic_description` loads `gz_ros2_control/GazeboSimSystem` instead of this plugin, so it
 cannot be reused as is for the real arm.
 
@@ -232,11 +235,30 @@ that is due (a new value, or the 100 ms read). While the command changes, the gr
 ("The gripper did not answer within ... ms") if none comes. `FakeArm` starts open (100) and is at
 every gripper target at once.
 
+**No gripper on the arm.** Without servo 7 the Atom answers `get_gripper_value` with 255
+(`FE FE 03 65 FF FA`, gripper off, 23 Nov 2026). A reply above 100 is no reading: the serial
+thread drops the last reading and keeps the reply (`gripper_reply_out_of_range()`). With the
+gripper in the URDF, `on_activate` refuses at once: "The arm answered 255 to get_gripper_value
+(0x65): no gripper on the arm, but the URDF has 'gripper_controller'". Read as a value, 255 was
+shown as fully open, and with `allow_stalling` a close that never moves ended `SUCCEEDED`.
+
+**The grip through a halt and a resume.** The gripper's servo pushes towards its target with a
+force that grows with the distance to it. Closed on an object, the fingers stop on it (say at 30)
+while the target stays at closed (0): that distance is the grip. After an activate, the plugin's
+command and `gripper_action_controller`'s hold are both the measured value; sent, it would become
+the target, the servo would stop pushing and the object could slip. So after every activate
+`write()` sends the gripper nothing until a command is more than one unit (`GRIPPER_HOLD_BAND`)
+off the value measured at the activate: the controller reads its hold after the plugin, and a
+settling servo can move one unit in between. The measured value itself never goes out. The
+first command outside the band goes out, and from then on every new value does, until the next
+activate.
+
 **Tests.** `test_serial_arm` (`SerialArmGripper.*`: reads while idle, one send after a
 `get_angles` reply, waits while the arm has targets, halt and power on, no gripper frame without
-a gripper, the link never times out while the gripper is served, with the replay transport) and
+a gripper, a reply above 100 is no reading, the link never times out while the gripper is served, with the replay transport) and
 `test_load_robot_system` (the seventh joint, its limits, mapping at the limits, refused targets,
-velocity, activation without a gripper reply). The recorded frames are checked in
+velocity, activation without a gripper reply, activation refused on a 255 reply, no send of the
+hold after an activate and a resume). The recorded frames are checked in
 `positronic_protocol` (`test_recorded_gripper.cpp`).
 
 ## Parameters
@@ -258,6 +280,8 @@ says which one.
 | `tracking_error_deg`    | `8`            | 1 to 45              | Degrees a joint may be from the last target on the wire before the time counts (#103). Keep it wider than the controller's trajectory tolerance (5 deg), so the controller aborts first |
 | `tracking_error_ms`     | `300`          | 50 to 5000           | Milliseconds a joint may stay over `tracking_error_deg`, while active, before fault 2: the arm did not follow the command (#103) |
 | `supervisor_timeout_ms` | `500`          | 0 to 5000            | Dead-man check (#136): no heartbeat from the safety supervisor for this long, while active, is fault 4. 0 turns the check off. See Dead-man check |
+| `load_relief`           | `true`         | `true`, `false`      | Sends a still joint pushing short of its target where it stands (#183, see Load relief) |
+| `send_speed`            | `30`           | 1 to 100             | Speed byte of every `send_angles`: a speed cap, 1.5 deg/s per unit and never below 26.4 deg/s ([ADR 0008](../../docs/02_architecture/adr/0008-send-speed-default-30.md)). Fixed while the driver runs: another speed is another launch. Before every `power_on` the driver also sends fresh mode 1 (`0x16 01`), so the arm streams whatever mode it woke up in |
 
 The default backend is `serial` on purpose: a URDF that forgets the parameter on the robot fails
 loudly if the port cannot be opened, instead of silently showing a fake arm that stands still.
@@ -273,6 +297,19 @@ only when the argument is set, so a default there would win over this one. The o
 `supervisor_timeout_ms`, 0 in `driver.launch.py`: that launch alone has no supervisor, and with
 the check on the arm would never activate (a mode, not a tuned value). `supervised.launch.py`
 sets 500. The default here stays 500, so a URDF that forgets the parameter gets the check.
+
+## Load relief (#183)
+
+The servos have no integral term: with friction they stop short of their target and keep pushing,
+and heat while nothing moves (J5 1.05 deg short on 19 Nov 2026: 33 to 51 degC in 5 min). A joint
+whose command stays the same and that stands still for 2 s, at least 0.5 deg from its target with
+load 20 or more in the poll's frames, is sent where it stands until the controller gives it a new
+command: one numbered line in the driver log, a WARN and nothing sent if that is outside its URDF
+limits. A stop or a cut ends every relief (a power on always comes after one). `last_target()` is the wire, so the
+unfollowed-command check sees what was sent. A joint that holds a weight keeps a load under the
+relief (J4, 21 Nov 2026: 62, against 106 with its command): only the torque off takes that heat
+away. It may sink about as far as it stood short, no further, since the servo holds the new
+goal; the relief stays, as the command would push it back to 106. It needs the frames of the poll: with `pose_from_poll` false nothing is relieved.
 
 ## Measured fake arm (#122)
 
@@ -334,8 +371,8 @@ The component is not a ROS node: its state changes with
 |-------------|----------------------------------------------------------------------------------|
 | `on_init`   | Checks the joints, reads the joint limits from the URDF (#34), checks the parameters. With `supervisor_timeout_ms` above 0, subscribes to the supervisor's heartbeat, and fails if the component has no ROS node to do it with (#136). |
 | `on_configure` | Drops a backend left over from an earlier error, then creates a new one. `serial` opens and locks the port and starts the thread; fails if the port cannot be opened. States are set to NaN ("unknown"). |
-| `read()` (inactive or active) | Publishes position and velocity once the arm has answered; until then the states stay NaN. Once the serial thread has cut the arm for an overheat, latches `driver/fault_code` = 3 and returns ERROR (see Servo over-temperature); while active, temperatures stale for 10 s halt the arm and return ERROR. While active, a link silent for over 200 ms latches `driver/fault_code` = 1 and stops the arm (#35). While active, a joint further than `tracking_error_deg` from its target for `tracking_error_ms` latches `driver/fault_code` = 2 and stops the arm (#103). While active, no heartbeat from the supervisor for `supervisor_timeout_ms` latches `driver/fault_code` = 4, stops the arm and returns ERROR (#136). The temperatures are checked first, so an overheat is not reported as the link timeout that its power off causes. Publishes the latched fault code every cycle. |
-| `on_activate` | First waits up to `supervisor_timeout_ms` for a heartbeat from the supervisor and fails without one (#136). Then waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then waits up to 2 s for the first servo temperatures and refuses an arm that does not report them or has a servo within 5 degC of `servo_temp_limit_c`. Then sends `power_on`, so the servos hold their pose, and fails if it did not leave the port within 300 ms. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". Refuses a link that went silent since the first reply (#35). The only place a latched fault is cleared. |
+| `read()` (inactive or active) | Publishes position and velocity once the arm has answered, with the age of that pose in `driver/pose_age_s` (#120); until then the states stay NaN. Once the serial thread has cut the arm for an overheat, latches `driver/fault_code` = 3 and returns ERROR (see Servo over-temperature); while active, temperatures stale for 10 s halt the arm and return ERROR. While active, a link silent for over 200 ms latches `driver/fault_code` = 1 and stops the arm (#35). While active, a joint further than `tracking_error_deg` from its target for `tracking_error_ms` latches `driver/fault_code` = 2 and stops the arm (#103). While active, no heartbeat from the supervisor for `supervisor_timeout_ms` latches `driver/fault_code` = 4, stops the arm and returns ERROR (#136). The temperatures are checked first, so an overheat is not reported as the link timeout that its power off causes. Publishes the latched fault code every cycle. |
+| `on_activate` | First waits up to `supervisor_timeout_ms` for a heartbeat from the supervisor and fails without one (#136). Then waits up to 1 s for the arm's first reply and fails if none comes ("Is it powered and on /dev/ttyTHS1?"). Then refuses an arm that stands outside its joint limits (#34). Then waits up to 2 s for the first servo temperatures and refuses an arm that does not report them or has a servo within 5 degC of `servo_temp_limit_c`. Then sends fresh mode 1 and `power_on`, so the servos hold their pose, and fails if the `power_on` was not acknowledged within 300 ms; a missing fresh mode ack is logged with the INFO line "Fresh mode 1 before power_on: N sent, M acknowledged since configure" (#133), not fatal. Every command starts at the measured pose: the first thing a controller sees is "stay where you are". Refuses a link that went silent since the first reply (#35). The only place a latched fault is cleared. |
 | `write()` (active only) | Checks the six commands against the joint limits (#34); a bad one is not sent, the arm gets a stop and `write()` returns ERROR. Otherwise hands the newest command to the serial thread. Returns at once when the component is not active, so no command reaches the arm while inactive, and also while a fault is latched (#35). |
 | `on_deactivate` | Sends a stop: the arm halts where it is, and the serial thread holds every target until the next activate. Returns ERROR if the arm did not acknowledge the stop within 300 ms (#103): the thread keeps resending it meanwhile, but a component that cannot confirm the arm stopped must not stay active. |
 | `on_error` | Reached from any transition that returned ERROR, and from a `write()` that returned ERROR, on the control loop. Asks the serial thread for a stop without waiting, keeps the backend alive (it holds every target and keeps reading the pose) and takes the component to UNCONFIGURED, so `configure` and `activate` bring it back. It never joins the thread on the control loop. |
@@ -515,6 +552,46 @@ Run on 2026-11-10, 6 trials, J1 ±5° at 30 % speed (raw CSV in
 
 So on silence the arm **finished** its last target, as in #20.
 
+## Pose age (#120)
+
+`/joint_states` carries the time `read()` ran, not the time the arm measured the pose: the
+serial thread publishes a pose when its reply arrives, and the control loop picks up the newest
+one at its own rate. ros2_control has no timestamp per sample, so the driver reports how old the
+pose is on the `driver` gpio, next to `fault_code`:
+
+| `driver/pose_age_s` | Meaning |
+|---|---|
+| NaN | No pose yet: after configure, until the arm's first reply |
+| ≥ 0 | Seconds from the arrival of the reply that carried the published pose to the `read()` that published it |
+
+"Arrival" is when the serial thread decoded the reply: the `get_angles` reply, or the end of
+the sync-write that closed the Atom's poll of the servos (#170; the status frames came ~1.5 ms
+before it). A joint bridged from an earlier poll (`POLL_BRIDGE_AGE`, up to 100 ms) is older than
+the reply it came with: the age is the reply's. A lost reply leaves the pose as it was and the
+age grows, turn after turn, until the next reply brings it back down; past 200 ms the link
+timeout (#35) latches as well. The fake arm reports 0: its pose is computed at the `read()`.
+
+`SerialArm` keeps the pose and the time of its reply in one `RealtimeBuffer` box and
+`ArmBackend::read_pose()` returns both from one read, so the age always belongs to the pose
+published in the same cycle. `joint_state_broadcaster` publishes it on `/dynamic_joint_states`
+with `fault_code` (see "Who reads it"). Seconds, as every ROS interface (CONTRIBUTING, Units). The `header.stamp` of `/joint_states` does not change,
+and nothing reads the age yet: the latency budget of sprint 4 and the camera and pose fusion of
+module 2 will.
+
+**On the arm.** 60 s with the arm moving under the JTC (J1 10 deg out and back at 2.5 deg/s),
+procedure and tool in `docs/03_verification/pose_age`. Run on 25 Nov 2026, with the interface in
+ms then; the tool now reads seconds and still prints ms:
+
+| Samples | NaN | min (ms) | mean (ms) | p50 (ms) | p99 (ms) | max (ms) |
+|---|---|---|---|---|---|---|
+| 1801 in 60 s | 0 | 0.1 | 26.4 | 26.8 | 32.9 | 54.5 |
+
+The ages sit inside one controller period (33 ms at 30 Hz) and close to its end: the pose of a
+turn is published when the sync-write after that cycle's command closes, a few ms into the
+period, and the next `read()` comes one period after the last. Under 1 % of the samples are
+older than one period, up to 54.5 ms: a turn that published no pose, so `read()` got the pose
+of the turn before.
+
 ## Requests to the Atom (#149)
 
 A request is data, in `requests.hpp`: the command, the frame, what the arm sends back and how
@@ -526,6 +603,7 @@ caller knows how to decode. Nothing in the loop knows a request by name.
 |---|---|---|---|---|
 | `stop_request()` | `FE FE 02 29 FA` | ack `FE FE 03 29 01 FA` | `ACK_TIMEOUT`, 80 ms | `halt()`, `request_halt()`, the overheat cut |
 | `power_on_request()` | `FE FE 02 10 FA` | ack `FE FE 03 10 01 FA` | 80 ms | `power_on()` |
+| `set_fresh_mode_request()` | `FE FE 03 16 01 FA` | ack `FE FE 03 16 01 FA`, not required | 80 ms | `power_on()`, right before the power on, once per request (#133) |
 | `power_off_request()` | `FE FE 02 11 FA` | ack `FE FE 03 11 01 FA` (62 ms) | 80 ms | the overheat cut after the stop's ack, then once a period (the first repeat at the next turn when the cut's own got no ack) |
 | `get_servo_temps_request()` | `FE FE 02 E5 FA` | the temperature reply | `REQUEST_REPLY_TIMEOUT`, 50 ms | the temperature guard, after a get_angles reply |
 
@@ -545,10 +623,10 @@ No arm is needed:
 
 | Test                       | What it checks                                                      |
 |----------------------------|---------------------------------------------------------------------|
-| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation and one that answers again before its deadline activated; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate; the acknowledged requests (#103): a deactivate whose stop the arm never acknowledges returns ERROR after 300 ms and leaves the component configurable, an activate whose power_on is never acknowledged returns ERROR with a stop after the last power_on and no target sent, and a 58 ms ack still activates; the unfollowed command (#103): a target 2 deg away is never a fault, 9 deg for 300 ms latches fault 2 with a stop and no further target, 9 deg for 100 ms and back is not, a bad tracking parameter is rejected; `fake_mode` `measured` (#122) lags on the periods `read()` gets, and a 3-point trajectory on J1 and J5 at 30 Hz stays inside the 0.087 rad trajectory tolerance at 10 deg/s and leaves it at 30; the dead-man check (#136), with an executor and a stand-in supervisor: the heartbeat stops while active, `read()` returns ERROR, the stop goes out and fault 4 is latched, an activate with the heartbeat back clears it and targets go out again, activate refused without a heartbeat, nothing at 0, `on_init` refuses the check without a node, a link timeout that came first keeps fault 1; the reason on `/diagnostics` (#121), with the node an executor gives the component: a silent arm gives ERROR `LINK_TIMEOUT` with its reason at once and an activate brings OK back. |
+| `test_load_robot_system`   | Loads the plugin through a `ResourceManager` like the controller_manager does: joints, interfaces, parameters, lifecycle; a missing port; a silent arm on a pseudo-terminal (NaN states, activation refused, the component configurable again); deactivate holds the commands and activate resumes them from the measured pose; the joint limits (#34): at the limit, limit + 5 deg, NaN, recovery, missing and swapped limits, arm outside its limits at activation; the fault interface (#35): exported, required by `on_init`, 0 while the link is alive, latched to 1 on a silent link with no target sent while latched, cleared only by deactivate and activate, a silent link refused at activation and one that answers again before its deadline activated; the servo temperature: `servo_temp_limit_c`, activation refused on a hot arm or one that never reports its temperature, an arm heating while active is cut (stop then power off), latches fault 3 and the component goes to UNCONFIGURED, fault 3 and not 1 when the arm goes silent after the cut, cleared by a cool activate; the acknowledged requests (#103): a deactivate whose stop the arm never acknowledges returns ERROR after 300 ms and leaves the component configurable, an activate whose power_on is never acknowledged returns ERROR with a stop after the last power_on and no target sent, and a 58 ms ack still activates; the unfollowed command (#103): a target 2 deg away is never a fault, 9 deg for 300 ms latches fault 2 with a stop and no further target, 9 deg for 100 ms and back is not, a bad tracking parameter is rejected; `fake_mode` `measured` (#122) lags on the periods `read()` gets, and a 3-point trajectory on J1 and J5 at 30 Hz stays inside the 0.087 rad trajectory tolerance at 10 deg/s and leaves it at 30; the dead-man check (#136), with an executor and a stand-in supervisor: the heartbeat stops while active, `read()` returns ERROR, the stop goes out and fault 4 is latched, an activate with the heartbeat back clears it and targets go out again, activate refused without a heartbeat, nothing at 0, `on_init` refuses the check without a node, a link timeout that came first keeps fault 1; the reason on `/diagnostics` (#121), with the node an executor gives the component: a silent arm gives ERROR `LINK_TIMEOUT` with its reason at once and an activate brings OK back; the pose age (#120): exported, NaN after configure, 0 on the fake arm, optional in the URDF, small while the pseudo-terminal arm answers and well past a turn once it goes quiet. |
 | `test_fault_code`          | The table of the fault codes (#121): each code has its name and reason; a value outside the enum is `UNKNOWN`. |
-| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the acknowledged requests (#103): `halt()` returns only after the ack, fails at the deadline and keeps resending when the arm never acknowledges, a `request_halt()` during the power_on wait puts the hold back, the last target follows the wire and an acknowledged stop clears it; the link timeout (#35), raised by silence and cleared when replies resume; the temperature guard (read while idle, not in turns that send until overdue, then right after a `get_angles`; the cut: stop then power off, `power_on()` refused, the power off repeated, also while halted; implausible readings ignored; stale when `0xE5` never answers); the wait after a send (#150): the next `get_angles` never before the sync-write is whole and long before `echo_timeout`, and an arm that never sync-writes makes the wait last `echo_timeout`, counted in `echo_timeouts()`; the pose from the poll (#170, `SerialArmPollPose.*`): the frames are the pose and no `get_angles` follows the send, a write wakes the thread, a missing frame brings the `get_angles` back, a joint missing from one poll keeps its position for `POLL_BRIDGE_AGE`, the edges of a plausible frame, the temperatures and the cut from the poll, `pose_from_poll` false keeps the #150 turn; the turn's decisions: a write sends the unchanged target again, a write that lands during a `get_angles` counts for its turn, a due gripper takes the turn of that repeat, a halt ends the turn's wait, a poll that is not published keeps its good frames for the bridge, a poll with a bridged frame is no temperature reading, a send without its sync-write goes out again after `REPEAT_RETRY` and a refused target once a second; the cut's power off after the stop's ack; a late answer not taken for the next request's (an arm that drops what comes while it answers); `PosixSerialPort` exclusivity on a pseudo-terminal. |
-| `test_fake_arm`            | `FakeArm` with a clock the test sets (#122): instant is at every target at once; measured follows a step with exactly 1 - 1/e after one time constant, lags 2.7 and 4.9 deg on J1 at 10 and 20 deg/s (within 0.5), less the rest error moving down, starts J4 and J5 exactly 200 ms late and not again while they move, nor for a target sent again, rests every joint `REST_ERROR_DEG` off its command (also the pose it read), a halt stops every joint and cancels a waiting wrist, NaN and infinite targets ignored, a clock that stands still or goes back moves nothing; `cut_link()`: timed out at 201 ms and not at 200, a second cut keeps the first one's time, everything sent while cut is lost (`halt()` and `power_on()` false), the arm finishes its last target and holds, a waiting wrist still starts, the same in the instant mode. |
+| `test_serial_arm`          | `SerialArm` replaying UART bytes recorded on the real arm: the pose, the send_angles frame, the stop and the power on (the stop goes out and holds every target, a command stored before it never goes out, `power_on()` sends once, the hold stays until the power on is on the wire, `request_halt()` returns at once, a port that refuses writes, a silent arm); the load relief (#183): a still loaded joint goes out where it stands until the controller moves it, a halt ends it and a power on counts again; the acknowledged requests (#103): `halt()` returns only after the ack, fails at the deadline and keeps resending when the arm never acknowledges, a `request_halt()` during the power_on wait puts the hold back; fresh mode 1 (#133): right before every power on, once per request and not per retry, a power on without its ack still goes out, a halt during its wait keeps the power off; the speed byte on the wire is `send_speed`; the last target follows the wire and an acknowledged stop clears it; the link timeout (#35), raised by silence and cleared when replies resume; the temperature guard (read while idle, not in turns that send until overdue, then right after a `get_angles`; the cut: stop then power off, `power_on()` refused, the power off repeated, also while halted; implausible readings ignored; stale when `0xE5` never answers); the wait after a send (#150): the next `get_angles` never before the sync-write is whole and long before `echo_timeout`, and an arm that never sync-writes makes the wait last `echo_timeout`, counted in `echo_timeouts()`; the pose from the poll (#170, `SerialArmPollPose.*`): the frames are the pose and no `get_angles` follows the send, a write wakes the thread, a missing frame brings the `get_angles` back, a joint missing from one poll keeps its position for `POLL_BRIDGE_AGE`, the edges of a plausible frame, the temperatures and the cut from the poll, `pose_from_poll` false keeps the #150 turn; the turn's decisions: a write sends the unchanged target again, a write that lands during a `get_angles` counts for its turn, a due gripper takes the turn of that repeat, a halt ends the turn's wait, a poll that is not published keeps its good frames for the bridge, a poll with a bridged frame is no temperature reading, a send without its sync-write goes out again after `REPEAT_RETRY` and a refused target once a second; the cut's power off after the stop's ack; a late answer not taken for the next request's (an arm that drops what comes while it answers); the pose age (#120): unknown before the first reply, never more than the time since the last reply, growing by the time that passed while replies are lost with the pose kept, counted from the next reply once it comes, and never more than the time since the sync-write when the pose comes from the poll; these checks wait for the thread to write after a reply rather than for a fixed time, so a loaded machine cannot fail them; `PosixSerialPort` exclusivity on a pseudo-terminal. |
+| `test_fake_arm`            | `FakeArm` with a clock the test sets (#122): instant is at every target at once; measured follows a step with exactly 1 - 1/e after one time constant, lags 2.7 and 4.9 deg on J1 at 10 and 20 deg/s (within 0.5), less the rest error moving down, starts J4 and J5 exactly 200 ms late and not again while they move, nor for a target sent again, rests every joint `REST_ERROR_DEG` off its command (also the pose it read), a halt stops every joint and cancels a waiting wrist, NaN and infinite targets ignored, a clock that stands still or goes back moves nothing; `cut_link()`: timed out at 201 ms and not at 200, a second cut keeps the first one's time, everything sent while cut is lost (`halt()` and `power_on()` false), the arm finishes its last target and holds, a waiting wrist still starts, the same in the instant mode; the pose age is always 0 (#120). |
 | `test_link_watchdog`       | `LinkWatchdog` alone with made-up time points (#35): no fault right after reset, the 200 ms boundary, a reply restarts the count, no latching. |
 | `test_echo_timeout_report` | When `read()` warns about sends without a sync-write (#150): nothing new is never due, the first count at once, nothing more within the 5 s, the sends since the last warning after it, and a reset for a new backend (without it a new backend's small count would stay hidden). |
 | `test_reply_assembler`     | Split replies, servo-bus noise, request echo, newest reply wins, `clear()`. |
@@ -556,7 +634,8 @@ No arm is needed:
 | `test_joint_limit_check`   | The joint limit check (#34) alone: inside, at and past every limit, NaN and infinity, wrong joint count, first bad joint reported, invalid limits. |
 | `test_servo_temperature`   | The over-temperature logic alone: plausible range, hottest servo, activation cool-down, 1 s of hot readings to trip, a false hot reading alone never trips, the 1 degC band (limit - 1 changes nothing, limit - 2 stops the clock), one clock per servo, J1 named first on a tie, implausible readings, the trip stays, a lowered limit. |
 | `test_requests`            | The request table (#149): every factory carries the frame its command encodes, the command sits in byte 3 of the frame, what each one waits for, and `ACK_TIMEOUT` between the arm's 60 ms and the 200 ms watchdog. |
-| `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99), a fraction where a whole number is expected, NaN and infinity, a settle longer than the period accepted since #150, the rules of `backend`, `fake_mode`, `port`, `baud` and `velocity_filter_alpha`, and the INFO line with the fake mode. |
+| `test_parameters`          | The hardware parameters alone (#163): the defaults, every parameter reaching its field, every unknown name in one message, in alphabetical order, with the list of known names, both ends of every range accepted and one step past them refused with the range (`send_settle_ms` up to 99), a fraction where a whole number is expected, NaN and infinity, a settle longer than the period accepted since #150, the rules of `backend`, `fake_mode`, `port`, `baud`, `velocity_filter_alpha` and `load_relief`, `send_speed` 1 to 100 (#133), and the INFO line with the fake mode, the load relief and the send speed. |
+| `test_load_relief`         | The load relief alone (#183): relieved at the hold and kept until the command changes, the residual and the load at their limits either way, speed, moving flag and a light load restart the count, so do a changed command and a 3-step move, NaN commands and polls before the first command, a missing frame, disabled, J3 and J1 refused outside their lower and upper URDF limits with the command tolerance, two reliefs one per update, reset. |
 | `test_tracking_check`      | The unfollowed-command logic alone (#103): the defaults, below the threshold never trips, trips once a joint has been over for the time, coming back inside forgets the clock, the joint and the signed error reported, an unknown pose (NaN) does not count, reset forgets every clock. |
 
 Passing tests do not prove the driver is right on the arm. On the robot, check that activation
@@ -608,15 +687,16 @@ does not move and the log names the joint.
 ## Files
 
 - `include/positronic_hardware/positronic_hardware.hpp`, `src/positronic_hardware.cpp`: the plugin.
-- `arm_backend.hpp`: the `ArmBackend` interface, `NUM_JOINTS`, `JointPositions`.
+- `arm_backend.hpp`: the `ArmBackend` interface, `NUM_JOINTS`, `JointPositions`, `PoseSample` (#120).
 - `fake_arm.hpp`: `FakeArm`.
 - `fault_code.hpp`: `FaultCode` and `describe_fault()`, the one table of the fault codes (#121).
 - `joint_limit_check.hpp`: `check_command()`, the joint limit check of a position command (#34).
 - `servo_temperature.hpp`: `SERVO_TEMP_LIMIT_C`, `OverheatDetector`, the over-temperature logic.
-- `requests.hpp`: `Request`, `Expect`, `ACK_TIMEOUT`, `REQUEST_REPLY_TIMEOUT`, the factories `stop_request()`, `power_on_request()`, `power_off_request()`, `get_servo_temps_request()` (#149).
+- `requests.hpp`: `Request`, `Expect`, `ACK_TIMEOUT`, `REQUEST_REPLY_TIMEOUT`, the factories `stop_request()`, `power_on_request()`, `set_fresh_mode_request()` (#133), `power_off_request()`, `get_servo_temps_request()` (#149).
 - `parameters.hpp`, `src/parameters.cpp`: `HardwareConfig`, `Backend`, `parse_hardware_parameters()`, `describe()`, the table of numeric parameters (#163).
 - `tracking_check.hpp`: `TRACKING_ERROR_DEG`, `TRACKING_ERROR_MS`, `TrackingCheck`, the unfollowed-command logic (#103).
-- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
+- `load_relief.hpp`: `LoadReliefLimits`, `LoadReliefCheck`, the relief of a still joint pushing short of its target (#183).
+- `serial_arm.hpp`, `src/serial_arm.cpp`: `SerialArm` (`SerialTiming`, `TemperatureGuard`, `POLL_PERIOD`, `DEFAULT_SEND_SPEED`, `REPLY_TIMEOUT`, `EMPTY_READ_BACKOFF`, `REQUEST_TIMEOUT`) and `PosixSerialPort`.
 - `link_watchdog.hpp`: `LinkWatchdog`, the 200 ms link timeout (#35), also the time of the supervisor's last heartbeat (#136).
 - `test/hil_link_timeout.cpp`: the #35 check on the real arm, run by hand.
 - `serial_transport.hpp`: the `SerialTransport` interface.
