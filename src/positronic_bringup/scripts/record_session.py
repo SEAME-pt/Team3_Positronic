@@ -28,6 +28,9 @@
 #   file next to the bag (who ran it, the issue, what was run). Bags stay out of git. Keep the
 #   topic list, the folder name and the text file testable without ROS; main() runs
 #   `ros2 bag record`.
+# Follow-up prompt:
+#   Record the safety supervisor too: /safety_supervisor/status and /safety_supervisor/heartbeat
+#   (#45, #176), so every session shows when the arm was allowed to move and why it halted.
 
 """
 Record an arm session into a bag, with the same topics every time (#128).
@@ -67,6 +70,10 @@ TOPICS = (
     '/dynamic_joint_states',
     '/diagnostics',
     '/mission/heartbeat',
+    # The supervisor's mode and the reason of a halt (#45), and the heartbeat the driver's
+    # dead-man check follows (#176).
+    '/safety_supervisor/status',
+    '/safety_supervisor/heartbeat',
 )
 
 DEFAULT_ROOT = 'bags'

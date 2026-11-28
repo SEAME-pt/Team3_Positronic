@@ -29,6 +29,8 @@
 # Follow-up prompt:
 #   A SIGINT sent to the script alone (kill, timeout) does not reach ros2 bag: after a grace
 #   period the script sends it its own SIGINT. Test both stops with no real waiting.
+# Follow-up prompt:
+#   The topic list gains /safety_supervisor/status and /safety_supervisor/heartbeat.
 
 """Check record_session.py without ROS: the topics, the folder, session.txt and main()."""
 
@@ -118,7 +120,7 @@ def args(root, *extra):
 # --- the topics and the command -------------------------------------------------------------
 
 def test_topic_list_is_the_one_of_the_issue(record):
-    """Check the six topics of #128, in order, and that none is repeated."""
+    """Check the six topics of #128 and the two of the supervisor, in order, none repeated."""
     assert record.TOPICS == (
         '/joint_states',
         '/arm_controller/joint_trajectory',
@@ -126,6 +128,8 @@ def test_topic_list_is_the_one_of_the_issue(record):
         '/dynamic_joint_states',
         '/diagnostics',
         '/mission/heartbeat',
+        '/safety_supervisor/status',
+        '/safety_supervisor/heartbeat',
     )
     assert len(set(record.TOPICS)) == len(record.TOPICS)
 

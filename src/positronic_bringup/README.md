@@ -241,7 +241,9 @@ folder, `bags/<date>_<time>_issue-<n>/`:
 
 The topics, the same every time: `/joint_states`, `/arm_controller/joint_trajectory`,
 `/arm_controller/controller_state`, `/dynamic_joint_states` (where `driver/fault_code` is),
-`/diagnostics` and `/mission/heartbeat`. A topic nobody publishes yet is picked up when it
+`/diagnostics`, `/mission/heartbeat`, and the safety supervisor's `/safety_supervisor/status`
+(mode and halt reason) and `/safety_supervisor/heartbeat` (followed by the driver's dead-man
+check, #176). A topic nobody publishes yet is picked up when it
 appears. The goals MoveIt sends are actions, which `ros2 bag` does not record in Jazzy: what
 `arm_controller` does with them is on `controller_state`. `--dry-run` prints the folder and
 the command without recording.
