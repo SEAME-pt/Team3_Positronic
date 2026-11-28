@@ -33,12 +33,18 @@
 namespace positronic_hardware
 {
 
-/// A servo at or above this temperature stops the arm and cuts its power: the servos of the 280
-/// should never get there in normal use, so reaching it means something is badly wrong (a joint
-/// pushing against an obstacle or holding a load it cannot). 10 degC under the 70 degC at which
-/// Feetech-family servos turn their own torque off, so the arm is cut by the driver, not by
-/// one servo giving up on its own. The plugin may lower it (servo_temp_limit_c), never raise it.
-inline constexpr int SERVO_TEMP_LIMIT_C{60};
+/// A servo at or above this temperature stops the arm and cuts its power, as the last line of
+/// defence. It was 60 degC (#115), but the arm reached 60 several times in normal work and still
+/// behaved well, so it was raised to 65. A park at 63 degC comes first (thermal_park.py in
+/// positronic_bringup, started by driver.launch.py); this cut is for when the park fails or is
+/// too slow. 5 degC under
+/// the 70 degC at which Feetech-family servos turn their own torque off, so the arm is cut by the
+/// driver, not by one servo giving up on its own (an independent test of the STS3215 saw no
+/// shutdown of its own at 71 degC, so this cut is the one we rely on).
+/// <Not yet confirmed: the servo model of the 280 and its overheat threshold. Write them here,
+/// with the source; under 70 degC, the 65 must be revisited.>
+/// The plugin may lower it (servo_temp_limit_c), never raise it.
+inline constexpr int SERVO_TEMP_LIMIT_C{65};
 
 /// The lowest limit the plugin accepts. Below it a cool arm would be cut at once.
 inline constexpr int MIN_SERVO_TEMP_LIMIT_C{30};

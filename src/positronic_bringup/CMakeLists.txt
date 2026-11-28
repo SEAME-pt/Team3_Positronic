@@ -25,6 +25,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_joint_states_rate_main test/test_joint_states_rate_main.py)
   # The wrist camera node: calibration file, rotation, messages, with a fake camera.
   ament_add_pytest_test(test_wrist_camera test/test_wrist_camera.py)
+  # The park at 63 degC: its helpers, and the real node with its callbacks called directly.
+  ament_add_pytest_test(test_thermal_park test/test_thermal_park.py TIMEOUT 60)
+  ament_add_pytest_test(test_thermal_park_node test/test_thermal_park_node.py TIMEOUT 60)
 endif()
 
 # Copy the folders to install/.
@@ -32,7 +35,7 @@ install(DIRECTORY launch config worlds rviz DESTINATION share/${PROJECT_NAME})
 
 # Scripts go to lib/, where `ros2 run` looks for executables.
 install(PROGRAMS scripts/joint_states_delay.py scripts/joint_states_rate.py
-  scripts/wrist_camera.py
+  scripts/wrist_camera.py scripts/thermal_park.py
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

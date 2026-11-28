@@ -28,6 +28,9 @@ Run the real arm driver on the Jetson and publish /joint_states (#23).
   serial backend, opens the port and reads the arm.
 - the spawner, which activates joint_state_broadcaster, the controller that turns the plugin's
   state interfaces into /joint_states.
+- thermal_park (thermal_park.py), which parks the arm at its rest pose when a servo stays at
+  park_warn_c (63 degC) for 1 s, before the driver's cut at 65 degC. On here so it runs
+  wherever the driver runs, supervised.launch.py included, with no terminal of its own.
 
 Forward_position_controller is in the
 yaml for the first motion and for jogging; spawn it by hand with the bench clear (#32).
@@ -49,7 +52,7 @@ over the driver's and hide a change made there.
   echo_timeout_ms:=           ms the thread waits at most for the arm's sync-write after a send
   pose_from_poll:=true|false  the pose from the arm's own poll of its servos, the send on the
                               controller's write (#170); false gives a get_angles every turn
-  servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 60
+  servo_temp_limit_c:=        degC that cuts the arm (stop, then power off); 30 to 65
   tracking_error_deg:=        deg a joint may lag its target before the time counts (#103)
   tracking_error_ms:=         ms over that lag that make fault 2, the arm did not follow
   supervisor_timeout_ms:=0    ms without the safety supervisor's heartbeat that halt the arm
@@ -68,6 +71,10 @@ over the driver's and hide a change made there.
                               container needs /dev/video0 (make nano-shell maps it when it is
                               there). Its arguments (device:=, width:=, height:=, fps:=, ...)
                               pass through, as this launch's reach it from supervised.launch.py.
+  thermal_park:=true          false: leave the park out; only the driver's cut remains
+  park_warn_c:=63             degC at which thermal_park parks the arm; under the cut. Lower it
+                              with servo_temp_limit_c to try the park on a cool arm
+  park_rearm_below_c:=60      degC every servo must go under before thermal_park parks again
 """
 
 import os
@@ -123,7 +130,7 @@ def generate_launch_description():
     # The over-temperature cut. Only lower it, for the hardware test of the cut.
     servo_temp_limit_c = DeclareLaunchArgument(
         'servo_temp_limit_c', default_value='',
-        description='degC at which a servo stops the arm and powers it off (30 to 60).')
+        description='degC at which a servo stops the arm and powers it off (30 to 65).')
     # The unfollowed-command fault (#103). Arguments so the bench can try other values.
     tracking_error_deg = DeclareLaunchArgument(
         'tracking_error_deg', default_value='',
@@ -247,6 +254,29 @@ def generate_launch_description():
             [FindPackageShare('positronic_bringup'), 'launch', 'camera.launch.py'])),
         condition=IfCondition(LaunchConfiguration('camera')))
 
+    # The park at 63 degC, next to the driver: its temperatures come from /diagnostics on this
+    # machine. The defaults are the node's own, written here so a test run can lower them.
+    thermal_park = DeclareLaunchArgument(
+        'thermal_park', default_value='true',
+        description='false: leave out the park at the rest pose before the over-temperature cut.')
+    park_warn_c = DeclareLaunchArgument(
+        'park_warn_c', default_value='63',
+        description='degC at which thermal_park parks the arm (under servo_temp_limit_c).')
+    park_rearm_below_c = DeclareLaunchArgument(
+        'park_rearm_below_c', default_value='60',
+        description='degC every servo must go under before thermal_park parks again.')
+    thermal_park_node = Node(
+        package='positronic_bringup',
+        executable='thermal_park.py',
+        name='thermal_park',
+        output='screen',
+        parameters=[{
+            'warn_c': ParameterValue(LaunchConfiguration('park_warn_c'), value_type=int),
+            'rearm_below_c': ParameterValue(
+                LaunchConfiguration('park_rearm_below_c'), value_type=int),
+        }],
+        condition=IfCondition(LaunchConfiguration('thermal_park')))
+
     return LaunchDescription([
         backend,
         fake_mode,
@@ -264,6 +294,9 @@ def generate_launch_description():
         update_rate,
         start_inactive,
         camera,
+        thermal_park,
+        park_warn_c,
+        park_rearm_below_c,
         robot_state_publisher,
         control_node,
         control_node_inactive,
@@ -271,4 +304,5 @@ def generate_launch_description():
         arm_controller,
         arm_controller_inactive,
         wrist_camera,
+        thermal_park_node,
     ])

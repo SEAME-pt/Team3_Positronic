@@ -573,6 +573,12 @@ return_type RobotSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Durat
     control_time_ns_.fetch_add(period.nanoseconds());
   }
   update_states(period.seconds());
+  // For /diagnostics (thermal_park.py). Every cycle, so the copy is never older than the backend's.
+  if (const std::optional<ServoTemperatures> latest{arm_->read_temperatures()}) {
+    for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+      temperatures_c_.at(joint).store(latest->at(joint));
+    }
+  }
   // First, before the link check: the power off of an overheat cut silences the arm, so a link
   // timeout can follow the cut, and only the first fault is kept. The cause must win. Also
   // before the fault is written, so OVERHEAT is on the interface in the cycle that returns ERROR.
@@ -956,6 +962,12 @@ void RobotSystem::diagnose(diagnostic_updater::DiagnosticStatusWrapper & status)
     level = diagnostic_msgs::msg::DiagnosticStatus::OK;
   }
   status.summary(level, std::string{describe_fault(diagnosed_)});
+  for (std::size_t joint{0}; joint < NUM_JOINTS; ++joint) {
+    const int celsius{temperatures_c_.at(joint).load()};
+    if (celsius > 0) {
+      status.add(std::string{TEMPERATURE_KEY_PREFIX} + info_.joints.at(joint).name, celsius);
+    }
+  }
 }
 
 void RobotSystem::refuse(const CommandCheck & check)

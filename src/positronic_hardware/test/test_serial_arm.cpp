@@ -1298,7 +1298,7 @@ TemperatureGuard fast_guard()
 }
 
 constexpr ServoTemperatures COOL{31, 33, 35, 30, 29, 28};
-constexpr ServoTemperatures J2_HOT{31, 61, 35, 30, 29, 28};
+constexpr ServoTemperatures J2_HOT{31, 66, 35, 30, 29, 28};
 
 /// A transport that answers each request like the arm: a get_angles with the recorded reply
 /// (servo noise included), a get_servo_temps with the temperatures the test sets, a stop or
@@ -1572,7 +1572,7 @@ TEST(SerialArmTemperature, TwoHotReadingsStopTheArmAndCutItsPower)
   }));
   const Overheat trip{arm.overheat().value_or(Overheat{})};
   EXPECT_EQ(trip.joint, 1U);
-  EXPECT_EQ(trip.celsius, 61);
+  EXPECT_EQ(trip.celsius, 66);
 
   // On the wire: a stop, then a power off, in that order. The trip is recorded once the stop is
   // out, before the power off and its ack.
@@ -2337,7 +2337,7 @@ TEST(SerialArmPollPose, TheTemperaturesComeFromThePollAndNothingIsAsked)
 
 TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
 {
-  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
+  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 66))};  // J2 at 66
   ReplayTransport & port{*transport};
   // Every ack 60 ms late: the power off must follow the stop's ack. The Atom takes ~37 ms over
   // a stop and drops what comes before; a power off sent 30 ms after it was dropped in all three
@@ -2353,7 +2353,7 @@ TEST(SerialArmPollPose, HotPollsCutTheArmOnceTheyLastHotFor)
   ASSERT_TRUE(arm.overheat().has_value());
   const Overheat trip{arm.overheat().value_or(Overheat{})};
   EXPECT_EQ(trip.joint, 1U);
-  EXPECT_EQ(trip.celsius, 61);
+  EXPECT_EQ(trip.celsius, 66);
   const auto frames{port.written()};
   const auto times{port.written_at()};
   const auto is_send{[](const auto & frame) {
@@ -2419,7 +2419,7 @@ TEST(SerialArmPollPose, AnUnacknowledgedPowerOffGoesOutAgainNextTurn)
   // A cut whose power off gets no ack (dropped): it goes out again at the next turn, not a
   // period later. The period is 1 s here, so a second power off within 400 ms of the stop is
   // that resend; the repeat once a period would be the second at about 1 s.
-  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 61))};  // J2 at 61
+  auto transport{polling_port(with_byte(parse_hex(RECORDED_POLL_FRAMES), 1, 7, 66))};  // J2 at 66
   ReplayTransport & port{*transport};
   port.set_ack_power_off(false);
   TemperatureGuard guard{fast_guard()};

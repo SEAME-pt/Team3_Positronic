@@ -135,6 +135,10 @@
 //   set to an hour, so a status that comes is a change: a silent arm gives ERROR LINK_TIMEOUT
 //   with its reason at once, and an activate right after the arm answers again brings OK back:
 //   activate waits for the link to come back, as for the first reply, instead of refusing.
+// Follow-up prompt (servo temperatures on /diagnostics):
+//   The status now also carries each servo's last temperature, key "temperature_c/<joint>",
+//   whole degC, for thermal_park.py. Test that the LINK_TIMEOUT status has the six, at the
+//   30 degC the pseudo-terminal arm answers.
 // Follow-up prompt (gripper: keep the grip through a resume, recognise an arm without it):
 //   With the gripper in the URDF, an arm that answers 255 to get_gripper_value is not activated
 //   (no power_on, refused before the wait runs out). After an activate, and again after a
@@ -172,6 +176,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "diagnostic_msgs/msg/key_value.hpp"
 #include "hardware_interface/resource_manager.hpp"
 #include "hardware_interface/types/lifecycle_state_names.hpp"
 #include "hardware_interface/types/resource_manager_params.hpp"
@@ -1016,7 +1021,7 @@ TEST_F(LoadRobotSystem, InitRejectsBadParameters)
     {"echo_timeout_ms", "slow"},        // not a number
     {"send_settle_ms", "30"},           // no parameter since #150: the settle is a constant
     {"pose_from_poll", "maybe"},        // true or false only (#170)
-    {"servo_temp_limit_c", "61"},       // the limit can only be lowered
+    {"servo_temp_limit_c", "66"},       // the limit can only be lowered
     {"servo_temp_limit_c", "29"},       // a cool arm would be cut at once
     {"servo_temp_limit_c", "55.5"},     // whole degrees only
     {"servo_temp_limit_c", "hot"},      // not a number
@@ -1482,11 +1487,11 @@ TEST_F(LoadRobotSystem, DeactivateFailsWhenTheStopCannotLeaveAndTheComponentIsCo
 
 TEST_F(LoadRobotSystem, ActivateRefusesAHotArm)
 {
-  // Every servo at 57 degC: under the 60 degC cut, but within the 5 degC cool-down margin. The
+  // Every servo at 62 degC: under the 65 degC cut, but within the 5 degC cool-down margin. The
   // servos are not powered on.
   ASSERT_TRUE(load_on_pseudo_terminal());
   auto arm{std::make_unique<ReplyingArm>(controller_)};
-  arm->set_temperature(57);
+  arm->set_temperature(62);
   EXPECT_EQ(activate(), hardware_interface::return_type::ERROR);
   EXPECT_NE(component_state(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(find_request(arm->received(), 0x10), arm->received().size());  // no power_on
@@ -1519,9 +1524,9 @@ TEST_F(LoadRobotSystem, AnOverheatCutsTheArmAndTakesTheComponentOutOfService)
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   const std::size_t before_heat{arm->received().size()};
 
-  // The servos reach 61 degC. Two readings, one a second, then the serial thread cuts the arm
+  // The servos reach 66 degC. Two readings, one a second, then the serial thread cuts the arm
   // on its own, and the next read() reports it.
-  arm->set_temperature(61);
+  arm->set_temperature(66);
   hardware_interface::return_type result{hardware_interface::return_type::OK};
   const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
   while (result == hardware_interface::return_type::OK &&
@@ -1571,7 +1576,7 @@ TEST_F(LoadRobotSystem, AnOverheatIsStillTheFaultWhenTheArmGoesSilentAfterTheCut
       const std::vector<std::uint8_t> sent{arm->received()};
       return find_request(sent, 0x11) < sent.size();
     }};
-  arm->set_temperature(61);
+  arm->set_temperature(66);
   const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
   while (!powered_off() && std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
@@ -2358,6 +2363,16 @@ TEST_F(FaultDiagnostics, ALinkTimeoutIsOnDiagnosticsAtOnceAndActivateBringsOkBac
   ASSERT_EQ(read_once(), hardware_interface::return_type::OK);
   EXPECT_EQ(
     newest(DiagnosticStatus::ERROR), "LINK_TIMEOUT: no valid reply from the arm; targets held");
+  // The temperatures read() copied while the arm still answered, one key per joint.
+  for (const auto & joint : JOINTS) {
+    const auto & values{statuses_.back().values};
+    const auto found{std::find_if(
+      values.begin(), values.end(), [&joint](const diagnostic_msgs::msg::KeyValue & value) {
+          return value.key == "temperature_c/" + joint;
+      })};
+    ASSERT_NE(found, values.end()) << joint;
+    EXPECT_EQ(found->value, "30") << joint;
+  }
 
   // The arm answers again and a person reactivates at once: activate waits for a fresh reply
   // (the requests queued while it was silent get late answers, which the driver drops).
